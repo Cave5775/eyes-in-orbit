@@ -70,6 +70,31 @@ export function rocketForward(r: V3, v: V3): V3 | null {
   return rel;
 }
 
+/**
+ * Direction (unit, inertial) from a model toward a good default camera: behind, to the side and above (zenith side, so the
+ * truss and arrays of the ISS read well), on the sunlit side when one of the four corner views is lit.
+ */
+export function modelViewDirection(b: Basis, sunDir: V3): V3 {
+  let best: V3 = [0, 0, 0];
+  let bestLit = -Infinity;
+  for (const [sx, sy] of [[-1, 1], [-1, -1], [1, 1], [1, -1]]) {
+    const d = [sx * 0.55, sy * 0.55, -0.45];
+    const w: V3 = [
+      b.x[0] * d[0] + b.y[0] * d[1] + b.z[0] * d[2],
+      b.x[1] * d[0] + b.y[1] * d[1] + b.z[1] * d[2],
+      b.x[2] * d[0] + b.y[2] * d[1] + b.z[2] * d[2],
+    ];
+    const n = len(w);
+    const u: V3 = [w[0] / n, w[1] / n, w[2] / n];
+    const lit = dot(u, sunDir);
+    if (lit > bestLit + 1e-9) { // the best-lit corner; the first of equals (behind-starboard) wins
+      bestLit = lit;
+      best = u;
+    }
+  }
+  return best;
+}
+
 /** Body-frame coordinates of an inertial vector. */
 export const toBody = (b: Basis, w: V3): V3 => [dot(w, b.x), dot(w, b.y), dot(w, b.z)];
 

@@ -1,9 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { EARTH, Sgp4Provider, type Omm } from '@eio/core';
 import {
-  basisToQuaternion, forwardBasis, lvlhBasis, rocketForward, rotateByQuaternion, sunlitFraction, toBody,
+  basisToQuaternion, forwardBasis, lvlhBasis, modelViewDirection, rocketForward, rotateByQuaternion, sunlitFraction, toBody,
   type Basis,
 } from '../src/lib/attitude';
+
+describe('modelViewDirection', () => {
+  const b = lvlhBasis([6800, 0, 0], [0, 7.5, 0])!; // body x = +Y world, z = -X world (nadir)
+  const world = (d: V3): V3 => [0, 1, 2].map((i) => b.x[i] * d[0] + b.y[i] * d[1] + b.z[i] * d[2]) as V3;
+  it('looks from behind, above, and beside, on the lit side when there is one', () => {
+    const sun = world([-0.5, 0.5, -0.5]); // the behind-starboard-above corner is lit
+    const n = Math.hypot(...sun);
+    const s: V3 = [sun[0] / n, sun[1] / n, sun[2] / n];
+    const d = modelViewDirection(b, s);
+    expect(Math.hypot(...d)).toBeCloseTo(1, 12);
+    expect(dot(d, b.x)).toBeLessThan(0);
+    expect(dot(d, b.z)).toBeLessThan(0);
+    expect(dot(d, b.y)).toBeGreaterThan(0);
+    expect(dot(d, s)).toBeGreaterThan(0.15);
+  });
+  it('mirrors to the port side when the sun is there, and stays finite when every corner is dark', () => {
+    const sun = world([-0.5, -0.5, -0.5]);
+    const n = Math.hypot(...sun);
+    const d = modelViewDirection(b, [sun[0] / n, sun[1] / n, sun[2] / n]);
+    expect(dot(d, b.y)).toBeLessThan(0);
+    expect(modelViewDirection(b, b.z).every(Number.isFinite)).toBe(true); // sun straight below
+  });
+});
 import type { V3 } from '../src/lib/camera';
 
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];

@@ -185,7 +185,7 @@ export class ModelLayer {
     e.ringHidden = ringHiddenFor(lod.screenPx, e.ringHidden);
     e.screenPx = lod.screenPx;
 
-    const basis = this.attitude(e.def, st.r, st.v);
+    const basis = this.basisOf(e.def, st.r, st.v);
     // measured attitude relative to LVLH (body to LVLH, [w, x, y, z]), when the caller has a verified one
     const att = e.def.attitude === 'lvlh' ? f.attitude?.(e.id) : undefined;
     if (basis) {
@@ -207,7 +207,8 @@ export class ModelLayer {
     }
   }
 
-  private attitude(def: ModelDef, r: V3, v?: V3): Basis | null {
+  /** Body basis of a model for an inertial state (km, km/s): LVLH, or velocity-aligned for rocket stages. */
+  basisOf(def: ModelDef, r: V3, v?: V3): Basis | null {
     const vel: V3 = v ?? [-r[1], r[0], 0]; // no velocity: pretend a prograde equatorial direction
     if (def.attitude === 'rocket') {
       const fwd = rocketForward(r, vel);

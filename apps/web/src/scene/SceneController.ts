@@ -3,7 +3,8 @@ import {
   DEG, EARTH, fixedToGeodetic, geodeticToFixed, gmstRad, sunDirectionEci,
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, settleDistance, viewAnglesFor } from '../lib/camera';
+import { modelViewDirection } from '../lib/attitude';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, settleDistance, viewAnglesFor, type V3 } from '../lib/camera';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
 import { ELLIPSOID_K, makeOccluder, occlusionC2 } from '../lib/occlusion';
@@ -514,6 +515,8 @@ export class SceneController {
    * Returns false when none of the ids has a position.
    */
   fitEntities(ids: string[], opts: { points?: { latDeg: number; lonDeg: number }[]; includePath?: boolean } = {}): boolean {
+    // an entity with a 3D model and nothing else to frame: show the model (following it), not a 3,200 km view of a dot
+    if (ids.length === 1 && !opts.points?.length && this.viewModel(ids[0])) return true;
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const id of ids) {
@@ -529,6 +532,33 @@ export class SceneController {
       withPath = true;
     }
     return this.frameSphere(pts, !withPath);
+  }
+
+  /** Does the entity have a registered 3D model (drawn when the camera is near)? */
+  hasModel(id: string | null | undefined): boolean {
+    return !!id && this.models.has(id);
+  }
+
+  /**
+   * Fly to the entity's 3D model and follow it: the model's own framing distance (ISS 260 m), seen from behind, beside and
+   * above on the sunlit side. False when the entity has no model or no state. Leaves the surface view.
+   */
+  viewModel(id: string): boolean {
+    const def = this.models.defOf(id);
+    const rec = this.recs.get(id);
+    if (!def || !rec) return false;
+    const t = clock.now();
+    if (!graph.get(id)) graph.upsert(rec);
+    const st = graph.stateIn(id, t, 'EARTH:inertial');
+    if (!st) return false;
+    if (this.surfaceOn) this.setSurfaceMode(false);
+    this.focus({ id, nonce: 0 });
+    const basis = this.models.basisOf(def, st.r, st.v);
+    const s = sunDirectionEci(t);
+    const dir = basis ? modelViewDirection(basis, [s[0], s[1], s[2]]) : ([s[0], s[1], s[2]] as V3);
+    this.rig.flyTo({ dist: def.fitKm, az: Math.atan2(dir[1], dir[0]), el: Math.asin(Math.max(-1, Math.min(1, dir[2]))) });
+    this.cb.onFollowChange?.(true);
+    return true;
   }
 
   /** FIT VISIBLE: everything the current filters leave on screen. */

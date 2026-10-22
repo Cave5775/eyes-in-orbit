@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { sourceLabel } from '../lib/arrays';
 import { fmtDist, fmtDuration } from '../lib/format';
 import { relatedFor } from '../lib/related';
+import { modelDef } from '../scene/models/registry';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { clock, runtime } from '../state/runtime';
 import { useStore } from '../state/store';
@@ -19,6 +21,7 @@ const HELP: [string, string][] = [
   ['Shift+F', 'Fit everything visible (respects filters)'],
   ['S', 'Surface view: level horizon, north-up, around the object\'s sub-point or the point under the view'],
   ['Esc', 'Deselect and return to the Earth view'],
+  ['MODEL', 'Objects with a 3D model (ISS, the demo booster, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or MODEL on such a selection flies to it'],
   ['H', 'Show / hide this help'],
 ];
 
@@ -54,6 +57,11 @@ export function SceneView() {
     scene.current?.fitVisible();
   }, []);
   const toggleSurface = useCallback(() => scene.current?.toggleSurface(), []);
+  const selModel = useStore((s) => modelDef(s.selectedId ? s.entities.get(s.selectedId)?.render?.model : undefined));
+  const showModel = useCallback(() => {
+    const id = useStore.getState().selectedId;
+    if (id) scene.current?.viewModel(id);
+  }, []);
   const toggleScale = useCallback(() => {
     setTrueScale((v) => {
       scene.current?.setDistanceScale(v ? 'compressed' : 'true');
@@ -177,6 +185,9 @@ export function SceneView() {
         {selectedId && (
           <button className="btn" onClick={fitSelected} title="Frame the selection and its related objects (F)">FIT</button>
         )}
+        {selModel && (
+          <button className="btn" onClick={showModel} title={`Fly to the 3D model (${selModel.label}) and follow it. It replaces the point sprite within ${selModel.lodKm} km.`}>MODEL</button>
+        )}
         <button className="btn" onClick={fitVisible} title="Frame everything currently visible, respecting filters (Shift+F)">FIT VISIBLE</button>
         <button className={surface ? 'btn active' : 'btn'} onClick={toggleSurface} aria-pressed={surface} title="Surface-aligned camera: level horizon, north-up, around the selection's sub-point or the point under the view (S)">
           SURFACE
@@ -210,6 +221,12 @@ export function SceneView() {
               RENDERED {stats.scope.rendered.toLocaleString('en-US')} / {stats.scope.total.toLocaleString('en-US')}
             </span>
             {stats.surface && <span className="accent">SURFACE VIEW ALT {fmtDist(stats.altKm)}</span>}
+            {stats.models.length > 0 && (
+              <span className="accent" title="3D model drawn at true size (the point sprite is replaced once the model is larger than it)">
+                MODEL {stats.models.map((id) => modelDef(useStore.getState().entities.get(id)?.render?.model)?.key.toUpperCase() ?? id).join(', ')}
+                {stats.arrays ? ` · ARRAYS ${sourceLabel(stats.arrays.sources)}` : ''}
+              </span>
+            )}
             {path && (
               <span>PATH -{fmtDuration(-path.pastMs / 1000)} / +{fmtDuration(path.futureMs / 1000)}</span>
             )}
