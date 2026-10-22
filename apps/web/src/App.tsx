@@ -3,6 +3,7 @@ import { useStore } from './state/store';
 import { DetailPanel } from './ui/DetailPanel';
 import { DsnPanel } from './ui/DsnPanel';
 import { EntityBrowser } from './ui/EntityBrowser';
+import { FloatingLayer } from './ui/FloatingLayer';
 import { LaunchBoard } from './ui/LaunchBoard';
 import { NewsTicker } from './ui/NewsTicker';
 import { ResizableLayout } from './ui/ResizableLayout';
@@ -21,16 +22,20 @@ export function App() {
   }, []);
 
   return (
-    <ResizableLayout>
-      <TopBar />
-      <EntityBrowser />
-      <SceneView />
-      <DetailPanel />
-      <div className="bottom">
-        <LaunchBoard />
-        <DsnPanel />
-      </div>
-      <NewsTicker />
-    </ResizableLayout>
+    <>
+      <ResizableLayout>
+        <TopBar />
+        <EntityBrowser />
+        <SceneView />
+        <DetailPanel />
+        <div className="bottom">
+          <LaunchBoard />
+          <DsnPanel />
+        </div>
+        <NewsTicker />
+      </ResizableLayout>
+      {/* outside the grid: floating stream windows sit above the whole app */}
+      <FloatingLayer />
+    </>
   );
 }

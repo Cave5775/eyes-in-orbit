@@ -1,28 +1,21 @@
-import { memo, useState } from 'react';
+import { useState } from 'react';
 import type { StreamLink } from '@eio/core';
-import { resolveStream } from '../../lib/youtube';
-
-/**
- * The only element that holds the live video. Memoised on the URL alone so scene, clock and
- * store updates never re-render (and therefore never reload) the iframe.
- */
-export const StreamFrame = memo(function StreamFrame({ url }: { url: string }) {
-  return (
-    <iframe
-      className="stream-frame"
-      src={url}
-      title="Live stream"
-      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-      referrerPolicy="strict-origin-when-cross-origin"
-    />
-  );
-});
+import { MAX_FLOATS } from '../../lib/floating';
+import { pageOrigin, resolveStream } from '../../lib/youtube';
+import { useStore } from '../../state/store';
+import { StreamFrame } from '../StreamFrame';
 
 export function StreamTab({ streams }: { streams: StreamLink[] }) {
   const [index, setIndex] = useState(0);
+  const floats = useStore((s) => s.floats);
+  const openFloat = useStore((s) => s.openFloat);
+  const closeFloat = useStore((s) => s.closeFloat);
   const link = streams[Math.min(index, streams.length - 1)];
   if (!link) return <div className="empty">No streams for this entity.</div>;
-  const { embedUrl, href } = resolveStream(link);
+  const { embedUrl, href } = resolveStream(link, pageOrigin());
+  // a stream lives in one place: while it floats, the tab shows a placeholder instead of a second player
+  const popped = !!embedUrl && floats.some((f) => f.url === embedUrl);
+  const full = floats.length >= MAX_FLOATS;
 
   return (
     <div className="stream-tab">
@@ -35,8 +28,13 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
           ))}
         </div>
       )}
-      {embedUrl ? (
-        <StreamFrame url={embedUrl} />
+      {embedUrl && popped ? (
+        <div className="stream-fallback">
+          <div className="dim">{link.title} is playing in a pop-out window.</div>
+          <button className="btn active" onClick={() => closeFloat(embedUrl)}>DOCK BACK</button>
+        </div>
+      ) : embedUrl ? (
+        <StreamFrame key={embedUrl} url={embedUrl} />
       ) : (
         <div className="stream-fallback">
           <div className="dim">{link.title} cannot be embedded (the provider blocks framing).</div>
@@ -45,7 +43,19 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
       )}
       <div className="stream-meta">
         <span className="mono dim">{link.kind.toUpperCase()}{link.live ? ' / LIVE' : ''}</span>
-        <a href={href} target="_blank" rel="noopener noreferrer">Open in new tab</a>
+        <span className="stream-actions">
+          {embedUrl && !popped && (
+            <button
+              className="btn"
+              onClick={() => openFloat(embedUrl, link.title)}
+              disabled={full}
+              title={full ? `At most ${MAX_FLOATS} pop-out windows: close or dock one first` : 'Open this stream in a floating window'}
+            >
+              POP OUT
+            </button>
+          )}
+          <a href={href} target="_blank" rel="noopener noreferrer">Open in new tab</a>
+        </span>
       </div>
     </div>
   );

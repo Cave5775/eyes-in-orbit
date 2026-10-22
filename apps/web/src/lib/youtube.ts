@@ -32,17 +32,99 @@ function youtubeLiveChannel(url: string): string | null {
   }
 }
 
-const PARAMS = 'autoplay=1&mute=1&rel=0&modestbranding=1&playsinline=1';
+/** Origin of YouTube's player. The custom controls send commands to it and accept messages only from it. */
+export const YT_ORIGIN = 'https://www.youtube.com';
+
+/**
+ * Embed parameters, all from YouTube's embed parameter reference. What each one does, and what it cannot do:
+ * - `controls=0`: no control bar. Our own strip (play, pause, mute) replaces it, shown on hover.
+ * - `modestbranding=1`: asks for a smaller YouTube logo. YouTube draws little or no logo now, so this is minor.
+ * - `rel=0`: related videos are limited to the same channel. It does not remove them.
+ * - `iv_load_policy=3`: no annotations (the in-video cards and overlays).
+ * - `disablekb=1`: the player ignores keyboard shortcuts while it has focus.
+ * - `fs=1`: keeps fullscreen available. The button sits in the control bar, so it shows only with `controls=1`.
+ * - `playsinline=1`: plays inside the page on iOS instead of forcing fullscreen.
+ * - `enablejsapi=1` with `origin`: lets the page drive the player with postMessage.
+ * - `autoplay=1` with `mute=1`: browsers only allow muted autoplay. A user who opened a stream gets it playing,
+ *   muted; the strip unmutes it.
+ */
+export function embedParams(origin?: string): URLSearchParams {
+  const p = new URLSearchParams({
+    autoplay: '1',
+    mute: '1',
+    controls: '0',
+    modestbranding: '1',
+    rel: '0',
+    iv_load_policy: '3',
+    disablekb: '1',
+    fs: '1',
+    playsinline: '1',
+    enablejsapi: '1',
+  });
+  if (origin && /^https?:\/\//.test(origin)) p.set('origin', origin);
+  return p;
+}
 
 /** Convert a YouTube watch/live/short URL to an embeddable iframe URL, or null if it is not YouTube. */
-export function toEmbedUrl(url: string): string | null {
+export function toEmbedUrl(url: string, origin?: string): string | null {
   const id = youtubeVideoId(url);
-  if (id) return `https://www.youtube.com/embed/${id}?${PARAMS}`;
+  if (id) return `https://www.youtube.com/embed/${id}?${embedParams(origin).toString()}`;
   const channel = youtubeLiveChannel(url);
-  return channel ? `https://www.youtube.com/embed/live_stream?channel=${channel}&${PARAMS}` : null;
+  if (!channel) return null;
+  const p = embedParams(origin);
+  p.set('channel', channel);
+  return `https://www.youtube.com/embed/live_stream?${p.toString()}`;
+}
+
+/** The page's own origin, for the embed `origin` parameter. Undefined outside a browser or for file:// pages. */
+export function pageOrigin(): string | undefined {
+  try {
+    const o = window.location.origin;
+    return /^https?:\/\//.test(o) ? o : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Only YouTube is reliably frameable; NASA TV, X and generic pages link out. */
-export function resolveStream(link: StreamLink): { embedUrl: string | null; href: string } {
-  return { embedUrl: link.kind === 'youtube' || link.kind === 'web' ? toEmbedUrl(link.url) : null, href: link.url };
+export function resolveStream(link: StreamLink, origin?: string): { embedUrl: string | null; href: string } {
+  return { embedUrl: link.kind === 'youtube' || link.kind === 'web' ? toEmbedUrl(link.url, origin) : null, href: link.url };
+}
+
+export type WidgetCommand = 'playVideo' | 'pauseVideo' | 'mute' | 'unMute';
+
+/** A player command as the IFrame API's postMessage form expects it. */
+export function widgetCommand(func: WidgetCommand): string {
+  return JSON.stringify({ event: 'command', func, args: [] });
+}
+
+/** Sent once the iframe has loaded so the player starts posting its state (`infoDelivery`) to the page. */
+export function widgetListen(): string {
+  return JSON.stringify({ event: 'listening', id: 1, channel: 'widget' });
+}
+
+export interface WidgetInfo {
+  /** -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued */
+  playerState?: number;
+  muted?: boolean;
+}
+
+/** Read the state fields out of a player message; null for anything else. */
+export function parseWidgetMessage(data: unknown): WidgetInfo | null {
+  let msg: unknown = data;
+  if (typeof msg === 'string') {
+    try {
+      msg = JSON.parse(msg);
+    } catch {
+      return null;
+    }
+  }
+  if (!msg || typeof msg !== 'object') return null;
+  const { event, info } = msg as { event?: unknown; info?: unknown };
+  if (event !== 'infoDelivery' || !info || typeof info !== 'object') return null;
+  const { playerState, muted } = info as { playerState?: unknown; muted?: unknown };
+  const out: WidgetInfo = {};
+  if (typeof playerState === 'number' && Number.isFinite(playerState)) out.playerState = playerState;
+  if (typeof muted === 'boolean') out.muted = muted;
+  return out;
 }

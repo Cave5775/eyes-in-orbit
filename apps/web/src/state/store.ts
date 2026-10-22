@@ -3,6 +3,10 @@ import type {
   Article, ClockSnapshot, ConnectorHealth, DsnSnapshot, EntityRecord, IssFix, Launch, TelemetryPoint,
 } from '@eio/core';
 import { NO_FILTERS, toggled, type Filters, type LaunchMode, type SearchHit } from '../lib/filters';
+import {
+  closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, viewportNow,
+  type FloatWindow,
+} from '../lib/floating';
 import { clock, runtime } from './runtime';
 
 export type ConnState = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'mock';
@@ -36,8 +40,17 @@ interface State {
   serverTime: number | null;
   conn: ConnState;
   clock: ClockSnapshot;
+  /** pop-out stream windows, in stacking order; they live here so tab and selection changes do not touch them */
+  floats: FloatWindow[];
 
   upsertEntities(records: EntityRecord[], replace?: boolean): void;
+  /** Pop a stream out into a floating window (no-op at the cap; focuses it when already open). */
+  openFloat(url: string, title: string): void;
+  /** Close a floating window, or dock it back to its tab (both remove it from the floating list). */
+  closeFloat(url: string): void;
+  focusFloat(url: string): void;
+  /** Move or resize a floating window; the store clamps it to the viewport and keeps 16:9. */
+  setFloatRect(url: string, rect: { x: number; y: number; w: number }): void;
   select(id: string | null): void;
   focusLaunch(launch: Launch): void;
   resetView(): void;
@@ -76,12 +89,17 @@ export const useStore = create<State>((set, get) => ({
   serverTime: null,
   conn: 'connecting',
   clock: clock.snapshot(),
+  floats: loadFloats(),
 
   upsertEntities(records, replace = false) {
     const next = replace ? new Map<string, EntityRecord>() : new Map(get().entities);
     for (const r of records) next.set(r.id, r);
     set({ entities: next });
   },
+  openFloat: (url, title) => set((s) => ({ floats: openFloatWindow(s.floats, url, title, viewportNow()) })),
+  closeFloat: (url) => set((s) => ({ floats: closeFloatWindow(s.floats, url) })),
+  focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url) })),
+  setFloatRect: (url, rect) => set((s) => ({ floats: setFloatRect(s.floats, url, rect, viewportNow()) })),
   select(id) {
     if (id && !get().entities.has(id)) return;
     set({ selectedId: id, follow: id !== null, focus: id ? { id, nonce: ++nonce } : get().focus });
@@ -113,3 +131,6 @@ export const useStore = create<State>((set, get) => ({
 }));
 
 clock.subscribe((snap) => useStore.setState({ clock: snap }));
+useStore.subscribe((s, p) => {
+  if (s.floats !== p.floats) saveFloats(s.floats);
+});

@@ -14,7 +14,7 @@ Monorepo (npm workspaces): `packages/core` (`@eio/core`, shared model), `apps/se
 - **Detail panel** with tabs:
   - Telemetry: lat/lon/altitude, geocentric range, speed, period, phase, element age, confidence, attributes, identifiers; ISS live fix and telemetry; the current DSN link for DSN-tracked probes.
   - Launch (launch entities only): countdown, status, phase, window, provider, vehicle, mission, pad.
-  - Stream (when the entity or its launch has streams): YouTube links are embedded; NASA TV, X and other links open in a new tab.
+  - Stream (when the entity or its launch has streams): YouTube links are embedded; NASA TV, X and other links open in a new tab. POP OUT floats a YouTube stream above the app (up to 3 windows; drag the title bar, resize from the corner at 16:9, DOCK returns it to the tab; positions are remembered). Hover a player for PLAY, PAUSE, MUTE and UNMUTE; the embeds hide what YouTube's parameters allow (see `apps/web/src/lib/youtube.ts`).
   - News: Spaceflight News articles for the object (`links.newsQuery` or name), or all spaceflight.
 - **Launch board**: upcoming launches (plus the last 2 hours) with live countdowns, LL2 status and derived mission phase. Click a card to select the launch entity or fly to its pad.
 - **DSN panel**: dishes with active links first, craft chips that select the spacecraft, range, round-trip light time, downlink band and rate.
