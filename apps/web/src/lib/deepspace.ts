@@ -1,5 +1,8 @@
 import type { Vec3 } from '@eio/core';
 
+/** `compressed`: objects beyond the shell threshold sit on the log-compressed shell (default); `true`: real geocentric positions. */
+export type DistanceScale = 'compressed' | 'true';
+
 /** Beyond this geocentric distance (km) positions are drawn on a compressed shell. */
 export const SHELL_THRESHOLD_KM = 2e6;
 /** Shell growth per decade of real distance, as a fraction of the threshold radius. */

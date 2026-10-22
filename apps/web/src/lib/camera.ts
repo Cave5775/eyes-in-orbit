@@ -7,7 +7,7 @@ export type V3 = [number, number, number];
 const RE = EARTH.radiusKm;
 const F = EARTH.flattening;
 
-/** Closest the camera may get to the ellipsoid: clears the mesh facet sag (~1 km) and the marker lift. */
+/** Closest the camera may get to the ellipsoid: clears the Earth mesh facet sag (~0.12 km) with a wide margin. */
 export const MIN_ALT_KM = 3;
 export const MAX_DIST_KM = 3e7;
 /** Smallest camera-to-target distance when the target is not the Earth's centre (a followed object). */

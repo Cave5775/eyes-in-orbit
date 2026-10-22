@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import type { EntityGraph, EntityRecord } from '@eio/core';
+import type { DistanceScale } from '../lib/deepspace';
+import { fixedToInertial, type Spin } from '../lib/floating';
 import {
   PATH_MAX_PHASES, makePathBuffers, nowIndex, pathStale, planPathWindow, samplePath, type PathPlan, type PathResult,
 } from '../lib/paths';
 import { GLYPH_ID } from './palette';
+import { RelPositions, type RenderFrame } from './relative';
 
 const MIN_REBUILD_WALL_MS = 150;
 
@@ -29,43 +32,48 @@ function makeLine(position: THREE.BufferAttribute, color: THREE.Color, opacity: 
 
 /**
  * Trajectory line of the selected non-SGP4 entity: dimmer solid line for the past, brighter for the predicted
- * future, plus ticks at composite phase boundaries. Points come from `lib/paths.ts`; the two lines share one
- * position buffer and only their draw ranges move with the clock. Rebuilt only when the selection changes or
- * the time window has slid by a tenth of its length. Depth-tested like everything else, so the Earth hides the
- * far side of a path.
+ * future, plus ticks at composite phase boundaries. Points come from `lib/paths.ts` (float64); the two lines share one
+ * position buffer and only their draw ranges move with the clock. Rebuilt only when the selection changes, the distance
+ * scale changes or the time window has slid by a tenth of its length. The GPU copy is re-based on the camera every
+ * frame (`uploadFrame`), and a path sampled in the Earth-fixed frame is rotated by the Earth's spin at that moment, so
+ * it stays glued to the ground without a rotating parent object. Depth-tested like everything else, so the Earth hides
+ * the far side of a path.
  */
 export class PathOverlay {
   private readonly buf = makePathBuffers();
-  private readonly position = new THREE.BufferAttribute(this.buf.pos, 3).setUsage(THREE.DynamicDrawUsage);
+  private readonly line = new RelPositions(this.buf.pos, false);
   private readonly past: THREE.Line;
   private readonly future: THREE.Line;
   private readonly ticks: THREE.Points;
-  private readonly tickPos = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES * 3), 3);
+  private readonly tickPos = new RelPositions(PATH_MAX_PHASES, false);
   private readonly tickSize = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES), 1);
   private res: PathResult | null = null;
   private recKey: unknown = null;
   private builtAt = -Infinity;
   private builtWall = -Infinity;
-  private parent: THREE.Object3D | null = null;
+  private builtScale: DistanceScale | null = null;
   private readonly tmp = new THREE.Vector3();
 
-  constructor(private world: THREE.Object3D, private earth: THREE.Object3D, pointMaterial: THREE.Material, color: THREE.Color) {
-    this.past = makeLine(this.position, color.clone().multiplyScalar(0.5), 0.6);
-    this.future = makeLine(this.position, color.clone().lerp(new THREE.Color(1, 1, 1), 0.4), 1);
+  constructor(private world: THREE.Object3D, pointMaterial: THREE.Material, color: THREE.Color) {
+    this.past = makeLine(this.line.attr, color.clone().multiplyScalar(0.5), 0.6);
+    this.future = makeLine(this.line.attr, color.clone().lerp(new THREE.Color(1, 1, 1), 0.4), 1);
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', this.tickPos);
+    g.setAttribute('position', this.tickPos.attr);
     const col = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES * 3), 3);
     const glyph = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES).fill(GLYPH_ID.diamond), 1);
+    const show = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES).fill(1), 1);
     const c = color.clone().lerp(new THREE.Color(1, 1, 1), 0.5);
     for (let i = 0; i < PATH_MAX_PHASES; i++) col.setXYZ(i, c.r, c.g, c.b);
     g.setAttribute('aColor', col);
     g.setAttribute('aGlyph', glyph);
     g.setAttribute('aSize', this.tickSize);
+    g.setAttribute('aShow', show);
     this.ticks = new THREE.Points(g, pointMaterial);
     this.ticks.frustumCulled = false;
     this.ticks.renderOrder = 5;
     this.ticks.visible = false;
     for (const o of [this.past, this.future]) o.renderOrder = 3;
+    world.add(this.past, this.future, this.ticks);
     this.hide();
   }
 
@@ -79,20 +87,21 @@ export class PathOverlay {
   }
 
   /** Update for sim time `t`. `orbitHandled`: the entity already has the closed-orbit line/trail, so no path. */
-  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, orbitHandled: boolean): PathStatus {
+  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, orbitHandled: boolean, scale: DistanceScale = 'compressed'): PathStatus {
     if (orbitHandled) return this.hide();
     const provider = graph.provider(rec.id);
     const key = rec.provider;
     const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds });
     if (!plan) return this.hide();
 
-    if (key !== this.recKey || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
-      this.res = samplePath(graph, rec.id, plan, rec.provider, this.buf);
+    if (key !== this.recKey || scale !== this.builtScale || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
+      this.res = samplePath(graph, rec.id, plan, rec.provider, this.buf, scale);
       this.recKey = key;
+      this.builtScale = scale;
       this.builtAt = t;
       this.builtWall = wall;
-      this.position.needsUpdate = true;
-      this.attach(this.res.frame === 'fixed' ? this.earth : this.world);
+      this.line.fixed = this.tickPos.fixed = this.res.frame === 'fixed';
+      this.line.count = this.res.count;
       this.fillTicks(this.res);
     }
     const res = this.res;
@@ -108,26 +117,36 @@ export class PathOverlay {
     return { active: true, compressed: res.compressed, frame: res.frame, plan: res.plan };
   }
 
-  /** Visit every path point in world space (for FIT). The Earth group's matrix must be current. */
-  worldPoints(visit: (x: number, y: number, z: number) => void): void {
+  /** Refill the GPU buffers relative to this frame's camera. Call once per frame after `update`. */
+  uploadFrame(f: RenderFrame): void {
+    if (this.past.visible || this.future.visible) this.line.upload(f, this.res?.count ?? 0);
+    if (this.ticks.visible) this.tickPos.upload(f, PATH_MAX_PHASES);
+  }
+
+  /** Visit every path point in world space, float64 (for FIT). */
+  worldPoints(spin: Spin, visit: (x: number, y: number, z: number) => void): void {
     const res = this.res;
-    if (!res || !this.past.visible && !this.future.visible) return;
+    if (!res || (!this.past.visible && !this.future.visible)) return;
     const fixed = res.frame === 'fixed';
     const step = Math.max(1, Math.floor(res.count / 120));
+    const p: [number, number, number] = [0, 0, 0];
     for (let i = 0; i < res.count; i += step) {
-      this.tmp.set(this.buf.pos[i * 3], this.buf.pos[i * 3 + 1], this.buf.pos[i * 3 + 2]);
-      if (fixed) this.earth.localToWorld(this.tmp);
-      visit(this.tmp.x, this.tmp.y, this.tmp.z);
+      const x = this.buf.pos[i * 3], y = this.buf.pos[i * 3 + 1], z = this.buf.pos[i * 3 + 2];
+      if (fixed) {
+        fixedToInertial([x, y, z], spin, p);
+        visit(p[0], p[1], p[2]);
+      } else visit(x, y, z);
     }
   }
 
-  /** Phase labels with world positions, for the HTML label layer. */
-  phaseLabels(): { text: string; x: number; y: number; z: number }[] {
+  /** Phase labels with world positions (float64), for the HTML label layer. */
+  phaseLabels(spin: Spin): { text: string; x: number; y: number; z: number }[] {
     const res = this.res;
     if (!res || !this.ticks.visible) return [];
     return res.phases.map((p) => {
-      this.tmp.set(this.buf.pos[p.index * 3], this.buf.pos[p.index * 3 + 1], this.buf.pos[p.index * 3 + 2]);
-      if (res.frame === 'fixed') this.earth.localToWorld(this.tmp);
+      const o = p.index * 3;
+      const v = this.tmp.set(this.buf.pos[o], this.buf.pos[o + 1], this.buf.pos[o + 2]);
+      if (res.frame === 'fixed') this.tmp.set(spin.cos * v.x - spin.sin * v.y, spin.sin * v.x + spin.cos * v.y, v.z);
       return { text: p.name, x: this.tmp.x, y: this.tmp.y, z: this.tmp.z };
     });
   }
@@ -138,13 +157,7 @@ export class PathOverlay {
       if (p) this.tickPos.setXYZ(i, this.buf.pos[p.index * 3], this.buf.pos[p.index * 3 + 1], this.buf.pos[p.index * 3 + 2]);
       this.tickSize.setX(i, p ? 8 : 0);
     }
-    this.tickPos.needsUpdate = this.tickSize.needsUpdate = true;
-  }
-
-  private attach(parent: THREE.Object3D): void {
-    if (this.parent === parent) return;
-    this.parent = parent;
-    parent.add(this.past, this.future, this.ticks);
+    this.tickSize.needsUpdate = true;
   }
 
   private hide(): PathStatus {

@@ -6,7 +6,8 @@ import {
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistance, groundPoint, viewAnglesFor } from '../lib/camera';
 import { colorKeyOf, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
-import { GROUND_LIFT_KM, displayPosition } from '../lib/paths';
+import { ELLIPSOID_K, earthOccludes, occlusionC2 } from '../lib/occlusion';
+import { displayPosition } from '../lib/paths';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
@@ -15,6 +16,7 @@ import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
 import { EntityOverlay } from './overlays';
 import { PathOverlay, type PathStatus } from './PathOverlay';
 import { PropagatorClient } from './propagator-client';
+import { RelPositions, RenderFrame } from './relative';
 
 // Colours and sizes are authored in display space; skip three's linear workflow.
 THREE.ColorManagement.enabled = false;
@@ -25,6 +27,9 @@ const HINT_LIMIT = 6;
 /** FIT never frames a smaller sphere than this: the camera cannot come closer than MIN_ALT_KM to the ground anyway, km. */
 const MIN_FIT_RADIUS_KM = 1.5;
 const FIT_MARGIN = 1.3;
+/** Render camera clip planes. The scene uses a logarithmic depth buffer, so these only bound what is clipped, not depth precision. */
+const NEAR_KM = 0.005;
+const FAR_KM = 1e13;
 
 export interface PathLabel {
   text: string;
@@ -64,27 +69,31 @@ type SurfaceSource = { kind: 'entity'; id: string } | { kind: 'latlon'; lat: num
 interface PointSet {
   geo: THREE.BufferGeometry;
   points: THREE.Points;
-  pos: THREE.BufferAttribute;
+  /** float64 world positions plus the camera-relative GPU copy */
+  pos: RelPositions;
   color: THREE.BufferAttribute;
   size: THREE.BufferAttribute;
   glyph: THREE.BufferAttribute;
+  /** 0/1 per point: scope policy (out of scope points are not drawn nor pickable) */
+  show: THREE.BufferAttribute;
 }
 
-function makePointSet(n: number, material: THREE.Material, positions?: Float32Array): PointSet {
+function makePointSet(n: number, material: THREE.Material, world?: Float64Array, fixed = false): PointSet {
   const geo = new THREE.BufferGeometry();
-  const pos = new THREE.BufferAttribute(positions ?? new Float32Array(n * 3), 3);
+  const pos = new RelPositions(world ?? n, fixed);
   const color = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
   const size = new THREE.BufferAttribute(new Float32Array(n), 1);
   const glyph = new THREE.BufferAttribute(new Float32Array(n), 1);
-  pos.setUsage(THREE.DynamicDrawUsage);
+  const show = new THREE.BufferAttribute(new Float32Array(n).fill(1), 1);
   size.setUsage(THREE.DynamicDrawUsage);
-  geo.setAttribute('position', pos);
+  geo.setAttribute('position', pos.attr);
   geo.setAttribute('aColor', color);
   geo.setAttribute('aSize', size);
   geo.setAttribute('aGlyph', glyph);
+  geo.setAttribute('aShow', show);
   const points = new THREE.Points(geo, material);
   points.frustumCulled = false;
-  return { geo, points, pos, color, size, glyph };
+  return { geo, points, pos, color, size, glyph, show };
 }
 
 /** Distance (km) and angles at which a fly-to settles for a target at world position `p`. */
@@ -98,11 +107,16 @@ function viewFor(p: THREE.Vector3): { dist: number; az: number; el: number } {
 export class SceneController {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(45, 1, 1, 1e7);
+  /** The logical camera: float64 world position, driven by the rig, used for all CPU-side maths. */
+  private camera = new THREE.PerspectiveCamera(45, 1, NEAR_KM, FAR_KM);
+  /** What is actually rendered: same orientation and lens, but at the origin (floating origin, see `lib/floating.ts`). */
+  private rcam = new THREE.PerspectiveCamera(45, 1, NEAR_KM, FAR_KM);
+  private frameInfo = new RenderFrame();
   private rig: OrbitRig;
   private palette: Palette;
   private sun = new THREE.Vector3(1, 0, 0);
   private earthGroup = new THREE.Group();
+  private atmo: THREE.Mesh;
   private earthMat: THREE.ShaderMaterial;
   private earthMode: 'texture' | 'procedural' = 'procedural';
   private stars: THREE.Points;
@@ -135,7 +149,8 @@ export class SceneController {
   private selectedId: string | null = null;
   private hoverId: string | null = null;
   private issFix: IssFix | undefined;
-  private followFn: ((out: THREE.Vector3) => boolean) | null = null;
+  /** world position of the followed thing at sim time `t` */
+  private followFn: ((out: THREE.Vector3, t: number) => boolean) | null = null;
   private follow = false;
   private freeTarget = new THREE.Vector3();
   private anchor = new THREE.Vector3();
@@ -149,13 +164,17 @@ export class SceneController {
   private fps = 60;
   private lastFrame = performance.now();
   private disposed = false;
+  /** the animation loop is running (resize may redraw synchronously) */
+  private started = false;
   private ro: ResizeObserver;
   private cleanup: (() => void)[] = [];
 
   constructor(private container: HTMLElement, private cb: SceneCallbacks) {
     this.palette = readPalette();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // logarithmic depth: float depth precision is uniform in log(distance), so ground markers, trajectories and the Earth
+    // keep their order from a 3 km altitude hover out to the deep-space shell without a per-frame near/far dance
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', logarithmicDepthBuffer: true });
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.renderer.setPixelRatio(dpr);
     this.renderer.setClearColor(this.palette.bg, 1);
@@ -170,7 +189,7 @@ export class SceneController {
 
     this.pointMat = createPointMaterial(dpr);
 
-    // stars follow the camera and sit on the far plane
+    // stars follow the camera (they sit on the unit sphere around the render origin) and are pinned to the far plane
     const NSTAR = 2600;
     let seed = 0x9e3779b9; // fixed seed (mulberry32): the same sky on every load
     const rnd = () => {
@@ -195,9 +214,10 @@ export class SceneController {
     this.stars.frustumCulled = false;
     this.scene.add(this.stars);
 
-    // Earth: geometry is rotated so local axes are ECEF (z = north, +x = prime meridian); the group turns by GMST
-    // 256 x 160: facet sag stays under ~1 km, so the camera may come within MIN_ALT_KM of the ground without clipping through
-    const eg = new THREE.SphereGeometry(RE, 256, 160);
+    // Earth: geometry is rotated so local axes are ECEF (z = north, +x = prime meridian); the group turns by GMST and is
+    // positioned at minus the camera (floating origin). 512 x 256: facet sag stays near 0.12 km, so the surface the
+    // markers stand on is the true ellipsoid to within a hundred metres.
+    const eg = new THREE.SphereGeometry(RE, 512, 256);
     eg.rotateX(Math.PI / 2);
     this.earthMat = createEarthMaterial(this.sun, null);
     const earth = new THREE.Mesh(eg, this.earthMat);
@@ -206,20 +226,17 @@ export class SceneController {
     this.scene.add(this.earthGroup);
     this.loadEarthTexture();
 
-    const atmo = new THREE.Mesh(new THREE.SphereGeometry(RE * 1.02, 96, 64), createAtmosphereMaterial(this.sun));
-    atmo.renderOrder = 1;
-    this.scene.add(atmo);
+    this.atmo = new THREE.Mesh(new THREE.SphereGeometry(RE * 1.02, 96, 64), createAtmosphereMaterial(this.sun));
+    this.atmo.renderOrder = 1;
+    this.scene.add(this.atmo);
 
     this.sats = makePointSet(0, this.pointMat);
     this.dyn = makePointSet(0, this.pointMat);
-    this.pads = makePointSet(0, this.pointMat);
+    this.pads = makePointSet(0, this.pointMat, undefined, true);
     this.hi = makePointSet(4, this.pointMat);
-    for (const set of [this.sats, this.dyn, this.hi]) {
-      set.points.renderOrder = 5;
-      this.scene.add(set.points);
-    }
+    for (const set of [this.sats, this.dyn, this.pads, this.hi]) this.scene.add(set.points);
+    this.sats.points.renderOrder = this.dyn.points.renderOrder = 5;
     this.pads.points.renderOrder = 4;
-    this.earthGroup.add(this.pads.points);
     this.hi.points.renderOrder = 6;
 
     this.propagator.onLayout = (ids) => this.onLayout(ids);
@@ -230,6 +247,7 @@ export class SceneController {
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(container);
     this.resize();
+    this.started = true;
     this.renderer.setAnimationLoop(() => this.frame());
   }
 
@@ -278,13 +296,14 @@ export class SceneController {
   setLaunches(launches: Launch[]): void {
     this.launches = launches.filter((l) => l.pad);
     const n = this.launches.length;
-    this.earthGroup.remove(this.pads.points);
+    this.scene.remove(this.pads.points);
     this.pads.geo.dispose();
-    this.pads = makePointSet(n, this.pointMat);
+    // ECEF positions, rotated by the Earth's spin and re-based on the camera every frame
+    this.pads = makePointSet(n, this.pointMat, undefined, true);
     this.pads.points.renderOrder = 4;
-    this.earthGroup.add(this.pads.points);
+    this.scene.add(this.pads.points);
     this.launches.forEach((l, i) => {
-      const p = geodeticToFixed({ lat: l.pad!.latitude * DEG, lon: l.pad!.longitude * DEG, alt: GROUND_LIFT_KM }, EARTH);
+      const p = geodeticToFixed({ lat: l.pad!.latitude * DEG, lon: l.pad!.longitude * DEG, alt: 0 }, EARTH);
       this.pads.pos.setXYZ(i, p[0], p[1], p[2]);
       this.pads.glyph.setX(i, GLYPH_ID.ring);
     });
@@ -324,13 +343,13 @@ export class SceneController {
       graph.upsert(rec);
       const id = req.id;
       this.focusLatLon = null;
-      this.followFn = (out) => this.worldPos(id, clock.now(), out);
+      this.followFn = (out, t) => this.worldPos(id, t, out);
       if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
     } else if (req.lat !== undefined && req.lon !== undefined) {
       const lat = req.lat * DEG, lon = req.lon * DEG;
       this.focusLatLon = { lat, lon };
-      this.followFn = (out) => {
-        this.fixedToWorld(geodeticToFixed({ lat, lon, alt: GROUND_LIFT_KM }, EARTH), out);
+      this.followFn = (out, t) => {
+        this.fixedToWorld(geodeticToFixed({ lat, lon, alt: 0 }, EARTH), out, t);
         return true;
       };
       if (this.surfaceOn) this.surfaceSrc = { kind: 'latlon', lat, lon };
@@ -348,7 +367,7 @@ export class SceneController {
       this.rig.flyTo({ dist: this.rig.dist, az: this.rig.az, el: this.rig.el });
       return;
     }
-    if (this.followFn?.(this.tmp)) this.rig.flyTo(viewFor(this.tmp));
+    if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
   }
 
   // ------------------------------------------------------------------ camera modes and fit
@@ -387,7 +406,7 @@ export class SceneController {
       // globe view of the same place: from outside along the ground point's direction, at the globe distance we left
       const t = this.rig.target;
       const look = viewAnglesFor([t.x, t.y, t.z], 1);
-      const followed = this.follow && !!this.followFn && this.followFn(this.anchor);
+      const followed = this.follow && !!this.followFn && this.followFn(this.anchor, clock.now());
       this.rig.switchMode('globe');
       if (look) {
         this.rig.az = look.az;
@@ -412,13 +431,12 @@ export class SceneController {
       if (this.fitPos(id, v)) pts.push(v.x, v.y, v.z);
     }
     for (const p of opts.points ?? []) {
-      this.fixedToWorld(geodeticToFixed({ lat: p.latDeg * DEG, lon: p.lonDeg * DEG, alt: GROUND_LIFT_KM }, EARTH), v);
+      this.fixedToWorld(geodeticToFixed({ lat: p.latDeg * DEG, lon: p.lonDeg * DEG, alt: 0 }, EARTH), v);
       pts.push(v.x, v.y, v.z);
     }
     let withPath = false;
     if (opts.includePath !== false && this.selectedId && ids.includes(this.selectedId) && this.pathStatus.active) {
-      this.earthGroup.updateMatrixWorld();
-      this.pathOverlay?.worldPoints((x, y, z) => pts.push(x, y, z));
+      this.pathOverlay?.worldPoints(this.frameInfo.spin, (x, y, z) => pts.push(x, y, z));
       withPath = true;
     }
     return this.frameSphere(pts, !withPath);
@@ -469,8 +487,8 @@ export class SceneController {
     return this.worldPos(id, clock.now(), out);
   }
 
-  private fixedToWorld(f: ArrayLike<number>, out: THREE.Vector3): void {
-    const g = gmstRad(clock.now());
+  private fixedToWorld(f: ArrayLike<number>, out: THREE.Vector3, t = clock.now()): void {
+    const g = gmstRad(t);
     out.set(f[0] * Math.cos(g) - f[1] * Math.sin(g), f[0] * Math.sin(g) + f[1] * Math.cos(g), f[2]);
   }
 
@@ -495,21 +513,21 @@ export class SceneController {
   }
 
   private freezeSurfaceSource(): void {
-    const ground = this.surfaceTarget(this.tmp);
+    const ground = this.surfaceTarget(this.tmp, clock.now());
     this.surfaceSrc = (ground && this.latLonOfWorld(this.tmp)) || this.surfaceSrc;
   }
 
-  /** World position of the surface camera's ground target, or null when its source has no position. */
-  private surfaceTarget(out: THREE.Vector3): boolean {
+  /** World position of the surface camera's ground target at sim time `t`, or null when its source has no position. */
+  private surfaceTarget(out: THREE.Vector3, t: number): boolean {
     const src = this.surfaceSrc;
     if (!src) return false;
     if (src.kind === 'entity') {
-      if (!this.worldPos(src.id, clock.now(), out)) return false;
+      if (!this.worldPos(src.id, t, out)) return false;
       const g = groundPoint([out.x, out.y, out.z]);
       out.set(g[0], g[1], g[2]);
       return true;
     }
-    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: 0 }, EARTH), out);
+    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: 0 }, EARTH), out, t);
     return true;
   }
 
@@ -552,7 +570,7 @@ export class SceneController {
   private buildGraticule(): THREE.LineSegments {
     const pts: number[] = [];
     const seg = (lat0: number, lon0: number, lat1: number, lon1: number) => {
-      for (const [la, lo] of [[lat0, lon0], [lat1, lon1]]) pts.push(...geodeticToFixed({ lat: la * DEG, lon: lo * DEG, alt: 3 }, EARTH));
+      for (const [la, lo] of [[lat0, lon0], [lat1, lon1]]) pts.push(...geodeticToFixed({ lat: la * DEG, lon: lo * DEG, alt: 0.3 }, EARTH));
     };
     for (let lat = -60; lat <= 60; lat += 30) for (let lon = -180; lon < 180; lon += 6) seg(lat, lon, lat, lon + 6);
     for (let lon = -180; lon < 180; lon += 30) for (let lat = -90; lat < 90; lat += 6) seg(lat, lon, lat + 6, lon);
@@ -585,6 +603,7 @@ export class SceneController {
     this.satIndex = new Map(ids.map((id, i) => [id, i]));
     this.scene.remove(this.sats.points);
     this.sats.geo.dispose();
+    // the sat cloud shares the worker's float64 buffer: it is re-based on the camera every frame
     this.sats = makePointSet(ids.length, this.pointMat, this.propagator.positions);
     this.sats.points.renderOrder = 5;
     this.scene.add(this.sats.points);
@@ -668,7 +687,7 @@ export class SceneController {
     for (const id of want.keys()) {
       if (this.overlays.has(id)) continue;
       const rec = this.recs.get(id)!;
-      this.overlays.set(id, new EntityOverlay(this.scene, this.earthGroup, this.palette.colors[colorKeyOf(rec)]));
+      this.overlays.set(id, new EntityOverlay(this.scene, this.palette.colors[colorKeyOf(rec)]));
     }
     this.fullOverlays = new Set([...want].filter(([, full]) => full).map(([id]) => id));
 
@@ -679,61 +698,56 @@ export class SceneController {
       this.pathOverlay = null;
       this.pathOverlayId = pathId;
       this.pathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
-      if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.earthGroup, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
+      if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
     }
   }
 
   // ------------------------------------------------------------------ geometry queries
 
-  /** World (ECI, display-compressed) position of an entity at sim time `t`. */
+  /** World (ECI, display-compressed) position of an entity at sim time `t`, float64. */
   private worldPos(id: string, t: number, out: THREE.Vector3): boolean {
     const s = graph.stateIn(id, t, 'EARTH:inertial');
     if (!s) return false;
-    // deep-space shell compression, else nudge near-surface markers off the sphere (shared with the path overlay)
+    // deep-space shell compression, else a few-metre nudge for ground contact (shared with the path overlay)
     const { r, compressed } = displayPosition(s.r);
     out.set(r[0], r[1], r[2]);
     this.lastCompressed = compressed;
     return true;
   }
 
-  /** Last rendered world position of any point (for hover marker). */
+  /** Last computed world position of any point (for the hover marker and FIT). */
   private pointPos(id: string, out: THREE.Vector3): boolean {
     const si = this.satIndex.get(id);
     if (si !== undefined) {
-      const p = this.sats.pos;
-      if (p.getX(si) === 0 && p.getY(si) === 0 && p.getZ(si) === 0) return false;
-      out.set(p.getX(si), p.getY(si), p.getZ(si));
+      const w = this.sats.pos.world;
+      if (w[si * 3] === 0 && w[si * 3 + 1] === 0 && w[si * 3 + 2] === 0) return false;
+      out.set(w[si * 3], w[si * 3 + 1], w[si * 3 + 2]);
       return true;
     }
     const di = this.dynIndex.get(id);
     if (di === undefined || this.dyn.size.getX(di) === 0) return false;
-    out.set(this.dyn.pos.getX(di), this.dyn.pos.getY(di), this.dyn.pos.getZ(di));
+    const w = this.dyn.pos.world;
+    out.set(w[di * 3], w[di * 3 + 1], w[di * 3 + 2]);
     return true;
   }
 
-  private occluded(p: THREE.Vector3): boolean {
-    const c = this.camera.position;
-    const d = this.tmp.copy(p).sub(c);
-    const len = d.length();
-    d.divideScalar(len);
-    const b = c.dot(d);
-    const disc = b * b - (c.lengthSq() - RE * RE * 0.995);
-    if (disc <= 0) return false;
-    const t0 = -b - Math.sqrt(disc);
-    return t0 > 0 && t0 < len;
+  /** Earth between the camera and the camera-relative point `rel`? */
+  private occludedRel(x: number, y: number, z: number): boolean {
+    return earthOccludes(this.frameInfo.originV3, [x, y, z]);
   }
 
-  /** Screen-space nearest visible point within a small radius; occluded-by-Earth points are skipped. */
+  /** Screen-space nearest visible point within a small radius; occluded-by-Earth and out-of-scope points are skipped. */
   private pick(px: number, py: number): string | null {
     const w = this.container.clientWidth, h = this.container.clientHeight;
-    const m = new THREE.Matrix4().multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse).elements;
+    const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
     const hits: { d2: number; id: string; x: number; y: number; z: number }[] = [];
     const scan = (set: PointSet, ids: string[], bias: number) => {
-      const pos = set.pos.array as Float32Array, size = set.size.array as Float32Array;
+      const pos = set.pos.attr.array as Float32Array, size = set.size.array as Float32Array, show = set.show.array as Float32Array;
+      const world = set.pos.world;
       for (let i = 0; i < ids.length; i++) {
-        if (size[i] === 0) continue;
+        if (size[i] === 0 || show[i] === 0) continue;
+        if (world[i * 3] === 0 && world[i * 3 + 1] === 0 && world[i * 3 + 2] === 0) continue;
         const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
-        if (x === 0 && y === 0 && z === 0) continue;
         const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
         if (cw <= 0) continue;
         const sx = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / cw * 0.5 + 0.5) * w;
@@ -748,13 +762,16 @@ export class SceneController {
     scan(this.dyn, this.dynIds, 60);
     hits.sort((a, b) => a.d2 - b.d2);
     for (const hit of hits.slice(0, 8)) {
-      if (!this.occluded(this.tmp.set(hit.x, hit.y, hit.z))) return hit.id;
+      if (!this.occludedRel(hit.x, hit.y, hit.z)) return hit.id;
     }
     // the selected entity is drawn from the highlight set, not the sat cloud
     if (this.selectedId && this.hi.size.getX(1) > 0) {
-      const p = new THREE.Vector3(this.hi.pos.getX(1), this.hi.pos.getY(1), this.hi.pos.getZ(1)).project(this.camera);
+      const a = this.hi.pos.attr;
+      const p = new THREE.Vector3(a.getX(1), a.getY(1), a.getZ(1));
+      const hidden = this.occludedRel(p.x, p.y, p.z);
+      p.project(this.rcam);
       const dx = (p.x * 0.5 + 0.5) * w - px, dy = (1 - (p.y * 0.5 + 0.5)) * h - py;
-      if (p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) return this.selectedId;
+      if (!hidden && p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) return this.selectedId;
     }
     return null;
   }
@@ -804,11 +821,20 @@ export class SceneController {
     this.cb.onHover(id ? { id, x, y } : null);
   }
 
+  /**
+   * Container size changed (ResizeObserver, which runs after layout and before paint). `setSize` reallocates the drawing
+   * buffer and so CLEARS it: if the next draw waited for the animation loop the browser would composite one blank
+   * canvas per resize step (a flash on every step of a splitter drag). So the buffer is refilled synchronously here,
+   * with the new aspect ratio, before the browser can paint. The canvas CSS size stays 100% of the container
+   * (`updateStyle: false`), so until the buffer is refilled the browser at worst stretches the old one instead of
+   * showing a mis-sized or empty canvas.
+   */
   private resize(): void {
     const w = Math.max(1, this.container.clientWidth), h = Math.max(1, this.container.clientHeight);
-    this.renderer.setSize(w, h);
+    this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    if (!this.disposed && this.started) this.draw(performance.now());
   }
 
   // ------------------------------------------------------------------ frame loop
@@ -818,16 +844,21 @@ export class SceneController {
     const wall = performance.now();
     this.fps += ((1000 / Math.max(1, wall - this.lastFrame)) - this.fps) * 0.05;
     this.lastFrame = wall;
+    this.draw(wall);
+  }
+
+  /** Advance everything to the current sim time and render one frame. */
+  private draw(wall: number): void {
+    // ONE sim time for the whole frame: markers, followed anchor, overlays and the camera must all be evaluated at the
+    // same instant, or at x600 a few milliseconds of skew between them is a visible wobble of the followed object
     const t = clock.now();
 
-    this.earthGroup.rotation.z = gmstRad(t);
+    const gmst = gmstRad(t);
+    this.earthGroup.rotation.z = gmst;
     const s = sunDirectionEci(t);
     this.sun.set(s[0], s[1], s[2]);
 
-    if (this.propagator.dirty) {
-      this.sats.pos.needsUpdate = true;
-      this.propagator.dirty = false;
-    }
+    if (this.propagator.dirty) this.propagator.dirty = false;
     this.updateDyn(t);
     this.updateHighlights(t);
     this.updateOverlays(t, wall);
@@ -835,23 +866,18 @@ export class SceneController {
     // camera
     let anchored: boolean;
     if (this.surfaceOn) {
-      anchored = this.surfaceTarget(this.anchor);
+      anchored = this.surfaceTarget(this.anchor, t);
       if (!anchored) this.setSurfaceMode(false); // the anchored object lost its position: back to the globe
       this.rig.minDist = MIN_ALT_KM;
     } else {
-      anchored = this.follow && this.followFn ? this.followFn(this.anchor) : false;
-      if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget);
+      anchored = this.follow && this.followFn ? this.followFn(this.anchor, t) : false;
+      if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget, t);
       // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
       this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
     }
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
-    const dist = this.rig.dist;
-    // near plane shrinks with the camera's height so the ground right below is not clipped, but never beyond the usual dist ratio
-    const camAlt = altitudeOf([this.camera.position.x, this.camera.position.y, this.camera.position.z]);
-    this.camera.near = Math.min(3000, Math.max(0.01, Math.min(dist * 0.0015, Math.max(camAlt, 0.5) * 0.3)));
-    this.camera.far = dist + this.rig.target.length() + 6e6;
-    this.camera.updateProjectionMatrix();
-    this.stars.position.copy(this.camera.position);
+
+    this.prepareRender(gmst);
 
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
       this.lastPickAt = wall;
@@ -859,8 +885,44 @@ export class SceneController {
       if (id || this.hoverId) this.setHover(id, this.mouse.x, this.mouse.y);
     }
 
-    this.renderer.render(this.scene, this.camera);
+    this.renderer.render(this.scene, this.rcam);
     this.updatePathLabels();
+  }
+
+  /**
+   * Floating origin: everything the GPU sees is camera-relative. Positions are subtracted in float64 here; the render
+   * camera sits at the origin with the logical camera's orientation; the Earth and atmosphere objects are moved to minus
+   * the camera position (their own vertices are static and only a few hundred metres of float32 noise at the surface).
+   */
+  private prepareRender(gmst: number): void {
+    const cam = this.camera;
+    const f = this.frameInfo;
+    f.set(cam.position, gmst);
+
+    const rc = this.rcam;
+    rc.fov = cam.fov;
+    rc.aspect = cam.aspect;
+    rc.near = NEAR_KM;
+    rc.far = FAR_KM;
+    rc.updateProjectionMatrix();
+    rc.position.set(0, 0, 0);
+    rc.quaternion.copy(cam.quaternion);
+    rc.updateMatrixWorld(true);
+
+    this.earthGroup.position.copy(f.origin).negate();
+    this.atmo.position.copy(f.origin).negate();
+
+    const u = this.pointMat.uniforms;
+    u.uOriginS.value.set(f.origin.x, f.origin.y, f.origin.z * ELLIPSOID_K);
+    u.uC2.value = occlusionC2(f.originV3);
+    u.uOccK.value = ELLIPSOID_K;
+
+    this.sats.pos.upload(f);
+    this.dyn.pos.upload(f);
+    this.pads.pos.upload(f);
+    this.hi.pos.upload(f);
+    this.overlays.forEach((o) => o.uploadFrame(f));
+    this.pathOverlay?.uploadFrame(f);
   }
 
   private updateDyn(t: number): void {
@@ -870,7 +932,7 @@ export class SceneController {
       if (ok) pos.setXYZ(i, this.tmp.x, this.tmp.y, this.tmp.z);
       size.setX(i, ok ? this.dynBaseSize[i] : 0);
     }
-    pos.needsUpdate = size.needsUpdate = true;
+    size.needsUpdate = true;
   }
 
   /** Selected ring + dot (exact main-thread position), hover ring, ISS live-fix marker. */
@@ -902,7 +964,7 @@ export class SceneController {
       fixOk = true;
     }
     set(3, fixOk, 15, this.palette.colors.ground, GLYPH_ID.diamond);
-    hi.pos.needsUpdate = hi.size.needsUpdate = hi.color.needsUpdate = hi.glyph.needsUpdate = true;
+    hi.size.needsUpdate = hi.color.needsUpdate = hi.glyph.needsUpdate = true;
   }
 
   private updateOverlays(t: number, wall: number): void {
@@ -920,12 +982,12 @@ export class SceneController {
     if (!cb) return;
     const labels: PathLabel[] = [];
     if (this.pathStatus.active && this.pathOverlay) {
-      this.earthGroup.updateMatrixWorld();
       const w = this.container.clientWidth, h = this.container.clientHeight;
-      for (const l of this.pathOverlay.phaseLabels()) {
-        const p = this.tmp2.set(l.x, l.y, l.z); // not `tmp`: occluded() works in it
-        if (this.occluded(p)) continue;
-        p.project(this.camera);
+      const o = this.frameInfo.origin;
+      for (const l of this.pathOverlay.phaseLabels(this.frameInfo.spin)) {
+        const p = this.tmp2.set(l.x - o.x, l.y - o.y, l.z - o.z); // camera-relative, float64 until here
+        if (this.occludedRel(p.x, p.y, p.z)) continue;
+        p.project(this.rcam);
         if (p.z > 1 || p.z < -1 || Math.abs(p.x) > 1.05 || Math.abs(p.y) > 1.05) continue;
         labels.push({ text: l.text, x: (p.x * 0.5 + 0.5) * w, y: (1 - (p.y * 0.5 + 0.5)) * h });
       }

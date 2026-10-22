@@ -4,7 +4,7 @@ import type { FromWorker, SatInit, ToWorker } from '../workers/protocol';
 /** Main-thread handle on the SGP4 worker; `positions` always matches `ids` (TEME xyz, km). */
 export class PropagatorClient {
   ids: string[] = [];
-  positions = new Float32Array(0);
+  positions = new Float64Array(0);
   simMs = 0;
   /** set when `positions` changed since the consumer last cleared it */
   dirty = false;
@@ -19,7 +19,7 @@ export class PropagatorClient {
       if (m.type === 'layout') {
         this.version = m.version;
         this.ids = m.ids;
-        this.positions = new Float32Array(m.ids.length * 3);
+        this.positions = new Float64Array(m.ids.length * 3);
         this.onLayout(m.ids);
       } else if (m.version === this.version) {
         this.positions.set(m.buffer);

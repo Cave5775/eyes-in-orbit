@@ -17,7 +17,7 @@ let index = new Map<string, number>();
 let recs: Sat[] = [];
 let version = 0;
 let layoutDirty = false;
-const pool: Float32Array[] = [];
+const pool: Float64Array[] = [];
 let clock: { anchorSim: number; anchorWall: number; rate: number } | null = null;
 let lastPostedSim = NaN;
 let forcePost = false;
@@ -59,7 +59,7 @@ function tick(): void {
   lastPostedSim = simMs;
 
   const n = recs.length;
-  const buf = pool.pop() ?? new Float32Array(n * 3);
+  const buf = pool.pop() ?? new Float64Array(n * 3);
   for (let i = 0; i < n; i++) {
     const s = recs[i];
     const out = sgp4(s.satrec, (simMs - s.epochMs) / 60_000);
