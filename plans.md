@@ -14,7 +14,7 @@
 - [ ] Unrender objects outside of reasonable view or scope of the current focus object
 - [ ] try implementing data stream visualization for the upcoming starlink group 15-15 launch (or 15-16 if too late)
 - [ ] 3D models for (some?) objects. Try implementing the ISS and making use of its special data streams for solar array angles.
-- [ ] Livestreams can be popped out and dragged around within the interface
+- [x] Livestreams can be popped out and dragged around within the interface
 
 # Feature issues
 - [x] Earth does not block the background stars behind it
@@ -23,3 +23,4 @@
 - [ ] Flickering of the 3D viewport when resized (not urgent)
 - [ ] Icons on the surface of the earth clip into it when the earth is rotated
 - [ ] Youtube embedded streams do not hide their youtube overlay which obstructs streams
+  - Mitigated with supported embed parameters and a hover control strip; YouTube branding, title and error cards cannot be hidden without breaching its terms
