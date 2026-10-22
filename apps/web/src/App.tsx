@@ -5,6 +5,7 @@ import { DsnPanel } from './ui/DsnPanel';
 import { EntityBrowser } from './ui/EntityBrowser';
 import { LaunchBoard } from './ui/LaunchBoard';
 import { NewsTicker } from './ui/NewsTicker';
+import { ResizableLayout } from './ui/ResizableLayout';
 import { SceneView } from './ui/SceneView';
 import { TopBar } from './ui/TopBar';
 
@@ -20,7 +21,7 @@ export function App() {
   }, []);
 
   return (
-    <div className="app">
+    <ResizableLayout>
       <TopBar />
       <EntityBrowser />
       <SceneView />
@@ -30,6 +31,6 @@ export function App() {
         <DsnPanel />
       </div>
       <NewsTicker />
-    </div>
+    </ResizableLayout>
   );
 }
