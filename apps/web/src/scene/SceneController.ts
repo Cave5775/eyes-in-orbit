@@ -1,40 +1,65 @@
 import * as THREE from 'three';
 import {
-  DEG, EARTH, geodeticToFixed, gmstRad, sunDirectionEci,
+  DEG, EARTH, fixedToGeodetic, geodeticToFixed, gmstRad, sunDirectionEci,
   type EntityRecord, type IssFix, type Launch, type Omm,
 } from '@eio/core';
-import { compressDeepSpace } from '../lib/deepspace';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistance, groundPoint, viewAnglesFor } from '../lib/camera';
 import { colorKeyOf, isSgp4, type ColorKey } from '../lib/entity';
-import { NO_FILTERS, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
+import { NO_FILTERS, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
+import { GROUND_LIFT_KM, displayPosition } from '../lib/paths';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
 import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial } from './materials';
 import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
 import { EntityOverlay } from './overlays';
+import { PathOverlay, type PathStatus } from './PathOverlay';
 import { PropagatorClient } from './propagator-client';
 
 // Colours and sizes are authored in display space; skip three's linear workflow.
 THREE.ColorManagement.enabled = false;
 
 const RE = EARTH.radiusKm;
-const GROUND_LIFT_KM = 12;
 const PICK_RADIUS_PX = 11;
 const HINT_LIMIT = 6;
+/** FIT never frames a smaller sphere than this: the camera cannot come closer than MIN_ALT_KM to the ground anyway, km. */
+const MIN_FIT_RADIUS_KM = 1.5;
+const FIT_MARGIN = 1.3;
+
+export interface PathLabel {
+  text: string;
+  /** CSS pixels inside the scene container */
+  x: number;
+  y: number;
+}
 
 export interface SceneCallbacks {
   onPick(id: string): void;
   onHover(h: { id: string; x: number; y: number } | null): void;
+  /** Screen positions of the selected path's phase boundaries (called each frame while there are any, once more to clear). */
+  onPathLabels?(labels: PathLabel[]): void;
+  /** The scene changed follow mode by itself (FIT leaves the followed object). */
+  onFollowChange?(follow: boolean): void;
+  onSurfaceChange?(on: boolean): void;
 }
 
 export interface SceneStats {
   fps: number;
   distKm: number;
+  /** camera height above the ellipsoid */
+  altKm: number;
   satCount: number;
   dynCount: number;
   earth: 'texture' | 'procedural';
   shellSelected: boolean;
+  /** surface-aligned camera mode */
+  surface: boolean;
+  /** selected path: window relative to now (ms, negative = past) and whether it is drawn on the compressed shell */
+  path: { pastMs: number; futureMs: number; compressed: boolean } | null;
 }
+
+/** Where the surface-aligned camera is anchored. */
+type SurfaceSource = { kind: 'entity'; id: string } | { kind: 'latlon'; lat: number; lon: number };
 
 interface PointSet {
   geo: THREE.BufferGeometry;
@@ -95,6 +120,16 @@ export class SceneController {
   private propagator = new PropagatorClient();
   private overlays = new Map<string, EntityOverlay>();
   private fullOverlays = new Set<string>();
+  private pathOverlay: PathOverlay | null = null;
+  private pathOverlayId: string | null = null;
+  private pathStatus: PathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
+  private hadPathLabels = false;
+  private surfaceOn = false;
+  private surfaceSrc: SurfaceSource | null = null;
+  private globeDist = 24000;
+  private focusLatLon: { lat: number; lon: number } | null = null;
+  /** Earth-fixed point the free (unfollowed) camera target is pinned to after a FIT of ground-level objects */
+  private groundLock: [number, number, number] | null = null;
   private launches: Launch[] = [];
   private filters: Filters = NO_FILTERS;
   private selectedId: string | null = null;
@@ -105,6 +140,7 @@ export class SceneController {
   private freeTarget = new THREE.Vector3();
   private anchor = new THREE.Vector3();
   private tmp = new THREE.Vector3();
+  private tmp2 = new THREE.Vector3();
   private mouse: { x: number; y: number } | null = null;
   private down: { x: number; y: number; t: number } | null = null;
   private lastPickAt = 0;
@@ -136,12 +172,19 @@ export class SceneController {
 
     // stars follow the camera and sit on the far plane
     const NSTAR = 2600;
+    let seed = 0x9e3779b9; // fixed seed (mulberry32): the same sky on every load
+    const rnd = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let z = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      z = (z + Math.imul(z ^ (z >>> 7), 61 | z)) ^ z;
+      return ((z ^ (z >>> 14)) >>> 0) / 4294967296;
+    };
     const sp = new Float32Array(NSTAR * 3), ss = new Float32Array(NSTAR), sb = new Float32Array(NSTAR);
     for (let i = 0; i < NSTAR; i++) {
-      const u = Math.random() * 2 - 1, th = Math.random() * Math.PI * 2, s = Math.sqrt(1 - u * u);
+      const u = rnd() * 2 - 1, th = rnd() * Math.PI * 2, s = Math.sqrt(1 - u * u);
       sp.set([s * Math.cos(th), s * Math.sin(th), u], i * 3);
-      ss[i] = 0.8 + Math.random() * 1.6;
-      sb[i] = 0.25 + Math.random() * 0.75;
+      ss[i] = 0.8 + rnd() * 1.6;
+      sb[i] = 0.25 + rnd() * 0.75;
     }
     const sg = new THREE.BufferGeometry();
     sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
@@ -153,7 +196,8 @@ export class SceneController {
     this.scene.add(this.stars);
 
     // Earth: geometry is rotated so local axes are ECEF (z = north, +x = prime meridian); the group turns by GMST
-    const eg = new THREE.SphereGeometry(RE, 128, 96);
+    // 256 x 160: facet sag stays under ~1 km, so the camera may come within MIN_ALT_KM of the ground without clipping through
+    const eg = new THREE.SphereGeometry(RE, 256, 160);
     eg.rotateX(Math.PI / 2);
     this.earthMat = createEarthMaterial(this.sun, null);
     const earth = new THREE.Mesh(eg, this.earthMat);
@@ -256,49 +300,232 @@ export class SceneController {
     this.refreshHints();
     this.applyAppearance();
     this.updatePadAppearance();
+    // the surface camera tracked the deselected object's sub-point: stay where it is, on the rotating ground
+    if (!id && this.surfaceOn && this.surfaceSrc?.kind === 'entity') this.freezeSurfaceSource();
   }
 
   setFollow(follow: boolean): void {
+    if (follow !== this.follow) this.groundLock = null;
     if (!follow && this.follow) {
       this.freeTarget.copy(this.rig.target).sub(this.rig.pan);
     }
     this.follow = follow;
+    if (this.surfaceOn) {
+      if (!follow && this.surfaceSrc?.kind === 'entity') this.freezeSurfaceSource();
+      else if (follow && this.selectedId && this.recs.has(this.selectedId)) this.surfaceSrc = { kind: 'entity', id: this.selectedId };
+    }
   }
 
   focus(req: FocusRequest): void {
+    this.groundLock = null;
     if (req.id) {
       const rec = this.recs.get(req.id);
       if (!rec) return;
       graph.upsert(rec);
       const id = req.id;
+      this.focusLatLon = null;
       this.followFn = (out) => this.worldPos(id, clock.now(), out);
+      if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
     } else if (req.lat !== undefined && req.lon !== undefined) {
       const lat = req.lat * DEG, lon = req.lon * DEG;
+      this.focusLatLon = { lat, lon };
       this.followFn = (out) => {
-        const f = geodeticToFixed({ lat, lon, alt: GROUND_LIFT_KM }, EARTH);
-        const g = gmstRad(clock.now());
-        out.set(f[0] * Math.cos(g) - f[1] * Math.sin(g), f[0] * Math.sin(g) + f[1] * Math.cos(g), f[2]);
+        this.fixedToWorld(geodeticToFixed({ lat, lon, alt: GROUND_LIFT_KM }, EARTH), out);
         return true;
       };
+      if (this.surfaceOn) this.surfaceSrc = { kind: 'latlon', lat, lon };
     } else {
+      if (this.surfaceOn) this.setSurfaceMode(false);
       this.followFn = null;
+      this.focusLatLon = null;
       this.freeTarget.set(0, 0, 0);
       this.follow = false;
       this.rig.flyTo({ dist: Math.max(20000, Math.min(this.rig.dist, 60000)), az: this.rig.az, el: this.rig.el * 0.6 });
       return;
     }
     this.follow = true;
+    if (this.surfaceOn) {
+      this.rig.flyTo({ dist: this.rig.dist, az: this.rig.az, el: this.rig.el });
+      return;
+    }
     if (this.followFn?.(this.tmp)) this.rig.flyTo(viewFor(this.tmp));
   }
 
+  // ------------------------------------------------------------------ camera modes and fit
+
+  get surfaceMode(): boolean {
+    return this.surfaceOn;
+  }
+
+  toggleSurface(): void {
+    this.setSurfaceMode(!this.surfaceOn);
+  }
+
+  /**
+   * Surface-aligned camera: orbits a ground point (the sub-point of the selected object, a launch pad being focused,
+   * or the point under the view centre) with the local vertical up and north-up, so the horizon is level and the
+   * Earth blocks the stars below it. Leaving flies back to the globe view of the same place.
+   */
+  setSurfaceMode(on: boolean): void {
+    if (on === this.surfaceOn) return;
+    if (on) {
+      const src = this.pickSurfaceSource();
+      if (!src) return;
+      this.globeDist = this.rig.dist;
+      this.surfaceSrc = src;
+      let dist = 300;
+      if (src.kind === 'entity' && this.worldPos(src.id, clock.now(), this.tmp)) {
+        // an object high above its sub-point (ISS) needs a camera far enough back (and high enough) to see it and the ground
+        dist = Math.min(60000, Math.max(300, (this.tmp.length() - RE) * 3.6));
+      }
+      this.rig.switchMode('surface');
+      this.rig.az = NORTH_UP_AZ;
+      this.rig.el = 0.35;
+      this.rig.dist = dist;
+      this.surfaceOn = true;
+    } else {
+      // globe view of the same place: from outside along the ground point's direction, at the globe distance we left
+      const t = this.rig.target;
+      const look = viewAnglesFor([t.x, t.y, t.z], 1);
+      const followed = this.follow && !!this.followFn && this.followFn(this.anchor);
+      this.rig.switchMode('globe');
+      if (look) {
+        this.rig.az = look.az;
+        this.rig.el = look.el;
+      }
+      this.rig.dist = followed ? viewFor(this.anchor).dist : Math.max(this.globeDist, 20000);
+      this.surfaceOn = false;
+      this.surfaceSrc = null;
+    }
+    this.cb.onSurfaceChange?.(this.surfaceOn);
+  }
+
+  /**
+   * Frame a set of entities: bounding sphere of their current display positions (plus `points` on the ground and,
+   * for the selected entity, its drawn path), camera distance from the FOV, smooth fly-to. Leaves follow mode.
+   * Returns false when none of the ids has a position.
+   */
+  fitEntities(ids: string[], opts: { points?: { latDeg: number; lonDeg: number }[]; includePath?: boolean } = {}): boolean {
+    const pts: number[] = [];
+    const v = new THREE.Vector3();
+    for (const id of ids) {
+      if (this.fitPos(id, v)) pts.push(v.x, v.y, v.z);
+    }
+    for (const p of opts.points ?? []) {
+      this.fixedToWorld(geodeticToFixed({ lat: p.latDeg * DEG, lon: p.lonDeg * DEG, alt: GROUND_LIFT_KM }, EARTH), v);
+      pts.push(v.x, v.y, v.z);
+    }
+    let withPath = false;
+    if (opts.includePath !== false && this.selectedId && ids.includes(this.selectedId) && this.pathStatus.active) {
+      this.earthGroup.updateMatrixWorld();
+      this.pathOverlay?.worldPoints((x, y, z) => pts.push(x, y, z));
+      withPath = true;
+    }
+    return this.frameSphere(pts, !withPath);
+  }
+
+  /** FIT VISIBLE: everything the current filters leave on screen. */
+  fitVisible(): boolean {
+    const pts: number[] = [];
+    const v = new THREE.Vector3();
+    for (const rec of this.recs.values()) {
+      if (!matchesFilters(rec, this.filters)) continue;
+      if (this.fitPos(rec.id, v)) pts.push(v.x, v.y, v.z);
+    }
+    return this.frameSphere(pts);
+  }
+
+  /** `mayBeSinglePoint`: when everything coincides (< 0.5 km) frame it like a plain selection instead of zooming to metres. */
+  private frameSphere(pts: number[], mayBeSinglePoint = true): boolean {
+    if (pts.length < 3) return false;
+    if (this.surfaceOn) this.setSurfaceMode(false);
+    const { c, r } = boundingSphere(pts);
+    const radius = Math.max(r, MIN_FIT_RADIUS_KM);
+    this.tmp.set(c[0], c[1], c[2]);
+    // a single point (nothing to fit) gets the same view as selecting it, not an absurdly close one
+    const view = mayBeSinglePoint && r < 0.5 ? viewFor(this.tmp) : null;
+    const dist = view?.dist ?? Math.min(3e7, Math.max(MIN_TARGET_DIST_KM, fitDistance(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN)));
+    const look = view ?? fitAngles(c, radius);
+    this.follow = false;
+    this.freeTarget.set(c[0], c[1], c[2]);
+    this.rig.pan.set(0, 0, 0);
+    this.rig.flyTo({ dist, az: look?.az ?? this.rig.az, el: look?.el ?? this.rig.el });
+    this.cb.onFollowChange?.(false); // before the lock below: setFollow(false) would otherwise clear it
+    // a set that sits on the ground (booster, pad, landing zone) must turn with the Earth, or the Earth slides out from under the view
+    this.groundLock = null;
+    if (altitudeOf(c) < 150 && r < 200) {
+      const g = -gmstRad(clock.now());
+      this.groundLock = [c[0] * Math.cos(g) - c[1] * Math.sin(g), c[0] * Math.sin(g) + c[1] * Math.cos(g), c[2]];
+    }
+    return true;
+  }
+
+  /** Current display position of any entity: SGP4 from the propagator buffer, others from the graph. */
+  private fitPos(id: string, out: THREE.Vector3): boolean {
+    if (this.satIndex.has(id)) return this.pointPos(id, out);
+    const rec = this.recs.get(id);
+    if (!rec?.provider) return false;
+    if (!graph.get(id)) graph.upsert(rec);
+    return this.worldPos(id, clock.now(), out);
+  }
+
+  private fixedToWorld(f: ArrayLike<number>, out: THREE.Vector3): void {
+    const g = gmstRad(clock.now());
+    out.set(f[0] * Math.cos(g) - f[1] * Math.sin(g), f[0] * Math.sin(g) + f[1] * Math.cos(g), f[2]);
+  }
+
+  /** Where a fresh surface view anchors: the selected object's sub-point, the focused pad, else the point under the view centre. */
+  private pickSurfaceSource(): SurfaceSource | null {
+    if (this.follow && this.selectedId && this.worldPos(this.selectedId, clock.now(), this.tmp)) return { kind: 'entity', id: this.selectedId };
+    if (this.follow && this.focusLatLon) return { kind: 'latlon', ...this.focusLatLon };
+    const dir = this.camera.getWorldDirection(new THREE.Vector3());
+    const c = this.camera.position;
+    const b = c.dot(dir);
+    const disc = b * b - (c.lengthSq() - RE * RE);
+    const p = disc > 0 && -b - Math.sqrt(disc) > 0 ? c.clone().addScaledVector(dir, -b - Math.sqrt(disc)) : c.clone();
+    return this.latLonOfWorld(p);
+  }
+
+  private latLonOfWorld(p: THREE.Vector3): SurfaceSource | null {
+    if (p.lengthSq() < 1) return null;
+    const g = -gmstRad(clock.now());
+    const fx = p.x * Math.cos(g) - p.y * Math.sin(g), fy = p.x * Math.sin(g) + p.y * Math.cos(g);
+    const geo = fixedToGeodetic([fx, fy, p.z], EARTH);
+    return { kind: 'latlon', lat: geo.lat, lon: geo.lon };
+  }
+
+  private freezeSurfaceSource(): void {
+    const ground = this.surfaceTarget(this.tmp);
+    this.surfaceSrc = (ground && this.latLonOfWorld(this.tmp)) || this.surfaceSrc;
+  }
+
+  /** World position of the surface camera's ground target, or null when its source has no position. */
+  private surfaceTarget(out: THREE.Vector3): boolean {
+    const src = this.surfaceSrc;
+    if (!src) return false;
+    if (src.kind === 'entity') {
+      if (!this.worldPos(src.id, clock.now(), out)) return false;
+      const g = groundPoint([out.x, out.y, out.z]);
+      out.set(g[0], g[1], g[2]);
+      return true;
+    }
+    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: 0 }, EARTH), out);
+    return true;
+  }
+
   getStats(): SceneStats {
+    const plan = this.pathStatus.plan;
+    const now = clock.now();
     return {
       fps: this.fps,
       distKm: this.rig.dist,
+      altKm: this.rig.altitudeKm,
       satCount: this.propagator.ids.length,
       dynCount: this.dynIds.length,
       earth: this.earthMode,
       shellSelected: this.shellSelected,
+      surface: this.surfaceOn,
+      path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
     };
   }
 
@@ -444,6 +671,16 @@ export class SceneController {
       this.overlays.set(id, new EntityOverlay(this.scene, this.earthGroup, this.palette.colors[colorKeyOf(rec)]));
     }
     this.fullOverlays = new Set([...want].filter(([, full]) => full).map(([id]) => id));
+
+    // trajectory path for a selected entity that has no SGP4 orbit of its own
+    const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' ? sel.id : null;
+    if (pathId !== this.pathOverlayId) {
+      this.pathOverlay?.dispose();
+      this.pathOverlay = null;
+      this.pathOverlayId = pathId;
+      this.pathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
+      if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.earthGroup, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
+    }
   }
 
   // ------------------------------------------------------------------ geometry queries
@@ -452,17 +689,10 @@ export class SceneController {
   private worldPos(id: string, t: number, out: THREE.Vector3): boolean {
     const s = graph.stateIn(id, t, 'EARTH:inertial');
     if (!s) return false;
-    const { r, compressed } = compressDeepSpace(s.r);
+    // deep-space shell compression, else nudge near-surface markers off the sphere (shared with the path overlay)
+    const { r, compressed } = displayPosition(s.r);
     out.set(r[0], r[1], r[2]);
     this.lastCompressed = compressed;
-    if (!compressed) {
-      // nudge near-surface markers off the sphere so they are not half-buried in it
-      const n = out.length();
-      const sinLat = n > 0 ? out.z / n : 0;
-      const surface = RE * (1 - EARTH.flattening * sinLat * sinLat);
-      const alt = n - surface;
-      if (alt < GROUND_LIFT_KM * 2) out.multiplyScalar((n + GROUND_LIFT_KM * (1 - Math.max(0, alt) / (GROUND_LIFT_KM * 2))) / n);
-    }
     return true;
   }
 
@@ -603,11 +833,22 @@ export class SceneController {
     this.updateOverlays(t, wall);
 
     // camera
-    const anchored = this.follow && this.followFn ? this.followFn(this.anchor) : false;
-    this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? 3 : RE * 1.01;
+    let anchored: boolean;
+    if (this.surfaceOn) {
+      anchored = this.surfaceTarget(this.anchor);
+      if (!anchored) this.setSurfaceMode(false); // the anchored object lost its position: back to the globe
+      this.rig.minDist = MIN_ALT_KM;
+    } else {
+      anchored = this.follow && this.followFn ? this.followFn(this.anchor) : false;
+      if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget);
+      // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
+      this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
+    }
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
     const dist = this.rig.dist;
-    this.camera.near = Math.min(3000, Math.max(0.02, dist * 0.0015));
+    // near plane shrinks with the camera's height so the ground right below is not clipped, but never beyond the usual dist ratio
+    const camAlt = altitudeOf([this.camera.position.x, this.camera.position.y, this.camera.position.z]);
+    this.camera.near = Math.min(3000, Math.max(0.01, Math.min(dist * 0.0015, Math.max(camAlt, 0.5) * 0.3)));
     this.camera.far = dist + this.rig.target.length() + 6e6;
     this.camera.updateProjectionMatrix();
     this.stars.position.copy(this.camera.position);
@@ -619,6 +860,7 @@ export class SceneController {
     }
 
     this.renderer.render(this.scene, this.camera);
+    this.updatePathLabels();
   }
 
   private updateDyn(t: number): void {
@@ -668,5 +910,27 @@ export class SceneController {
       const rec = this.recs.get(id);
       if (rec) o.update(graph, rec, t, wall, this.fullOverlays.has(id));
     }
+    const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
+    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false);
+  }
+
+  /** Project the selected path's phase boundaries to the screen for the label layer. */
+  private updatePathLabels(): void {
+    const cb = this.cb.onPathLabels;
+    if (!cb) return;
+    const labels: PathLabel[] = [];
+    if (this.pathStatus.active && this.pathOverlay) {
+      this.earthGroup.updateMatrixWorld();
+      const w = this.container.clientWidth, h = this.container.clientHeight;
+      for (const l of this.pathOverlay.phaseLabels()) {
+        const p = this.tmp2.set(l.x, l.y, l.z); // not `tmp`: occluded() works in it
+        if (this.occluded(p)) continue;
+        p.project(this.camera);
+        if (p.z > 1 || p.z < -1 || Math.abs(p.x) > 1.05 || Math.abs(p.y) > 1.05) continue;
+        labels.push({ text: l.text, x: (p.x * 0.5 + 0.5) * w, y: (1 - (p.y * 0.5 + 0.5)) * h });
+      }
+    }
+    if (labels.length || this.hadPathLabels) cb(labels);
+    this.hadPathLabels = labels.length > 0;
   }
 }
