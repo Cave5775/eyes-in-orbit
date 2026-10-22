@@ -31,7 +31,11 @@ async function main(): Promise<void> {
   store.prune(30 * 86_400_000);
   const http = new Http(store, { offline: config.offline });
   const hub = new Hub();
-  const scheduler = new Scheduler({ hub, config, store, http }, CONNECTORS);
+  const off = new Set(config.disabledConnectors);
+  const unknown = [...off].filter((id) => !CONNECTORS.some((c) => c.id === id));
+  if (unknown.length) console.warn(`DISABLED_CONNECTORS: unknown connector id(s) ${unknown.join(', ')}; known: ${CONNECTORS.map((c) => c.id).join(', ')}`);
+  for (const id of off) Object.assign(hub.healthOf(id), { status: 'disabled', note: 'DISABLED_CONNECTORS' });
+  const scheduler = new Scheduler({ hub, config, store, http }, CONNECTORS.filter((c) => !off.has(c.id)));
 
   const app = Fastify({ logger: { level: 'warn' } });
   await app.register(cors, { origin: true });

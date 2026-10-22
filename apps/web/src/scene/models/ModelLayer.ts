@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { EntityRecord } from '@eio/core';
-import { basisToQuaternion, forwardBasis, lvlhBasis, rocketForward, sunlitFraction, toBody, type Basis } from '../../lib/attitude';
+import { sunInBody } from '../../lib/arrays';
+import { basisToQuaternion, forwardBasis, lvlhBasis, rocketForward, sunlitFraction, type Basis } from '../../lib/attitude';
 import type { V3 } from '../../lib/camera';
 import type { Visibility } from '../../lib/filters';
 import { modelLod, ringHiddenFor } from '../../lib/model-lod';
@@ -31,6 +32,8 @@ export interface ModelFrame {
   inScope(id: string): boolean;
   /** size of the entity's point sprite, CSS pixels */
   spritePx(id: string): number;
+  /** measured attitude of the entity relative to LVLH as a quaternion [w, x, y, z] (body to LVLH), when one applies */
+  attitude?(id: string): readonly number[] | undefined;
   /** joint angles (rad) for a model that has articulated parts, or undefined to leave them */
   joints?(id: string, def: ModelDef, t: number, sunBody: V3): Record<string, number> | undefined;
 }
@@ -183,15 +186,18 @@ export class ModelLayer {
     e.screenPx = lod.screenPx;
 
     const basis = this.attitude(e.def, st.r, st.v);
+    // measured attitude relative to LVLH (body to LVLH, [w, x, y, z]), when the caller has a verified one
+    const att = e.def.attitude === 'lvlh' ? f.attitude?.(e.id) : undefined;
     if (basis) {
       const [qx, qy, qz, qw] = basisToQuaternion(basis);
       e.holder.quaternion.set(qx, qy, qz, qw);
+      if (att) e.holder.quaternion.multiply(this.q.set(att[1], att[2], att[3], att[0]));
     }
     e.holder.position.copy(e.rel);
     const rl = Math.hypot(st.r[0], st.r[1], st.r[2]) || 1;
     const nadir: V3 = [-st.r[0] / rl, -st.r[1] / rl, -st.r[2] / rl];
     e.light = { sunlit: sunlitFraction(st.r, f.sunDir), nadir, day: Math.max(0, -(nadir[0] * f.sunDir[0] + nadir[1] * f.sunDir[1] + nadir[2] * f.sunDir[2])) };
-    const sunBody = basis ? toBody(basis, f.sunDir) : f.sunDir;
+    const sunBody = basis ? sunInBody(basis, f.sunDir, att) : f.sunDir;
     const u: ModelUpdate = { sunBody, joints: f.joints?.(e.id, e.def, f.t, sunBody) };
     e.inst.update(u);
     const dim = vis === 'dim';

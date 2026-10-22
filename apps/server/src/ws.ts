@@ -27,6 +27,7 @@ export async function registerStream(app: FastifyInstance, hub: Hub): Promise<vo
   hub.on('dsn', (snapshot) => broadcast({ type: 'dsn', snapshot }));
   hub.on('iss.fix', (fix) => broadcast({ type: 'iss.fix', fix }, 'iss'));
   hub.on('iss.telemetry', (points) => broadcast({ type: 'iss.telemetry', points }, 'iss'));
+  hub.on('iss.arrays', (arrays) => broadcast({ type: 'iss.arrays', arrays }, 'iss'));
 
   let healthTimer: NodeJS.Timeout | undefined;
   hub.on('health', () => {
@@ -78,6 +79,7 @@ export async function registerStream(app: FastifyInstance, hub: Hub): Promise<vo
           if (topic === 'iss') {
             if (hub.issFix) send(ws, { type: 'iss.fix', fix: hub.issFix });
             if (hub.telemetry.size) send(ws, { type: 'iss.telemetry', points: [...hub.telemetry.values()] });
+            if (hub.issArrays) send(ws, { type: 'iss.arrays', arrays: hub.issArrays });
           }
         } else if (msg.op === 'unsubscribe' && client.topics.delete(topic)) hub.unsubscribe(topic);
       }

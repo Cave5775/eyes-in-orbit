@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import {
   DEG, EARTH, fixedToGeodetic, geodeticToFixed, gmstRad, sunDirectionEci,
-  type EntityRecord, type IssFix, type Launch, type Omm,
+  type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, settleDistance, viewAnglesFor } from '../lib/camera';
-import { colorKeyOf, isSgp4, type ColorKey } from '../lib/entity';
+import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
 import { ELLIPSOID_K, makeOccluder, occlusionC2 } from '../lib/occlusion';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
@@ -20,6 +20,7 @@ import { PathOverlay, type PathStatus } from './PathOverlay';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
 import { ModelLayer, type ModelFrame } from './models/ModelLayer';
+import { IssArrayTracker, arraySources, issJoints, type ArraySources, type IssJoints } from '../lib/arrays';
 
 // Colours and sizes are authored in display space; skip three's linear workflow.
 THREE.ColorManagement.enabled = false;
@@ -69,6 +70,8 @@ export interface SceneStats {
   distanceScale: DistanceScale;
   /** ids of entities whose 3D model is drawn this frame (camera within the model's LOD distance) */
   models: string[];
+  /** ISS array pose in use while the ISS model is drawn: the source of each part and the joint angles (rad) */
+  arrays: { sources: ArraySources; joints: IssJoints | null } | null;
 }
 
 /** Where the surface-aligned camera is anchored. */
@@ -173,6 +176,10 @@ export class SceneController {
   /** 3D models of entities with `render.model`, drawn camera-relative while the camera is near them (scene/models/) */
   private models: ModelLayer;
   private modelFrame: ModelFrame;
+  /** ISS array telemetry (SARJ / attitude from the feed), smoothed between its 1 Hz samples */
+  private issTracker = new IssArrayTracker();
+  private issSources: ArraySources = { sarj: 'STATIC', bga: 'STATIC', attitude: false };
+  private issJointsNow: IssJoints | null = null;
   /** entity the camera follows, if any (a followed model may be approached closer than a plain point) */
   private followId: string | null = null;
   private selectedId: string | null = null;
@@ -386,6 +393,11 @@ export class SceneController {
 
   setIssFix(fix: IssFix | undefined): void {
     this.issFix = fix;
+  }
+
+  /** Live ISS array telemetry; the model's SARJ and attitude follow it while fresh, verified and at live time. */
+  setIssArrays(arrays: IssArrays | undefined): void {
+    this.issTracker.push(arrays, Date.now());
   }
 
   setSelected(id: string | null): void {
@@ -624,6 +636,7 @@ export class SceneController {
       scope: { mode: this.scopeMode, ...this.scopeCounts },
       distanceScale: this.distScale,
       models: this.models.activeIds,
+      arrays: this.models.activeIds.some((id) => this.models.defOf(id)?.key === 'iss') ? { sources: this.issSources, joints: this.issJointsNow } : null,
     };
   }
 
@@ -1064,6 +1077,13 @@ export class SceneController {
         const r = rec(id);
         return r ? POINT_SIZE[colorKeyOf(r)] : 8;
       },
+      attitude: (id) => (this.issSources.attitude && isIss(rec(id)) ? this.issTracker.arrays?.attitude : undefined),
+      joints: (id, def, _t, sunBody) => {
+        if (def.key !== 'iss' || !isIss(rec(id))) return undefined;
+        const joints = issJoints({ sunBody, sarjLive: this.issTracker.sarj(Date.now()), sources: this.issSources });
+        this.issJointsNow = joints;
+        return joints;
+      },
     };
   }
 
@@ -1076,6 +1096,8 @@ export class SceneController {
     f.viewportPx = Math.max(1, this.container.clientHeight);
     const s = sunDirectionEci(t);
     f.sunDir = [s[0], s[1], s[2]];
+    // a model is only drawn with a state, so the computed fallback is always available here
+    this.issSources = arraySources(this.issTracker.arrays, { liveClock: clock.snapshot().mode === 'live', nowMs: Date.now(), haveState: true });
     if (this.models.update(f)) this.applyAppearance();
   }
 

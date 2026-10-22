@@ -67,6 +67,29 @@ export interface TelemetryPoint {
   value: string;
   unit?: string;
   t: number;
+  /** true when the item id to meaning mapping was checked against live data (see README, ISS array telemetry); absent = not claimed */
+  verified?: boolean;
+}
+
+/** ISS solar array power channels: odd = starboard (S4: 1A 3A, S6: 1B 3B), even = port (P4: 2A 4A, P6: 2B 4B). */
+export type IssChannel = '1A' | '1B' | '2A' | '2B' | '3A' | '3B' | '4A' | '4B';
+export const ISS_CHANNELS: readonly IssChannel[] = ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'];
+
+/**
+ * Structured ISS array telemetry from the ISSLIVE Lightstreamer feed (`iss.arrays` message, `GET /api/iss`).
+ * Angles are the raw public values in degrees, 0 to 360, in the feed's own sign conventions (see `apps/web/src/lib/arrays.ts`
+ * for how the client turns them into joint rotations).
+ */
+export interface IssArrays {
+  /** time of the newest SARJ sample (ms since epoch); the SARJ items update about once a second */
+  t: number;
+  sarj: { port?: number; starboard?: number };
+  /** beta gimbal assembly angle per power channel */
+  bga: Partial<Record<IssChannel, number>>;
+  /** ISS attitude relative to LVLH as a unit quaternion [w, x, y, z] taking body axes to LVLH axes (USLAB000018-21) */
+  attitude?: [number, number, number, number];
+  /** which parts were checked against live data; unverified parts must not drive the 3D model */
+  verified: { sarj: boolean; bga: boolean; attitude: boolean };
 }
 
 export interface ConnectorHealth {
@@ -91,6 +114,7 @@ export type ServerMessage =
   | { type: 'dsn'; snapshot: DsnSnapshot }
   | { type: 'iss.fix'; fix: IssFix }
   | { type: 'iss.telemetry'; points: TelemetryPoint[] }
+  | { type: 'iss.arrays'; arrays: IssArrays }
   | { type: 'health'; connectors: ConnectorHealth[] };
 
 export type ClientMessage = { op: 'subscribe'; topics: string[] } | { op: 'unsubscribe'; topics: string[] };

@@ -1,5 +1,5 @@
 import type {
-  Article, AscentSeries, ConnectorHealth, DsnSnapshot, EntityRecord, IssFix, Launch, TelemetryPoint,
+  Article, AscentSeries, ConnectorHealth, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch, TelemetryPoint,
 } from '@eio/core';
 import type { SearchHit } from '../lib/filters';
 
@@ -10,7 +10,7 @@ export interface Api {
   launches(): Promise<Launch[]>;
   news(opts?: { entity?: string; q?: string; limit?: number }): Promise<Article[]>;
   dsn(): Promise<DsnSnapshot>;
-  iss(): Promise<{ fix?: IssFix; telemetry: TelemetryPoint[] }>;
+  iss(): Promise<{ fix?: IssFix; telemetry: TelemetryPoint[]; arrays?: IssArrays }>;
   health(): Promise<{ serverTime: number; entityCount: number; connectors: ConnectorHealth[] }>;
   /** Modeled and measured ascent series of a launch (`GET /api/telemetry/:launchId`); null when unknown. */
   ascent(launchId: string): Promise<AscentSeries | null>;

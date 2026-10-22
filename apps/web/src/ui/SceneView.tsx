@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fmtDist, fmtDuration } from '../lib/format';
 import { relatedFor } from '../lib/related';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
-import { runtime } from '../state/runtime';
+import { clock, runtime } from '../state/runtime';
 import { useStore } from '../state/store';
 
 const LEGEND: [string, string][] = [
@@ -110,7 +110,7 @@ export function SceneView() {
     });
     scene.current = ctl;
     runtime.onFitRequest = (ids) => ctl.fitEntities(ids);
-    if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime };
+    if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime, clock };
     const s0 = store.getState();
     ctl.setFilters(s0.filters);
     ctl.setEntities(s0.entities);
@@ -131,6 +131,7 @@ export function SceneView() {
       if (s.follow !== p.follow) ctl.setFollow(s.follow);
       if (s.focus !== p.focus && s.focus) ctl.focus(s.focus);
       if (s.iss.fix !== p.iss.fix) ctl.setIssFix(s.iss.fix);
+      if (s.iss.arrays !== p.iss.arrays) ctl.setIssArrays(s.iss.arrays);
     });
     const timer = setInterval(() => setStats(ctl.getStats()), 500);
     return () => {

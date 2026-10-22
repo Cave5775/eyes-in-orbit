@@ -125,7 +125,7 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
 
   app.get('/api/dsn', async () => hub.dsn);
 
-  app.get('/api/iss', async () => ({ fix: hub.issFix, telemetry: [...hub.telemetry.values()] }));
+  app.get('/api/iss', async () => ({ fix: hub.issFix, telemetry: [...hub.telemetry.values()], arrays: hub.issArrays }));
 
   app.get('/api/bodies', async () => defaultBodies.all());
 }

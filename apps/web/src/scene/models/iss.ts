@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ISS_CHANNELS } from '@eio/core';
 import { ModelKit, solarCellTexture } from './kit';
 import type { ModelDef, ModelInstance } from './types';
 
@@ -19,8 +20,6 @@ export const ISS_ARRAY_SITES = [
   { site: 'S6', side: 1, y: 48.6, channels: ['1B', '3B'] },
 ] as const;
 
-export type IssChannel = (typeof ISS_ARRAY_SITES)[number]['channels'][number];
-export const ISS_CHANNELS: readonly IssChannel[] = ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'];
 export const ISS_JOINTS: readonly string[] = ['sarj.port', 'sarj.stbd', ...ISS_CHANNELS.map((c) => `bga.${c}`)];
 
 const TRUSS_Z = -4.8;

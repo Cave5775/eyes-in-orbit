@@ -9,6 +9,7 @@ import { ensureInGraph, graph } from '../../state/runtime';
 import { useStore } from '../../state/store';
 import { useSimNow, useWallNow } from '../hooks';
 import { Field } from './Field';
+import { IssArraysSection } from './IssArraysSection';
 
 function confidenceLabel(c: number | undefined): { text: string; tone: string } | null {
   if (c === undefined) return null;
@@ -27,6 +28,8 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
   const link = code ? dsn?.links.find((l) => l.spacecraft.includes(code)) : undefined;
   const showIss = isIss(rec);
   const attrs = Object.entries(rec.attrs ?? {}).filter(([, v]) => v !== null && v !== '');
+  // the SARJ / BGA / attitude items are summarised in the ARRAYS section; the table keeps the rest of the raw feed
+  const tableRows = iss.telemetry.filter((p) => !/^(S000000[345]|[PS][46]00000[78]|USLAB0000(1[89]|2[01]))$/.test(p.id));
 
   return (
     <div>
@@ -64,10 +67,11 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
           ) : (
             <div className="empty">Waiting for the iss topic...</div>
           )}
-          {iss.telemetry.length > 0 && (
+          <IssArraysSection rec={rec} now={now} wall={wall} />
+          {tableRows.length > 0 && (
             <table className="tm-table">
               <tbody>
-                {iss.telemetry.map((p) => (
+                {tableRows.map((p) => (
                   <tr key={p.id}>
                     <td className="dim">{p.label}</td>
                     <td className="mono">{fmtTelemetryValue(p.value)}</td>

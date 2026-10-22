@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type {
-  Article, ClockSnapshot, ConnectorHealth, DsnSnapshot, EntityRecord, IssFix, Launch, TelemetryPoint,
+  Article, ClockSnapshot, ConnectorHealth, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch, TelemetryPoint,
 } from '@eio/core';
 import { NO_FILTERS, toggled, type Filters, type LaunchMode, type SearchHit } from '../lib/filters';
 import {
@@ -22,6 +22,8 @@ export interface FocusRequest {
 export interface IssState {
   fix?: IssFix;
   telemetry: TelemetryPoint[];
+  /** SARJ / BGA / attitude from the ISSLIVE feed (absent offline, in mock mode, or before the first sample) */
+  arrays?: IssArrays;
 }
 
 interface State {

@@ -87,6 +87,7 @@ function startReal(): void {
       case 'health': s.setHealth(m.connectors); break;
       case 'iss.fix': s.setIss({ fix: m.fix }); break;
       case 'iss.telemetry': s.setIss({ telemetry: m.points }); break;
+      case 'iss.arrays': s.setIss({ arrays: m.arrays }); break;
     }
   };
 

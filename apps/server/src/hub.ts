@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import {
-  EntityGraph, type Article, type ConnectorHealth, type DsnSnapshot, type EntityRecord, type IssFix, type Launch,
+  EntityGraph, type Article, type ConnectorHealth, type DsnSnapshot, type EntityRecord, type IssArrays, type IssFix, type Launch,
   type LiveAscent, type TelemetryPoint,
 } from '@eio/core';
 import type { Trajectory } from './trajectory';
@@ -9,7 +9,7 @@ export type NewEntity = Omit<EntityRecord, 'updatedAt'>;
 
 /**
  * Central in-memory state shared by connectors, the HTTP API and the WebSocket.
- * Events: `entities.changed` ({ids, at}), `launches`, `news`, `dsn`, `iss.fix`, `iss.telemetry`,
+ * Events: `entities.changed` ({ids, at}), `launches`, `news`, `dsn`, `iss.fix`, `iss.telemetry`, `iss.arrays`,
  * `health` and `topic` ({topic, count}).
  */
 export class Hub extends EventEmitter {
@@ -18,6 +18,8 @@ export class Hub extends EventEmitter {
   articles: Article[] = [];
   dsn: DsnSnapshot = { fetchedAt: 0, links: [] };
   issFix?: IssFix;
+  /** latest structured SARJ / BGA / attitude values from the ISSLIVE feed */
+  issArrays?: IssArrays;
   readonly telemetry = new Map<string, TelemetryPoint>();
   /** ascent trajectories loaded from data/trajectories */
   trajectories: Trajectory[] = [];
@@ -76,6 +78,11 @@ export class Hub extends EventEmitter {
   setIssFix(fix: IssFix): void {
     this.issFix = fix;
     this.emit('iss.fix', fix);
+  }
+
+  setArrays(arrays: IssArrays): void {
+    this.issArrays = arrays;
+    this.emit('iss.arrays', arrays);
   }
 
   setTelemetry(points: TelemetryPoint[]): void {
