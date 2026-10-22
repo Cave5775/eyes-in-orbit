@@ -181,7 +181,7 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Testing
 
-`npm test` runs Vitest (268 tests in 22 files, no network; includes the ascent model, the telemetry ingest and the chart helpers). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). The three.js scene itself is checked by hand in a browser. `npm run typecheck` checks all three packages.
+`npm test` runs Vitest (293 tests in 23 files, no network; includes the ascent model, the telemetry ingest and the chart helpers). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). The three.js scene itself is checked by hand in a browser. `npm run typecheck` checks all three packages.
 
 ## Project layout
 
