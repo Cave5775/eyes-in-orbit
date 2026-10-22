@@ -143,7 +143,7 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 | `docs/CONTRACT.md` | Server/web API contract |
 | `scripts/fetch-assets.mjs` | Earth texture download (`npm run assets`) |
 | `spaceflight_live_data_streams_reference.md` | Feed reference |
-| `usertest.md` | Owner's test notes |
+| `plans.md` | Owner's test notes and roadmap checklist |
 
 ## Layout
 
@@ -164,4 +164,4 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Known limitations / roadmap
 
-Implemented from `usertest.md`: the two UI/UX requests (stable value layout, resizable panels) and the launch filter (see the Launch filter feature). Still open from the owner's wanted features: better camera controls (surface alignment, altitude-based zoom, fit associated objects), realistic distance projection, and unrendering objects outside the focus object's scope. Performance was reported fine, including with `?mock=1`.
+Implemented from `plans.md`: the two UI/UX requests (stable value layout, resizable panels) and the launch filter (see the Launch filter feature). Still open from the owner's wanted features: better camera controls (surface alignment, altitude-based zoom, fit associated objects), realistic distance projection, and unrendering objects outside the focus object's scope. Performance was reported fine, including with `?mock=1`.
