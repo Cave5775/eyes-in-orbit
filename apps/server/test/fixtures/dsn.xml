@@ -1,0 +1,31 @@
+<dsn>
+	<station name="gdscc" friendlyName="Goldstone" timeUTC="1792691510000" timeZoneOffset="-25200000.0"/>
+	<dish name="DSS14" azimuthAngle="0" elevationAngle="90" windSpeed="" isMSPA="false" isArray="false" isDDOR="false" activity="Engineering Upgrades">
+		<target name="DSN" id="99" uplegRange="-1" downlegRange="-1" rtlt="-1"/>
+	</dish>
+	<dish name="DSS25" azimuthAngle="253" elevationAngle="45" windSpeed="27" isMSPA="false" isArray="false" isDDOR="false" activity="Spacecraft Telemetry, Tracking, and Command">
+		<upSignal active="true" signalType="data" dataRate="0" frequency="0" band="X" power="18" spacecraft="PSYC" spacecraftID="-255"/>
+		<downSignal active="true" signalType="data" dataRate="0" frequency="0" band="X" power="-150" spacecraft="PSYC" spacecraftID="-255"/>
+		<target name="PSYC" id="255" uplegRange="-1" downlegRange="-1" rtlt="-1"/>
+	</dish>
+	<station name="cdscc" friendlyName="Canberra" timeUTC="1792691510000" timeZoneOffset="39600000.0"/>
+	<dish name="DSS43" azimuthAngle="17" elevationAngle="88" windSpeed="0" isMSPA="false" isArray="false" isDDOR="false" activity="Spacecraft Telemetry, Tracking, and Command">
+		<upSignal active="true" signalType="data" dataRate="16" frequency="2.1E9" band="S" power="20.2" spacecraft="VGR2" spacecraftID="-32"/>
+		<downSignal active="true" signalType="data" dataRate="160" frequency="8.4E9" band="X" power="-157.5" spacecraft="VGR2" spacecraftID="-32"/>
+		<target name="VGR2" id="32" uplegRange="2.1086E10" downlegRange="2.1086E10" rtlt="140480.3"/>
+	</dish>
+	<station name="mdscc" friendlyName="Madrid" timeUTC="1792691510000" timeZoneOffset="7200000.0"/>
+	<dish name="DSS56" azimuthAngle="121" elevationAngle="25" windSpeed="5" isMSPA="false" isArray="false" isDDOR="false" activity="Spacecraft Telemetry, Tracking, and Command">
+		<upSignal active="false" signalType="none" dataRate="0" frequency="0" band="S" power="0" spacecraft="LRO" spacecraftID="-85"/>
+		<downSignal active="false" signalType="none" dataRate="0" frequency="0" band="K" power="-110" spacecraft="LRO" spacecraftID="-85"/>
+		<downSignal active="false" signalType="none" dataRate="0" frequency="0" band="S" power="-470" spacecraft="LRO" spacecraftID="-85"/>
+		<target name="LRO" id="85" uplegRange="382000" downlegRange="382000" rtlt="-1"/>
+	</dish>
+	<dish name="DSS63" azimuthAngle="112" elevationAngle="16" windSpeed="5" isMSPA="false" isArray="false" isDDOR="false" activity="Spacecraft Telemetry, Tracking, and Command">
+		<upSignal active="true" signalType="data" dataRate="2000" frequency="2.04E9" band="S" power="4.9" spacecraft="JWST" spacecraftID="-170"/>
+		<downSignal active="true" signalType="data" dataRate="28000000" frequency="2.25E9" band="S" power="-143.1" spacecraft="JWST" spacecraftID="-170"/>
+		<target name="JWST" id="170" uplegRange="1.5E6" downlegRange="1.5E6" rtlt="10.01"/>
+		<target name="DSN" id="99" uplegRange="-1" downlegRange="-1" rtlt="-1"/>
+	</dish>
+	<timestamp>1792691510000</timestamp>
+</dsn>

@@ -1,0 +1,59 @@
+import { join } from 'node:path';
+import compress from '@fastify/compress';
+import cors from '@fastify/cors';
+import Fastify from 'fastify';
+import { registerApi } from './api';
+import { loadConfig, loadDotEnv } from './config';
+import { Scheduler, type Connector } from './connector';
+import { celestrak } from './connectors/celestrak';
+import { demo } from './connectors/demo';
+import { dsn } from './connectors/dsn';
+import { flightclub } from './connectors/flightclub';
+import { horizons } from './connectors/horizons';
+import { issLive } from './connectors/iss-live';
+import { issRest } from './connectors/iss-rest';
+import { launchlibrary } from './connectors/launchlibrary';
+import { snapi } from './connectors/snapi';
+import { notam, satnogs, spacetrack, webcastOcr } from './connectors/stubs';
+import { Http } from './http';
+import { Hub } from './hub';
+import { Store } from './store';
+import { registerStream } from './ws';
+
+const CONNECTORS: Connector[] = [
+  demo, flightclub, celestrak, launchlibrary, snapi, dsn, horizons, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
+];
+
+async function main(): Promise<void> {
+  loadDotEnv();
+  const config = loadConfig();
+  const store = new Store(join(config.dataDir, 'cache.sqlite'));
+  store.prune(30 * 86_400_000);
+  const http = new Http(store, { offline: config.offline });
+  const hub = new Hub();
+  const scheduler = new Scheduler({ hub, config, store, http }, CONNECTORS);
+
+  const app = Fastify({ logger: { level: 'warn' } });
+  await app.register(cors, { origin: true });
+  await app.register(compress, { global: true, threshold: 1024 });
+  registerApi(app, hub, http);
+  await registerStream(app, hub);
+
+  await app.listen({ port: config.port, host: config.host });
+  console.log(`EyesInOrbit server on http://${config.host}:${config.port}${config.offline ? ' (OFFLINE)' : ''}`);
+  await scheduler.start();
+
+  const shutdown = async () => {
+    scheduler.stop();
+    await app.close();
+    store.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

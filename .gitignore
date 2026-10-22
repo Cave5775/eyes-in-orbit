@@ -1,0 +1,8 @@
+node_modules
+dist
+data/*.sqlite*
+data/trajectories/*.local.*
+.env
+apps/web/public/textures/*.jpg
+npmOutput.txt
+*.log

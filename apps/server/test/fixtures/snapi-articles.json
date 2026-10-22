@@ -1,0 +1,45 @@
+{
+  "count": 36596,
+  "next": "https://api.spaceflightnewsapi.net/v4/articles/?limit=2&offset=2&ordering=-published_at",
+  "previous": null,
+  "results": [
+    {
+      "id": 40530,
+      "title": "ESA Provides New Details on Failed Space Rider Drop Test",
+      "authors": [
+        {
+          "name": "European Spaceflight",
+          "socials": null
+        }
+      ],
+      "url": "https://europeanspaceflight.com/esa-provides-new-details-on-failed-space-rider-drop-test/",
+      "image_url": "https://europeanspaceflight.com/wp-content/uploads/2026/10/ESA-Provides-New-Details-on-Failed-Space-Rider-Drop-Test.webp",
+      "news_site": "European Spaceflight",
+      "summary": "The European Space Agency (ESA) has provided new details about the failed Space Rider drop test, confirming that the vehicle’s parafoil detached during deployment, sending the full-scale test model back to terra firma more rapidly than planned. Speaking at an ESA media briefing on 22 October, Géraldine Naja, the agency’s Director of Space Transportation, provided […]\nThe post ESA Provides New Details on Failed Space Rider Drop Test appeared first on European Spaceflight.",
+      "published_at": "2026-10-22T15:02:37Z",
+      "updated_at": "2026-10-22T15:10:14.268781Z",
+      "featured": false,
+      "launches": [],
+      "events": []
+    },
+    {
+      "id": 40531,
+      "title": "350th ESA Council: Media information session",
+      "authors": [
+        {
+          "name": "ESA",
+          "socials": null
+        }
+      ],
+      "url": "https://www.esa.int/ESA_Multimedia/Videos/2026/10/350th_ESA_Council_Media_information_session",
+      "image_url": "https://www.esa.int/var/esa/storage/images/esa_multimedia/videos/2026/10/350th_esa_council_media_information_session/27588859-3-eng-GB/350th_ESA_Council_Media_information_session_card_full.jpg",
+      "news_site": "ESA",
+      "summary": "Watch the replay of the media information session where ESA Director General Josef Aschbacher and ESA Council Chair at delegate level Juan Carlos Cortés outline the key decisions and main outcomes of the 350th Council meeting held at ESA Headquarters in Paris on 21—22 October 2026.",
+      "published_at": "2026-10-22T14:00:00Z",
+      "updated_at": "2026-10-22T17:30:24.579085Z",
+      "featured": false,
+      "launches": [],
+      "events": []
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "example-leo-ascent",
+  "description": "Illustrative Falcon-9-like LEO ascent, NOT real Flight Club output. Copy this file, set match to a real LL2 launch id (or a name fragment) and replace the rows with an export from flightclub.io or OCR'd webcast telemetry.",
+  "source": "hand-made example",
+  "azimuthDeg": 90,
+  "match": { "launchId": "00000000-0000-0000-0000-example0000" },
+  "rows": [
+    { "tSec": 0,   "altKm": 0,    "speedKmS": 0.0 },
+    { "tSec": 15,  "altKm": 0.5,  "speedKmS": 0.06 },
+    { "tSec": 30,  "altKm": 2.4,  "speedKmS": 0.17 },
+    { "tSec": 60,  "altKm": 9.0,  "speedKmS": 0.45 },
+    { "tSec": 90,  "altKm": 21.0, "speedKmS": 0.95 },
+    { "tSec": 120, "altKm": 42.0, "speedKmS": 1.6 },
+    { "tSec": 150, "altKm": 68.0, "speedKmS": 2.4 },
+    { "tSec": 162, "altKm": 76.0, "speedKmS": 2.75 },
+    { "tSec": 200, "altKm": 105.0, "speedKmS": 3.3 },
+    { "tSec": 250, "altKm": 125.0, "speedKmS": 4.0 },
+    { "tSec": 300, "altKm": 140.0, "speedKmS": 4.8 },
+    { "tSec": 360, "altKm": 152.0, "speedKmS": 5.8 },
+    { "tSec": 420, "altKm": 160.0, "speedKmS": 6.7 },
+    { "tSec": 480, "altKm": 165.0, "speedKmS": 7.3 },
+    { "tSec": 540, "altKm": 168.0, "speedKmS": 7.7 }
+  ]
+}

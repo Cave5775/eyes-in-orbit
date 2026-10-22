@@ -1,0 +1,179 @@
+import { describe, expect, it } from 'vitest';
+import {
+  Clock, CompositeProvider, EntityGraph, EARTH, GeodeticProvider, KeplerianProvider, RelativeProvider,
+  SampledProvider, Sgp4Provider, DEG, convert, deriveMissionState, formatCountdown, fixedToGeodetic,
+  geodeticToFixed, gmstRad, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS,
+  type Omm,
+} from '../src';
+
+const ISS_OMM: Omm = {
+  OBJECT_NAME: 'ISS (ZARYA)', OBJECT_ID: '1998-067A', EPOCH: '2024-03-01T12:00:00.000000',
+  MEAN_MOTION: 15.49, ECCENTRICITY: 0.0005, INCLINATION: 51.64, RA_OF_ASC_NODE: 120.0,
+  ARG_OF_PERICENTER: 90.0, MEAN_ANOMALY: 270.0, EPHEMERIS_TYPE: 0, CLASSIFICATION_TYPE: 'U',
+  NORAD_CAT_ID: 25544, ELEMENT_SET_NO: 999, REV_AT_EPOCH: 44000, BSTAR: 0.0002, MEAN_MOTION_DOT: 0.0001,
+  MEAN_MOTION_DDOT: 0,
+};
+const T0 = Date.parse('2024-03-01T12:00:00Z');
+
+describe('frames', () => {
+  it('GMST at J2000 is 280.4606 deg', () => {
+    expect(gmstRad(Date.UTC(2000, 0, 1, 12)) / DEG).toBeCloseTo(280.46061837, 4);
+  });
+
+  it('geodetic <-> fixed round trip (Earth)', () => {
+    for (const [lat, lon, alt] of [[28.57, -80.65, 0.01], [-45, 170, 400], [89.5, 10, 35786]]) {
+      const r = geodeticToFixed({ lat: lat * DEG, lon: lon * DEG, alt }, EARTH);
+      const g = fixedToGeodetic(r, EARTH);
+      expect(g.lat / DEG).toBeCloseTo(lat, 6);
+      expect(g.lon / DEG).toBeCloseTo(lon, 6);
+      expect(g.alt).toBeCloseTo(alt, 5);
+    }
+  });
+
+  it('inertial <-> fixed round trip preserves position and velocity', () => {
+    const s = { frame: 'EARTH:inertial' as const, r: [7000, 100, 2000] as [number, number, number], v: [1, 7, 0.5] as [number, number, number] };
+    const back = convert(convert(s, 'EARTH:fixed', T0), 'EARTH:inertial', T0);
+    s.r.forEach((x, i) => expect(back.r[i]).toBeCloseTo(x, 6));
+    s.v.forEach((x, i) => expect(back.v![i]).toBeCloseTo(x, 6));
+  });
+
+  it('a point fixed on the surface moves inertially at the surface rotation speed', () => {
+    const fixed = { frame: 'EARTH:fixed' as const, r: [6378.137, 0, 0] as [number, number, number], v: [0, 0, 0] as [number, number, number] };
+    const inertial = convert(fixed, 'EARTH:inertial', T0);
+    expect(norm(inertial.v!)).toBeCloseTo(0.4651, 3);
+  });
+
+  it('converts Moon-inertial states into Earth-inertial using the Moon orbit', () => {
+    const s = { frame: 'MOON:inertial' as const, r: [0, 0, 0] as [number, number, number] };
+    const e = convert(s, 'EARTH:inertial', T0);
+    expect(norm(e.r)).toBeGreaterThan(350_000);
+    expect(norm(e.r)).toBeLessThan(410_000);
+  });
+
+  it('sun direction is a unit vector', () => {
+    expect(norm(sunDirectionEci(T0))).toBeCloseTo(1, 6);
+  });
+});
+
+describe('providers', () => {
+  it('SGP4 yields a plausible ISS orbit', () => {
+    const p = new Sgp4Provider(ISS_OMM);
+    const s = p.stateAt(T0 + 3600_000)!;
+    const g = stateToGeodetic(s, T0 + 3600_000, 'EARTH');
+    expect(g.alt).toBeGreaterThan(350);
+    expect(g.alt).toBeLessThan(470);
+    expect(Math.abs(g.lat / DEG)).toBeLessThanOrEqual(51.7);
+    expect(norm(s.v!)).toBeGreaterThan(7.5);
+    expect(norm(s.v!)).toBeLessThan(7.8);
+    expect(s.confidence).toBe(1);
+  });
+
+  it('SGP4 confidence drops for stale elements', () => {
+    const p = new Sgp4Provider(ISS_OMM);
+    expect(p.stateAt(T0 + 40 * 86400_000)!.confidence).toBeLessThan(1);
+  });
+
+  it('sampled provider interpolates linearly and returns null outside range', () => {
+    const p = new SampledProvider('EARTH:inertial', [[0, 0, 0, 0], [1000, 10, 20, 30]]);
+    expect(p.stateAt(500)!.r).toEqual([5, 10, 15]);
+    expect(p.stateAt(-1)).toBeNull();
+    expect(p.stateAt(1001)).toBeNull();
+  });
+
+  it('sampled provider hermite reproduces a quadratic path', () => {
+    // x(t)=t^2 (t in s): v=2t
+    const samples = [0, 1, 2, 3].map((s) => [s * 1000, s * s, 0, 0, 2 * s, 0, 0]);
+    const p = new SampledProvider('EARTH:inertial', samples);
+    const st = p.stateAt(1500)!;
+    expect(st.r[0]).toBeCloseTo(2.25, 9);
+    expect(st.v![0]).toBeCloseTo(3, 9);
+  });
+
+  it('keplerian circular orbit keeps radius and speed', () => {
+    const a = 7000;
+    const p = new KeplerianProvider('EARTH', { a, e: 0, i: 0.5, raan: 1, argp: 0, m0: 0, epochMs: T0 });
+    const s = p.stateAt(T0 + 1234_000)!;
+    expect(norm(s.r)).toBeCloseTo(a, 6);
+    expect(norm(s.v!)).toBeCloseTo(Math.sqrt(EARTH.gm / a), 6);
+  });
+
+  it('geodetic provider is stationary in the fixed frame', () => {
+    const s = new GeodeticProvider('MARS', -4.5, 137.4, -4.5).stateAt()!;
+    expect(s.frame).toBe('MARS:fixed');
+    expect(norm(s.r)).toBeGreaterThan(3380);
+  });
+
+  it('specs round-trip through providerFromSpec', () => {
+    const p = providerFromSpec(new Sgp4Provider(ISS_OMM).toSpec());
+    expect(p.stateAt(T0)).not.toBeNull();
+  });
+
+  it('relative ENU provider offsets upward from a surface parent', () => {
+    const g = new EntityGraph();
+    g.upsert({
+      id: 'pad', name: 'pad', kind: 'pad', bodyId: 'EARTH', aliases: {}, updatedAt: 0,
+      provider: { type: 'geodetic', bodyId: 'EARTH', latDeg: 28.5, lonDeg: -80.6, altKm: 0 },
+    });
+    g.upsert({
+      id: 'drone', name: 'drone', kind: 'drone', bodyId: 'EARTH', aliases: {}, updatedAt: 0, parentId: 'pad',
+      provider: { type: 'relative', parentId: 'pad', mode: 'enu', offsetKm: [0, 0, 0.1] },
+    });
+    const gd = stateToGeodetic(g.stateOf('drone', T0)!, T0, 'EARTH');
+    expect(gd.alt).toBeCloseTo(0.1, 5);
+    expect(gd.lat / DEG).toBeCloseTo(28.5, 3);
+  });
+
+  it('composite provider hands off between phases (booster: ascent -> landing burn -> landed)', () => {
+    const pad = new GeodeticProvider('EARTH', 28.5, -80.6, 0).stateAt().r;
+    const c = new CompositeProvider([
+      { fromMs: 0, toMs: 100_000, phase: 'ascent', spec: { type: 'sampled', frame: 'EARTH:fixed', samples: [[0, ...pad], [100_000, pad[0] + 70, pad[1], pad[2] + 70]] } },
+      { fromMs: 100_001, toMs: 400_000, phase: 'landing', spec: { type: 'sampled', frame: 'EARTH:fixed', samples: [[100_001, pad[0] + 70, pad[1], pad[2] + 70], [400_000, ...pad]] } },
+      { fromMs: 400_001, toMs: 9e12, phase: 'landed', spec: { type: 'geodetic', bodyId: 'EARTH', latDeg: 28.5, lonDeg: -80.6, altKm: 0 } },
+    ]);
+    expect(c.segmentAt(50_000)!.phase).toBe('ascent');
+    expect(c.segmentAt(200_000)!.phase).toBe('landing');
+    expect(c.segmentAt(1e6)!.phase).toBe('landed');
+    expect(c.stateAt(50_000)).not.toBeNull();
+    expect(c.stateAt(-5)).toBeNull();
+  });
+});
+
+describe('mission FSM', () => {
+  const net = Date.parse('2026-01-01T00:00:00Z');
+  const at = (statusId: number, offsetSec: number) => deriveMissionState({ statusId, netMs: net, nowMs: net + offsetSec * 1000 });
+
+  it('walks SCHEDULED -> COUNTDOWN -> ASCENT -> INSERTION -> ON_ORBIT', () => {
+    expect(at(LL2_STATUS.GO, -86400).phase).toBe('SCHEDULED');
+    expect(at(LL2_STATUS.GO, -600).phase).toBe('COUNTDOWN');
+    expect(at(LL2_STATUS.IN_FLIGHT, 120).phase).toBe('ACTIVE_ASCENT');
+    expect(at(LL2_STATUS.IN_FLIGHT, 700).phase).toBe('ORBIT_INSERTION');
+    expect(at(LL2_STATUS.IN_FLIGHT, 5000).phase).toBe('ON_ORBIT');
+    expect(at(LL2_STATUS.SUCCESS, 9000).phase).toBe('ON_ORBIT');
+  });
+
+  it('reports holds and failures', () => {
+    expect(at(LL2_STATUS.HOLD, -300)).toMatchObject({ phase: 'COUNTDOWN', hold: true });
+    expect(at(LL2_STATUS.FAILURE, 60).phase).toBe('FAILED');
+  });
+
+  it('formats countdowns', () => {
+    expect(formatCountdown(3_723_000)).toBe('T-01:02:03');
+    expect(formatCountdown(-10_000)).toBe('T+00:00:10');
+  });
+});
+
+describe('clock', () => {
+  it('runs live, pauses, and scrubs at rate', () => {
+    let wall = 1_000_000;
+    const c = new Clock(() => wall);
+    expect(c.now()).toBe(wall);
+    c.seek(5_000, 10);
+    wall += 1000;
+    expect(c.now()).toBe(15_000);
+    c.pause();
+    wall += 5000;
+    expect(c.now()).toBe(15_000);
+    c.goLive();
+    expect(c.now()).toBe(wall);
+  });
+});

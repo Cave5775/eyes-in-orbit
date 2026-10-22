@@ -1,0 +1,127 @@
+{
+  "id": "f6af629d-39b5-4f86-bc0c-f8776444a858",
+  "url": "https://ll.thespacedevs.com/2.2.0/launch/f6af629d-39b5-4f86-bc0c-f8776444a858/",
+  "slug": "falcon-9-block-5-starlink-group-15-15",
+  "name": "Falcon 9 Block 5 | Starlink Group 15-15",
+  "status": {
+    "id": 1,
+    "name": "Go for Launch",
+    "abbrev": "Go",
+    "description": "Current T-0 confirmed by official or reliable sources."
+  },
+  "last_updated": "2026-10-22T16:49:40Z",
+  "net": "2026-10-22T22:51:18Z",
+  "net_precision": {
+    "id": 0,
+    "name": "Second",
+    "abbrev": "SEC",
+    "description": "The T-0 is accurate to the second."
+  },
+  "window_end": "2026-10-23T01:45:00Z",
+  "window_start": "2026-10-22T21:45:00Z",
+  "probability": null,
+  "launch_service_provider": {
+    "id": 121,
+    "name": "SpaceX",
+    "type": "Commercial",
+    "country_code": "USA"
+  },
+  "rocket": {
+    "id": 9271,
+    "configuration": {
+      "id": 164,
+      "name": "Falcon 9",
+      "family": "Falcon",
+      "full_name": "Falcon 9 Block 5",
+      "variant": "Block 5"
+    }
+  },
+  "mission": {
+    "id": 7870,
+    "name": "Starlink Group 15-15",
+    "description": "A batch of 27 satellites for the Starlink mega-constellation - SpaceX's project for space-based Internet communication system.",
+    "type": "Communications",
+    "orbit": {
+      "id": 8,
+      "name": "Low Earth Orbit",
+      "abbrev": "LEO"
+    }
+  },
+  "pad": {
+    "id": 16,
+    "name": "Space Launch Complex 4E",
+    "latitude": "34.632",
+    "longitude": "-120.611",
+    "location": {
+      "id": 11,
+      "name": "Vandenberg SFB, CA, USA",
+      "country_code": "USA"
+    }
+  },
+  "infoURLs": [],
+  "vidURLs": [
+    {
+      "priority": 8,
+      "source": "youtube.com",
+      "publisher": "SPACE AFFAIRS",
+      "title": "GO! - SpaceX - Falcon 9 - Starlink 15-15 - SLC-4E - Vandenberg SFB, CA - Space Affairs Live",
+      "description": "Launch Date: October 22, 2026 (PDT)\nLaunch Time:  3:51 p.m. PDT, 2251 UTC (October 23, 00:51 CEST)\nLaunch Window: 6:45 p",
+      "feature_image": "https://i.ytimg.com/vi/k-TFfeJD8T4/maxresdefault.jpg?v=6acf2c6f",
+      "url": "https://www.youtube.com/watch?v=k-TFfeJD8T4",
+      "type": {
+        "id": 4,
+        "name": "Unofficial Re-stream"
+      },
+      "language": {
+        "id": 1,
+        "name": "English",
+        "code": "en"
+      },
+      "start_time": "2026-10-22T22:38:00Z",
+      "end_time": null
+    },
+    {
+      "priority": 9,
+      "source": "youtube.com",
+      "publisher": "Spaceflight Now",
+      "title": "SpaceX Falcon 9 rocket launches from California with 27 Starlink satellites",
+      "description": "Watch live coverage as SpaceX launches a Falcon 9 rocket from California with 27 satellites for the company's Starlink s",
+      "feature_image": "https://i.ytimg.com/vi/d4zn2Tth8O0/maxresdefault.jpg?v=6ad78575",
+      "url": "https://www.youtube.com/watch?v=d4zn2Tth8O0",
+      "type": {
+        "id": 3,
+        "name": "Unofficial Webcast"
+      },
+      "language": {
+        "id": 1,
+        "name": "English",
+        "code": "en"
+      },
+      "start_time": "2026-10-22T22:21:00Z",
+      "end_time": null
+    },
+    {
+      "priority": 10,
+      "source": "x.com",
+      "publisher": "SpaceX",
+      "title": "Starlink Mission",
+      "description": "Livestream on X",
+      "feature_image": "https://pbs.twimg.com/media/HUcCPBUbkAApWog.jpg",
+      "url": "https://x.com/i/broadcasts/1YGNrbnzdqLGw",
+      "type": {
+        "id": 1,
+        "name": "Official Webcast"
+      },
+      "language": {
+        "id": 1,
+        "name": "English",
+        "code": "en"
+      },
+      "start_time": "2026-10-22T22:41:00Z",
+      "end_time": "2026-10-23T22:41:00Z"
+    }
+  ],
+  "webcast_live": false,
+  "image": "https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/falcon2520925_image_20221009234147.png",
+  "vid_urls": []
+}

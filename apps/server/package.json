@@ -1,0 +1,23 @@
+{
+  "name": "@eio/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@eio/core": "*",
+    "@fastify/compress": "^9.2.2",
+    "@fastify/cors": "^10.0.0",
+    "@fastify/websocket": "^11.0.0",
+    "fast-xml-parser": "^5.11.2",
+    "fastify": "^5.0.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2"
+  }
+}
