@@ -41,6 +41,16 @@ export function earthOccludes(origin: V3, rel: V3, marginKm = OCCLUSION_MARGIN_K
 }
 
 /**
+ * How far the middle of a straight chord of `chordKm` between two points on a sphere of radius `radiusKm` sinks below the
+ * surface. A depth-tested line drawn along the ground between widely spaced points (a ground track, the footprint circle)
+ * dips under the Earth mesh by this much and shows as dashes unless its vertices are lifted by at least it.
+ */
+export function chordSagKm(chordKm: number, radiusKm: number = EARTH.radiusKm): number {
+  const h = Math.min(chordKm / 2, radiusKm);
+  return radiusKm - Math.sqrt(radiusKm * radiusKm - h * h);
+}
+
+/**
  * `earthOccludes` for many points from one camera: the camera terms are computed once and no arrays are allocated per
  * point (the scope pass tests every catalogue object a few times a second).
  */

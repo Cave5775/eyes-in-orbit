@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { EARTH, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector } from '@eio/core';
 import { SHELL_THRESHOLD_KM } from '../lib/deepspace';
+import { chordSagKm } from '../lib/occlusion';
 import { orbitPeriodSec } from '../lib/orbit';
 import { RelPositions, type RenderFrame } from './relative';
 
@@ -127,7 +128,9 @@ export class EntityOverlay {
     const a = n1 < 1e-6 ? ([1, 0, 0] as [number, number, number]) : ([e1[0] / n1, e1[1] / n1, e1[2] / n1] as [number, number, number]);
     const b = cross(u, a);
     const pos = this.footprint.pos;
-    const R = RE + SURFACE_LIFT_KM;
+    // lifted by the chord sag as well: the circle of a high satellite's footprint is a 96-gon with chords of hundreds of km
+    const chordKm = 2 * RE * Math.sin(lam) * Math.sin(Math.PI / FOOTPRINT_POINTS);
+    const R = RE + SURFACE_LIFT_KM + chordSagKm(chordKm);
     for (let i = 0; i < FOOTPRINT_POINTS; i++) {
       const th = (i / FOOTPRINT_POINTS) * Math.PI * 2;
       const c = Math.cos(lam), sl = Math.sin(lam), ct = Math.cos(th), st = Math.sin(th);
@@ -169,14 +172,27 @@ export class EntityOverlay {
     const span = Math.min(periodSec, 3 * 86400) * 1000;
     const t0 = t - 0.25 * span, t1 = t + 1.0 * span;
     const pos = this.track.pos, col = this.track.color!;
-    let n = 0;
+    // pass 1: ground points; pass 2: lift each by the sag of the chords next to it, so the straight segments between
+    // widely spaced points (hundreds of km) stay above the Earth mesh instead of dipping under it as dashes
+    const ground: { p: number[]; lat: number; lon: number; ts: number }[] = [];
     for (let i = 0; i < TRACK_POINTS; i++) {
       const ts = t0 + (i / (TRACK_POINTS - 1)) * (t1 - t0);
       const s = graph.stateIn(rec.id, ts, 'EARTH:fixed');
       if (!s) continue;
       const g = fixedToGeodetic(s.r, EARTH);
-      const p = geodeticToFixed({ lat: g.lat, lon: g.lon, alt: SURFACE_LIFT_KM }, EARTH);
-      const k = ts < t ? 0.3 : 1 - 0.55 * ((ts - t) / (t1 - t));
+      ground.push({ p: geodeticToFixed({ lat: g.lat, lon: g.lon, alt: 0 }, EARTH), lat: g.lat, lon: g.lon, ts });
+    }
+    const chord = (a: number, b: number) => {
+      if (a < 0 || b >= ground.length) return 0;
+      const p = ground[a].p, q = ground[b].p;
+      return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+    };
+    let n = 0;
+    for (let i = 0; i < ground.length; i++) {
+      const g = ground[i];
+      const lift = SURFACE_LIFT_KM + Math.max(chordSagKm(chord(i - 1, i)), chordSagKm(chord(i, i + 1)));
+      const p = geodeticToFixed({ lat: g.lat, lon: g.lon, alt: lift }, EARTH);
+      const k = g.ts < t ? 0.3 : 1 - 0.55 * ((g.ts - t) / (t1 - t));
       pos.setXYZ(n, p[0], p[1], p[2]);
       col.setXYZ(n++, this.color.r * k, this.color.g * k, this.color.b * k);
     }

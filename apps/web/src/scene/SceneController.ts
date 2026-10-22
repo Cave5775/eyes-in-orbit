@@ -632,10 +632,10 @@ export class SceneController {
   private buildGraticule(): THREE.LineSegments {
     const pts: number[] = [];
     const seg = (lat0: number, lon0: number, lat1: number, lon1: number) => {
-      for (const [la, lo] of [[lat0, lon0], [lat1, lon1]]) pts.push(...geodeticToFixed({ lat: la * DEG, lon: lo * DEG, alt: 0.3 }, EARTH));
+      for (const [la, lo] of [[lat0, lon0], [lat1, lon1]]) pts.push(...geodeticToFixed({ lat: la * DEG, lon: lo * DEG, alt: 0.45 }, EARTH));
     };
-    for (let lat = -60; lat <= 60; lat += 30) for (let lon = -180; lon < 180; lon += 6) seg(lat, lon, lat, lon + 6);
-    for (let lon = -180; lon < 180; lon += 30) for (let lat = -90; lat < 90; lat += 6) seg(lat, lon, lat + 6, lon);
+    for (let lat = -60; lat <= 60; lat += 30) for (let lon = -180; lon < 180; lon += 1) seg(lat, lon, lat, lon + 1);
+    for (let lon = -180; lon < 180; lon += 30) for (let lat = -90; lat < 90; lat += 1) seg(lat, lon, lat + 1, lon);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     const lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x9fc6e8, transparent: true, opacity: 0.1, depthWrite: false }));

@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { EARTH, geodeticToFixed } from '@eio/core';
-import { ELLIPSOID_K, earthOccludes, horizonDistanceKm, makeOccluder, occlusionC2 } from '../src/lib/occlusion';
+import { ELLIPSOID_K, chordSagKm, earthOccludes, horizonDistanceKm, makeOccluder, occlusionC2 } from '../src/lib/occlusion';
 import type { V3 } from '../src/lib/camera';
 
 const RE = EARTH.radiusKm;
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
+describe('chordSagKm', () => {
+  it('matches the closed form and grows with the square of the chord', () => {
+    expect(chordSagKm(0)).toBe(0);
+    expect(chordSagKm(700)).toBeCloseTo(9.6, 1); // a 700 km ground-track segment sinks ~10 km below the surface
+    expect(chordSagKm(78)).toBeCloseTo(0.12, 2); // one facet of the 512-segment Earth mesh
+    expect(chordSagKm(1400) / chordSagKm(700)).toBeGreaterThan(3.9);
+  });
+});
 
 describe('earthOccludes', () => {
   it('hides a point on the far side of the Earth and shows one in front', () => {
