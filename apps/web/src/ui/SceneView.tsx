@@ -36,6 +36,7 @@ export function SceneView() {
   const [surface, setSurface] = useState(false);
   const [help, setHelp] = useState(false);
   const [scopeAll, setScopeAll] = useState(false);
+  const [trueScale, setTrueScale] = useState(false);
   const selectedId = useStore((s) => s.selectedId);
   const follow = useStore((s) => s.follow);
   const resetView = useStore((s) => s.resetView);
@@ -53,6 +54,12 @@ export function SceneView() {
     scene.current?.fitVisible();
   }, []);
   const toggleSurface = useCallback(() => scene.current?.toggleSurface(), []);
+  const toggleScale = useCallback(() => {
+    setTrueScale((v) => {
+      scene.current?.setDistanceScale(v ? 'compressed' : 'true');
+      return !v;
+    });
+  }, []);
   const toggleScope = useCallback(() => {
     setScopeAll((v) => {
       scene.current?.setScopeMode(v ? 'auto' : 'all');
@@ -208,6 +215,14 @@ export function SceneView() {
             {(stats.shellSelected || path?.compressed) && (
               <span className="warn">DISTANCE NOT TO SCALE: {stats.shellSelected ? (path?.compressed ? 'SELECTION AND PATH' : 'SELECTION') : 'PATH'} ON COMPRESSED SHELL</span>
             )}
+            <button
+              className={trueScale ? 'hud-toggle on' : 'hud-toggle'}
+              onClick={toggleScale}
+              aria-pressed={trueScale}
+              title={trueScale ? 'Probes are drawn at their real distance from Earth (up to ~2.5e10 km). Click to go back to the compressed deep-space shell.' : 'Objects beyond 2,000,000 km are drawn on a log-compressed shell. Click to draw probes at their real distance (true scale).'}
+            >
+              DISTANCE: {trueScale ? 'TRUE SCALE' : 'COMPRESSED'}
+            </button>
           </>
         )}
       </div>

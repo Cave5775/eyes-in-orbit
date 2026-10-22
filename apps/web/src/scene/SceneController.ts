@@ -3,10 +3,11 @@ import {
   DEG, EARTH, fixedToGeodetic, geodeticToFixed, gmstRad, sunDirectionEci,
   type EntityRecord, type IssFix, type Launch, type Omm,
 } from '@eio/core';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistance, groundPoint, viewAnglesFor } from '../lib/camera';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, settleDistance, viewAnglesFor } from '../lib/camera';
 import { colorKeyOf, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
 import { ELLIPSOID_K, makeOccluder, occlusionC2 } from '../lib/occlusion';
+import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import type { FocusRequest } from '../state/store';
@@ -64,6 +65,7 @@ export interface SceneStats {
   path: { pastMs: number; futureMs: number; compressed: boolean } | null;
   /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
   scope: { mode: ScopeMode; rendered: number; total: number };
+  distanceScale: DistanceScale;
 }
 
 /** Where the surface-aligned camera is anchored. */
@@ -102,7 +104,7 @@ function makePointSet(n: number, material: THREE.Material, world?: Float64Array,
 /** Distance (km) and angles at which a fly-to settles for a target at world position `p`. */
 function viewFor(p: THREE.Vector3): { dist: number; az: number; el: number } {
   const r = p.length();
-  const dist = r < 20000 ? 3200 : r < 2e6 ? r * 0.6 : r * 0.45;
+  const dist = settleDistance(r);
   const el = Math.max(-1.2, Math.min(1.2, Math.asin(r > 0 ? p.z / r : 0) + 0.3));
   return { dist, az: Math.atan2(p.y, p.x), el };
 }
@@ -151,6 +153,8 @@ export class SceneController {
   private groundLock: [number, number, number] | null = null;
   private launches: Launch[] = [];
   private filters: Filters = NO_FILTERS;
+  /** how objects beyond the deep-space threshold are placed: log-compressed shell (default) or at their real distance */
+  private distScale: DistanceScale = 'compressed';
   // scope policy (see lib/scope.ts)
   private scopeMode: ScopeMode = 'auto';
   /** the selection's related objects (parent, children, pad, linked probes ...): never scoped out */
@@ -308,6 +312,32 @@ export class SceneController {
   setFilters(f: Filters): void {
     this.filters = f;
     this.applyAppearance();
+  }
+
+  /**
+   * `compressed` (default): objects beyond 2,000,000 km sit on a log-compressed shell. `true`: probes are drawn at their
+   * real geocentric positions (up to ~2.5e10 km), their paths at true scale too, and the camera may zoom out to 1e11 km.
+   * Markers keep their screen size; the floating origin and the logarithmic depth buffer carry the range.
+   */
+  setDistanceScale(scale: DistanceScale): void {
+    if (scale === this.distScale) return;
+    this.distScale = scale;
+    this.rig.maxDist = maxDistKm(scale);
+    this.scopeDirty = true;
+    // whatever the camera was framing out there has moved: follow it with a fresh view, or fall back to the Earth
+    if (this.follow && this.followFn?.(this.anchor, clock.now())) {
+      if (this.anchor.length() > SHELL_THRESHOLD_KM * 0.5) this.rig.flyTo(viewFor(this.anchor));
+    } else if (!this.follow && this.freeTarget.length() > SHELL_THRESHOLD_KM * 0.5) {
+      this.freeTarget.set(0, 0, 0);
+      this.groundLock = null;
+      this.rig.pan.set(0, 0, 0);
+      this.rig.flyTo({ dist: 24000, az: this.rig.az, el: this.rig.el * 0.6 });
+    }
+    this.rig.dist = Math.min(this.rig.dist, this.rig.maxDist);
+  }
+
+  get distanceScale(): DistanceScale {
+    return this.distScale;
   }
 
   /** Scope policy: `auto` draws only what is relevant to the camera focus, `all` draws everything the filters allow. */
@@ -492,7 +522,7 @@ export class SceneController {
     this.tmp.set(c[0], c[1], c[2]);
     // a single point (nothing to fit) gets the same view as selecting it, not an absurdly close one
     const view = mayBeSinglePoint && r < 0.5 ? viewFor(this.tmp) : null;
-    const dist = view?.dist ?? Math.min(3e7, Math.max(MIN_TARGET_DIST_KM, fitDistance(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN)));
+    const dist = view?.dist ?? fitDistanceClamped(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN, MIN_TARGET_DIST_KM, this.distScale);
     const look = view ?? fitAngles(c, radius);
     this.follow = false;
     this.freeTarget.set(c[0], c[1], c[2]);
@@ -575,6 +605,7 @@ export class SceneController {
       surface: this.surfaceOn,
       path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
       scope: { mode: this.scopeMode, ...this.scopeCounts },
+      distanceScale: this.distScale,
     };
   }
 
@@ -749,7 +780,7 @@ export class SceneController {
     const s = graph.stateIn(id, t, 'EARTH:inertial');
     if (!s) return false;
     // deep-space shell compression, else a few-metre nudge for ground contact (shared with the path overlay)
-    const { r, compressed } = displayPosition(s.r);
+    const { r, compressed } = displayPosition(s.r, this.distScale);
     out.set(r[0], r[1], r[2]);
     this.lastCompressed = compressed;
     return true;
@@ -1075,7 +1106,7 @@ export class SceneController {
       else o.update(graph, rec, t, wall, this.fullOverlays.has(id));
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
-    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false);
+    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, this.distScale);
   }
 
   /** Project the selected path's phase boundaries to the screen for the label layer. */

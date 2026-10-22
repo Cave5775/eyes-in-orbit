@@ -32,6 +32,8 @@ export class OrbitRig {
   dist = 24000;
   /** closest camera-to-target distance; the controller sets it per frame (Earth centre vs an object vs the ground) */
   minDist = 20;
+  /** farthest camera-to-target distance; 3e7 km, or 1e11 km when probes are drawn at their real distances */
+  maxDist = MAX_DIST_KM;
   mode: RigMode = 'globe';
   /** pan offset added to the followed/free anchor */
   readonly pan = new THREE.Vector3();
@@ -146,7 +148,7 @@ export class OrbitRig {
       if (u >= 1) this.flight = null;
     } else this.target.copy(goal);
 
-    this.dist = Math.min(MAX_DIST_KM, Math.max(this.minDist, this.dist));
+    this.dist = Math.min(this.maxDist, Math.max(this.minDist, this.dist));
 
     // the mode's own ("natural") pose
     if (this.mode === 'surface') {
@@ -213,6 +215,7 @@ export class OrbitRig {
   private zoomBy(factor: number): void {
     this.dist = zoomDistance(this.dist, factor, this.altitudeKm, {
       minDist: this.minDist,
+      maxDist: this.maxDist,
       minRefFrac: this.mode === 'surface' ? 0.25 : 0,
     });
   }

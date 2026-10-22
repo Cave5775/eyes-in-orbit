@@ -179,6 +179,12 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .scene-hud { position: absolute; left: 10px; right: 10px; bottom: 8px; z-index: 4; display: flex; flex-wrap: wrap; gap: 2px 14px; white-space: nowrap; font-size: 10.5px; color: var(--dim); pointer-events: none; letter-spacing: 0.06em; }
 
 .scene-hud > span { display: inline-block; }
+.hud-toggle {
+  pointer-events: auto; cursor: pointer; font: inherit; letter-spacing: inherit; color: var(--dim); background: rgba(10, 15, 21, 0.6);
+  border: 1px solid var(--line-2); border-radius: 2px; padding: 0 6px; line-height: 16px;
+}
+.hud-toggle:hover { color: var(--text); border-color: var(--accent); }
+.hud-toggle.on { color: var(--accent); border-color: var(--accent); }
 .scene-hud > span:nth-child(1) { min-width: 15ch; }
 .scene-hud > span:nth-child(4) { min-width: 7ch; }
 
