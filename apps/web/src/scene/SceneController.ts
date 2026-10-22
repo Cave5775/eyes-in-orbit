@@ -19,6 +19,7 @@ import { EntityOverlay } from './overlays';
 import { PathOverlay, type PathStatus } from './PathOverlay';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
+import { ModelLayer, type ModelFrame } from './models/ModelLayer';
 
 // Colours and sizes are authored in display space; skip three's linear workflow.
 THREE.ColorManagement.enabled = false;
@@ -66,6 +67,8 @@ export interface SceneStats {
   /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
   scope: { mode: ScopeMode; rendered: number; total: number };
   distanceScale: DistanceScale;
+  /** ids of entities whose 3D model is drawn this frame (camera within the model's LOD distance) */
+  models: string[];
 }
 
 /** Where the surface-aligned camera is anchored. */
@@ -167,6 +170,11 @@ export class SceneController {
   private scopeCounts = { rendered: 0, total: 0 };
   /** overlays (orbit lines, footprints) of entities that are in scope */
   private overlayInScope = new Map<string, boolean>();
+  /** 3D models of entities with `render.model`, drawn camera-relative while the camera is near them (scene/models/) */
+  private models: ModelLayer;
+  private modelFrame: ModelFrame;
+  /** entity the camera follows, if any (a followed model may be approached closer than a plain point) */
+  private followId: string | null = null;
   private selectedId: string | null = null;
   private hoverId: string | null = null;
   private issFix: IssFix | undefined;
@@ -260,6 +268,9 @@ export class SceneController {
     this.pads.points.renderOrder = 4;
     this.hi.points.renderOrder = 6;
 
+    this.models = new ModelLayer(this.scene);
+    this.modelFrame = this.makeModelFrame();
+
     this.propagator.onLayout = (ids) => this.onLayout(ids);
     this.propagator.setClock(clock.snapshot());
     this.cleanup.push(clock.subscribe((s) => this.propagator.setClock(s)));
@@ -304,6 +315,9 @@ export class SceneController {
     }
     this.propagator.remove(gone);
     this.propagator.upsert(upserts);
+    // entities with a registered 3D model need an exact main-thread state even when SGP4 (the worker only fills the cloud)
+    this.models.setEntities(this.recs.values());
+    for (const rec of this.recs.values()) if (this.models.has(rec.id)) graph.upsert(rec);
     if (dynChanged) this.rebuildDyn();
     this.refreshHints();
     this.applyAppearance();
@@ -402,11 +416,13 @@ export class SceneController {
       if (!rec) return;
       graph.upsert(rec);
       const id = req.id;
+      this.followId = id;
       this.focusLatLon = null;
       this.followFn = (out, t) => this.worldPos(id, t, out);
       if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
     } else if (req.lat !== undefined && req.lon !== undefined) {
       const lat = req.lat * DEG, lon = req.lon * DEG;
+      this.followId = null;
       this.focusLatLon = { lat, lon };
       this.followFn = (out, t) => {
         this.fixedToWorld(geodeticToFixed({ lat, lon, alt: 0 }, EARTH), out, t);
@@ -416,6 +432,7 @@ export class SceneController {
     } else {
       if (this.surfaceOn) this.setSurfaceMode(false);
       this.followFn = null;
+      this.followId = null;
       this.focusLatLon = null;
       this.freeTarget.set(0, 0, 0);
       this.follow = false;
@@ -606,6 +623,7 @@ export class SceneController {
       path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
       scope: { mode: this.scopeMode, ...this.scopeCounts },
       distanceScale: this.distScale,
+      models: this.models.activeIds,
     };
   }
 
@@ -616,6 +634,7 @@ export class SceneController {
     this.cleanup.forEach((fn) => fn());
     this.rig.destroy();
     this.propagator.dispose();
+    this.models.dispose();
     this.overlays.forEach((o) => o.dispose());
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
@@ -695,7 +714,9 @@ export class SceneController {
       const k = vis === 'dim' ? 0.3 : 1;
       set.color.setXYZ(i, c.r * k, c.g * k, c.b * k);
       set.glyph.setX(i, rec?.render?.glyph ? GLYPH_ID[rec.render.glyph] : 0);
-      set.size.setX(i, vis === 'hide' ? 0 : POINT_SIZE[key] * (vis === 'dim' ? 0.7 : this.filters.launch ? 1.8 : 1));
+      // a 3D model drawn for the entity replaces its sprite
+      const replaced = !!rec && this.models.spriteHidden.has(rec.id);
+      set.size.setX(i, vis === 'hide' || replaced ? 0 : POINT_SIZE[key] * (vis === 'dim' ? 0.7 : this.filters.launch ? 1.8 : 1));
     };
     const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters));
     // with a filter on, the objects it lets through ('show') are exempt from the scope policy
@@ -835,6 +856,9 @@ export class SceneController {
     for (const hit of hits.slice(0, 8)) {
       if (!this.occludedRel(hit.x, hit.y, hit.z)) return hit.id;
     }
+    // a drawn 3D model is pickable as a whole (its sprite is hidden)
+    const model = this.models.pick(px, py, m, w, h, PICK_RADIUS_PX);
+    if (model) return model;
     // the selected entity is drawn from the highlight set, not the sat cloud
     if (this.selectedId && this.hi.size.getX(1) > 0) {
       const a = this.hi.pos.attr;
@@ -944,11 +968,13 @@ export class SceneController {
       anchored = this.follow && this.followFn ? this.followFn(this.anchor, t) : false;
       if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget, t);
       // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
-      this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
+      const modelMin = anchored ? this.models.defOf(this.followId)?.minViewKm : undefined;
+      this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
     }
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
 
     this.prepareRender(gmst);
+    this.updateModels(t);
     this.refreshScope(wall);
 
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
@@ -996,6 +1022,61 @@ export class SceneController {
     this.hi.pos.upload(f);
     this.overlays.forEach((o) => o.uploadFrame(f));
     this.pathOverlay?.uploadFrame(f);
+  }
+
+  private makeModelFrame(): ModelFrame {
+    const rec = (id: string) => this.recs.get(id);
+    return {
+      t: 0,
+      camera: this.camera.position,
+      fovRad: 0,
+      viewportPx: 1,
+      sunDir: [1, 0, 0],
+      approx: (id, out) => {
+        const si = this.satIndex.get(id);
+        const di = this.dynIndex.get(id);
+        const set = si !== undefined ? this.sats : di !== undefined ? this.dyn : null;
+        const i = si ?? di;
+        if (!set || i === undefined) return false;
+        const w = set.pos.world;
+        if (w[i * 3] === 0 && w[i * 3 + 1] === 0 && w[i * 3 + 2] === 0) return false;
+        out.set(w[i * 3], w[i * 3 + 1], w[i * 3 + 2]);
+        return true;
+      },
+      resolve: (id, t) => {
+        const s = graph.stateIn(id, t, 'EARTH:inertial');
+        if (!s) return null;
+        const { r, compressed } = displayPosition(s.r, this.distScale);
+        return compressed ? null : { r, v: s.v };
+      },
+      visibility: (id) => {
+        const r = rec(id);
+        return r ? sceneVisibility(r, this.filters) : 'hide';
+      },
+      inScope: (id) => {
+        if (this.scopeMode === 'all' || id === this.selectedId || this.related.has(id)) return true;
+        const si = this.satIndex.get(id);
+        if (si !== undefined) return this.sats.show.getX(si) > 0.5;
+        const di = this.dynIndex.get(id);
+        return di !== undefined && this.dyn.show.getX(di) > 0.5;
+      },
+      spritePx: (id) => {
+        const r = rec(id);
+        return r ? POINT_SIZE[colorKeyOf(r)] : 8;
+      },
+    };
+  }
+
+  /** Models near the camera: place camera-relative, pose from the state, and swap sprites out where the model takes over. */
+  private updateModels(t: number): void {
+    if (!this.models.size) return;
+    const f = this.modelFrame;
+    f.t = t;
+    f.fovRad = (this.camera.fov * Math.PI) / 180;
+    f.viewportPx = Math.max(1, this.container.clientHeight);
+    const s = sunDirectionEci(t);
+    f.sunDir = [s[0], s[1], s[2]];
+    if (this.models.update(f)) this.applyAppearance();
   }
 
   /**
@@ -1058,10 +1139,11 @@ export class SceneController {
 
   private updateDyn(t: number): void {
     const pos = this.dyn.pos, size = this.dyn.size;
+    const replaced = this.models.spriteHidden;
     for (let i = 0; i < this.dynIds.length; i++) {
       const ok = this.worldPos(this.dynIds[i], t, this.tmp);
       if (ok) pos.setXYZ(i, this.tmp.x, this.tmp.y, this.tmp.z);
-      size.setX(i, ok ? this.dynBaseSize[i] : 0);
+      size.setX(i, ok && !(replaced.size && replaced.has(this.dynIds[i])) ? this.dynBaseSize[i] : 0);
     }
     size.needsUpdate = true;
   }
@@ -1079,9 +1161,12 @@ export class SceneController {
     const ok = !!sel && this.worldPos(sel.id, t, tmp);
     this.shellSelected = ok && this.lastCompressed;
     const c = sel ? this.palette.colors[colorKeyOf(sel)] : this.palette.accent;
-    set(0, ok, 26, this.palette.accent, GLYPH_ID.ring);
+    // a drawn 3D model replaces the sprite; a model larger than the ring is its own selection cue
+    const replaced = !!sel && this.models.spriteHidden.has(sel.id);
+    const ringOff = !!sel && this.models.ringHidden.has(sel.id);
+    set(0, ok && !ringOff, 26, this.palette.accent, GLYPH_ID.ring);
     // sat-cloud points of the selected sat are hidden, so redraw it here at its exact position
-    set(1, ok && !!sel && isSgp4(sel), POINT_SIZE[sel ? colorKeyOf(sel) : 'satellite'] + 3, c, GLYPH_ID.dot);
+    set(1, ok && !!sel && isSgp4(sel) && !replaced, POINT_SIZE[sel ? colorKeyOf(sel) : 'satellite'] + 3, c, GLYPH_ID.dot);
 
     const hov = this.hoverId && this.hoverId !== this.selectedId ? this.pointPos(this.hoverId, tmp) : false;
     set(2, hov, 18, this.palette.colors.station, GLYPH_ID.ring);

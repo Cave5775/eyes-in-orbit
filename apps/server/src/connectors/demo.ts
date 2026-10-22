@@ -64,7 +64,7 @@ export function buildDemoEntities(serverStartMs: number, nowMs: number): NewEnti
     {
       id: 'demo-booster', name: 'Demo booster', kind: 'stage', bodyId: 'EARTH', aliases: {}, group,
       provider: { type: 'composite', segments },
-      render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 120, label: true },
+      render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 120, label: true, model: 'rocket-stage' },
       attrs: { note: 'looping demo: pad, ascent, landing burn (relative ENU), landed', cycleSec: CYCLE_MS / 1000 },
     },
     {

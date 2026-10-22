@@ -104,7 +104,7 @@ export function mockSatellites(nowMs: number, count = 2000, seed = 7): EntityRec
     makeOmm({ name: 'ISS (ZARYA)', norad: 25544, epochMs: nowMs - 3 * HOUR, meanMotion: 15.49, ecc: 0.0005, incl: 51.64, raan: 120, argp: 90, ma: 270, bstar: 0.0002 }),
     'station', 'stations', 'station', nowMs,
   );
-  iss.render = { colorKey: 'station', footprint: true, orbitLine: true, trailSeconds: 5400, label: true };
+  iss.render = { colorKey: 'station', footprint: true, orbitLine: true, trailSeconds: 5400, label: true, model: 'iss' };
   iss.links = { streams: [NASA_LIVE, NASA_TV], newsQuery: 'International Space Station' };
   out.push(iss);
   const css = satRecord(
@@ -143,6 +143,9 @@ export function mockSatellites(nowMs: number, count = 2000, seed = 7): EntityRec
     }
     slLaunch += planes;
   }
+  // one Starlink gets the generic satellite model (zoom to it: bus, two panels turned toward the Sun)
+  const model0 = out.find((e) => e.name === 'STARLINK-1000');
+  if (model0) model0.render = { ...model0.render, model: 'satellite' };
 
   // debris clouds from three fragmentation events; each cloud is one launch (shared YYYY-NNN) and one CelesTrak-style group
   const debrisCount = Math.round(count * 0.16);
@@ -338,7 +341,7 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
   out.push({
     id: 'demo-booster', name: 'Demo Booster (boostback arc)', kind: 'stage', bodyId: 'EARTH', aliases: {}, group: 'demo',
     provider: { type: 'sampled', frame: 'EARTH:fixed', samples: boosterSamples, holdEnds: true },
-    render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 240 }, updatedAt: nowMs,
+    render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 240, model: 'rocket-stage' }, updatedAt: nowMs,
   });
   const droneSamples: Sample[] = [];
   for (let t = start; t <= nowMs + 3 * HOUR; t += 5_000) {

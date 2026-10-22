@@ -77,7 +77,7 @@ export function satelliteEntity(omm: Omm, group: SatGroup): NewEntity {
   };
   if (norad === ISS_NORAD) {
     aliases.common = 'ISS';
-    rec.render = { colorKey: 'station', footprint: true, orbitLine: true, trailSeconds: 5400, label: true };
+    rec.render = { colorKey: 'station', footprint: true, orbitLine: true, trailSeconds: 5400, label: true, model: 'iss' };
     rec.links = { streams: ISS_STREAMS, newsQuery: 'International Space Station' };
   }
   return rec;

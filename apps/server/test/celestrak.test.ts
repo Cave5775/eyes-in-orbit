@@ -40,7 +40,7 @@ describe('celestrak normalize', () => {
     const byId = Object.fromEntries(normalizeCelestrak(groups()).map((e) => [e.id, e]));
     expect(byId['sat-25544']).toMatchObject({
       name: 'ISS (ZARYA)', kind: 'station', bodyId: 'EARTH', aliases: { norad: '25544', cospar: '1998-067A', common: 'ISS' },
-      provider: { type: 'sgp4' }, render: { colorKey: 'station', footprint: true, orbitLine: true, trailSeconds: 5400 },
+      provider: { type: 'sgp4' }, render: { colorKey: 'station', footprint: true, orbitLine: true, trailSeconds: 5400, model: 'iss' },
     });
     expect(byId['sat-25544'].links!.streams!.some((s) => s.kind === 'youtube')).toBe(true);
     expect(byId['sat-44714'].render).toEqual({ colorKey: 'starlink' });

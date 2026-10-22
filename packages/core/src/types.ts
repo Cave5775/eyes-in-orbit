@@ -128,7 +128,10 @@ export interface RenderHint {
   trailSeconds?: number;
   footprint?: boolean;
   label?: boolean;
-  /** future: glb model url */
+  /**
+   * 3D model key from the web client's model registry (`apps/web/src/scene/models/registry.ts`): `iss`, `satellite`,
+   * `rocket-stage`. Drawn at true size instead of the point sprite when the camera is near; unknown keys are ignored.
+   */
   model?: string;
 }
 
