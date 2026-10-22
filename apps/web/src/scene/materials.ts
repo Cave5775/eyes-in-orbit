@@ -18,6 +18,8 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         vGlyph = aGlyph;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = aSize * uPx;
+        // size 0 means hidden: a zero point size is clamped up to 1 px on some GPUs/ANGLE, so also clip the vertex away
+        if (aSize <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
       varying vec3 vColor;
@@ -121,12 +123,18 @@ export function createAtmosphereMaterial(sun: THREE.Vector3): THREE.ShaderMateri
   });
 }
 
-/** Stars pinned to the far plane (xyww trick), unaffected by near/far changes while zooming. */
+/**
+ * Stars pinned to the far plane (xyww trick, depth just inside 1.0), unaffected by near/far changes
+ * while zooming. They must be depth TESTED: the Earth is opaque and writes depth, but this material is
+ * transparent and so is drawn after the opaque pass. With `depthTest: false` (the old setting) every
+ * star was painted over the Earth disc whatever `renderOrder` said; with the test on, the far-plane
+ * depth loses to the Earth (and to anything else drawn in front) and the stars are occluded.
+ */
 export function createStarMaterial(pixelRatio: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: { uPx: { value: pixelRatio } },
     transparent: true,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
     vertexShader: /* glsl */ `
       attribute float aSize; attribute float aBright;

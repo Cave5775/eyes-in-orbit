@@ -46,6 +46,11 @@ export class EntityOverlay {
     earth.add(this.track);
   }
 
+  /** True while this overlay draws a closed-orbit line (the path overlay stays out of the way then). */
+  get hasOrbit(): boolean {
+    return this.orbit.visible;
+  }
+
   dispose(): void {
     for (const o of [this.orbit, this.trail, this.footprint, this.track]) {
       o.removeFromParent();

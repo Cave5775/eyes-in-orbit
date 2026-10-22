@@ -6,7 +6,9 @@ Monorepo (npm workspaces): `packages/core` (`@eio/core`, shared model), `apps/se
 
 ## Features
 
-- **Globe and tracking**: three.js scene with Earth, atmosphere, star field and terminator lighting. Thousands of satellites (SGP4 propagated in a Web Worker), stations, debris, launch pads, DSN ground stations and deep-space probes. Hover for a name tooltip, click to select, FOLLOW keeps the camera on the selection, EARTH VIEW / Esc resets. Left-drag orbits, right-drag or shift-drag pans, wheel and pinch zoom.
+- **Globe and tracking**: three.js scene with Earth, atmosphere, star field and terminator lighting. Thousands of satellites (SGP4 propagated in a Web Worker), stations, debris, launch pads, DSN ground stations and deep-space probes. Hover for a name tooltip, click to select, FOLLOW keeps the camera on the selection, EARTH VIEW / Esc resets. The Earth hides everything behind it (stars, satellites, paths, deep-space markers); picking ignores hidden points too.
+- **Camera** (see [Controls](#controls)): altitude-aware zoom, a surface-aligned view (level horizon, north-up) around the selection's sub-point or any ground point, and FIT / FIT VISIBLE that frame the selection with its related objects or everything the filters leave on screen.
+- **Trajectory paths**: select an object that is not SGP4 and its path is drawn: demo booster (ascent and landing arc), launch vehicles with trajectory files, relative objects (the demo drone), Keplerian objects and Horizons-sampled probes. Past is dim, future is bright, the current position is the selection ring, and composite phase boundaries (pad, ascent, landing, landed) get a tick and a label. Windows: probes -1 d to +2 d, trajectories -5 min to +10 min, relative objects +/-3 min, Keplerian -1/4 to +1 period. The HUD shows the window. SGP4 objects keep their orbit line, trail and ground track.
 - **Search and filter**: debounced search by name, NORAD id or COSPAR id (server-ranked via `/api/search`, local ranking if the request fails), kind and group filter chips with counts, virtualised entity list. Filters also hide non-matching objects in the scene.
 - **Detail panel** with tabs:
   - Telemetry: lat/lon/altitude, geocentric range, speed, period, phase, element age, confidence, attributes, identifiers; ISS live fix and telemetry; the current DSN link for DSN-tracked probes.
@@ -17,12 +19,29 @@ Monorepo (npm workspaces): `packages/core` (`@eio/core`, shared model), `apps/se
 - **DSN panel**: dishes with active links first, craft chips that select the spacecraft, range, round-trip light time, downlink band and rate.
 - **News ticker**: scrolling global headlines, pauses on hover.
 - **Time controls**: LIVE, PAUSE/PLAY, rates x1/x10/x60/x600, and a scrub slider covering +/- 24 h around now. All providers are evaluated at the simulation clock.
-- **Deep-space shell compression**: objects beyond 2,000,000 km from Earth (e.g. Voyager 1 at ~2.5e10 km) are drawn on a logarithmically compressed shell with direction preserved. The UI flags this ("distance not to scale").
+- **Deep-space shell compression**: objects beyond 2,000,000 km from Earth (e.g. Voyager 1 at ~2.5e10 km) are drawn on a logarithmically compressed shell with direction preserved, and so are their paths. The HUD flags this ("distance not to scale"). Over a 3-day window a far probe's path is a few pixels at most (Voyager 1's is effectively a point); zoom in to see it.
 - **ISS**: while the ISS is selected the client subscribes to the `iss` WebSocket topic and the server starts a 1 Hz wheretheiss.at fix (lat/lon/alt/velocity/visibility/footprint) and a Lightstreamer telemetry feed. Both connectors are idle otherwise.
 - **Demo entities** (always on, group `demo`): `demo-booster` (looping pad, ascent, relative-ENU landing burn, landed; 10 minute cycle from server start), `demo-drone` (orbits the landing zone), `demo-rover` (Jezero crater on MARS), plus `demo-pad` and `demo-lz`. They exercise the composite, relative and non-Earth geodetic providers.
 - **Health indicator**: top-right connection state (link up, reconnecting, offline, mock) and a per-connector popover with status, age, cache use and errors.
 - **Offline behaviour**: `OFFLINE=1` serves only what the SQLite cache holds. Without `apps/web/public/textures/earth.jpg` the globe uses a procedural Earth (the HUD shows `EARTH PROCEDURAL`).
 - **Mock mode**: add `?mock=1` to the web URL to run entirely on synthetic in-memory data (also used automatically when `/api/health` is unreachable). `?mock=1&n=12000` sets the number of mock satellites (default 2000) for stress tests.
+
+## Controls
+
+| Input | Action |
+|---|---|
+| Left drag | Orbit (surface view: look around the local horizon) |
+| Right drag, Shift + drag | Pan (globe view only) |
+| Wheel, pinch | Zoom. The step scales with the camera's height above the surface: fine near the ground, coarse in deep space. The camera stops 3 km above the ground (the Earth has no terrain), at most 30,000,000 km out |
+| Click | Select an object (hover shows its name) |
+| FOLLOW | Keep the camera on the selection |
+| `F` or FIT | Frame the selection and its related objects (bounding sphere, distance from the field of view, smooth fly-to): its `parentId` parent and children, relative-provider parents, a launch vehicle's pad, pads near a composite's launch point, the probes a DSN ground station is linked to; the selected object's drawn path is included |
+| `Shift+F` or FIT VISIBLE | Frame everything the current filters leave visible |
+| `S` or SURFACE | Toggle the surface-aligned view: the camera orbits a ground point (the selected object's sub-point while following, a focused launch pad, otherwise the point under the view centre) with the local vertical up and north-up. The Earth hides the stars below the horizon. Leaving flies back to the globe view of the same place |
+| `Esc` or EARTH VIEW | Deselect and return to the Earth view (also leaves the surface view) |
+| `H`, `?` | Show or hide the in-app controls help |
+
+Hotkeys are ignored while typing in an input. Code can frame a set of entities with `runtime.onFitRequest?.(ids)` from `apps/web/src/state/runtime.ts` (set by `SceneView` while mounted).
 
 ## Quick start
 
@@ -118,6 +137,8 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 - **Server** (`apps/server/src`): Fastify with `@fastify/compress`, `@fastify/cors` and `@fastify/websocket`. `main.ts` builds the connector list and the `Scheduler` (`connector.ts`): jittered starts, per-connector timers, exponential backoff, topic gating, health records. `http.ts` is the fetch layer (`cachedFetch`: fresh cache hit, else network, else stale cache). `store.ts` is the SQLite key/value cache (entries expired for more than 30 days are pruned at startup). `hub.ts` holds shared state and debounces `entities.changed` (250 ms).
 - **Core** (`packages/core/src`): body-agnostic. Bodies (`SUN`, `EARTH`, `MOON`, `MARS`) and frames `<BODY>:inertial|fixed`, state providers (`sgp4`, `sampled`, `keplerian`, `geodetic`, `relative`, `composite`), the `EntityGraph` that resolves parents and converts frames, the mission state machine (`deriveMissionState`), the simulation `Clock`, and ascent helpers. Units are km, km/s and ms since epoch.
 - **Web** (`apps/web/src`): React 18 + zustand store (`state/store.ts`). The raw three.js `SceneController` (`scene/`) is not wrapped in r3f. SGP4 entities propagate in `workers/propagator.worker.ts` into a transferable `Float32Array`; other providers are evaluated on the main thread through an `EntityGraph` (`state/runtime.ts`). `api/client.ts` chooses the REST client or the mock API (`mock/`).
+- **Paths and frames**: `lib/paths.ts` samples `provider.stateAt` over a window (<= ~480 points plus exact composite phase boundaries, buffers reused, rebuilt only when the window has slid a tenth of its length). Everything is drawn in the Earth-inertial scene, with one exception: when every sample is natively `EARTH:fixed` and the window is <= 45 min (the booster, launch ascents) the path is attached to the rotating Earth group instead, so a booster standing on its landing pad does not draw a 460 m/s eastward streak; the marker, evaluated at the current time, still sits on it. Inertial points get the deep-space shell compression.
+- **Draw order and depth**: Earth, atmosphere, satellite points, paths and stars are all depth tested. Stars are pinned to the far plane (depth just under 1.0), so the opaque Earth occludes them, and everything else drawn in front of the far plane occludes them in turn.
 
 ## Extending
 
@@ -129,7 +150,7 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Testing
 
-`npm test` runs Vitest (134 tests in 14 files, no network). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters, deep-space compression, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). `npm run typecheck` checks all three packages.
+`npm test` runs Vitest (178 tests in 17 files, no network). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). The three.js scene itself is checked by hand in a browser. `npm run typecheck` checks all three packages.
 
 ## Project layout
 
@@ -137,7 +158,7 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 |---|---|
 | `packages/core/src` | `types`, `bodies`, `frames`, `kepler`, `ephemeris`, `clock`, `mission-fsm`, `entity-graph`, `ascent`, `feeds` (wire types), `providers/` |
 | `apps/server/src` | `main`, `config`, `connector` (scheduler), `http`, `store`, `hub`, `api`, `ws`, `search`, `trajectory`, `connectors/` |
-| `apps/web/src` | `App.tsx`, `ui/` (panels, `Splitter`, `ui/detail/` tabs), `scene/` (three.js), `workers/`, `state/`, `api/`, `lib/` (formatting, filters, deep-space), `mock/` |
+| `apps/web/src` | `App.tsx`, `ui/` (panels, `Splitter`, `ui/detail/` tabs), `scene/` (three.js: `SceneController`, `controls` camera rig, `PathOverlay`, `overlays`, `materials`), `workers/`, `state/`, `api/`, `lib/` (formatting, filters, deep-space, `camera`, `paths`, `related`), `mock/` |
 | `data/` | `cache.sqlite` (git-ignored) and `trajectories/` |
 | `docs/CONTRACT.md` | Server/web API contract |
 | `scripts/fetch-assets.mjs` | Earth texture download (`npm run assets`) |
@@ -162,4 +183,4 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Known limitations / roadmap
 
-The two UI/UX requests from `usertest.md` (stable value layout, resizable panels) are implemented; performance was reported fine, including with `?mock=1`. Nothing else from the owner's notes is open.
+From the owner's notes (`usertest.md`) the UI/UX requests (stable value layout, resizable panels), the camera controls, the Earth occluding the stars and the trajectories of non-SGP4 objects are done; performance was reported fine, including with `?mock=1`. Still open: realistic distance projection and not rendering objects outside the focus object's scope. The scene has no terrain and the downloaded Earth texture is low resolution, so the closest views (3 km up) are blurry. Paths show the provider's own samples: a probe whose Horizons data is missing (M20, MAVEN) has none, and Voyager-class paths are sub-pixel at shell scale.

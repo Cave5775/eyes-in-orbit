@@ -9,6 +9,13 @@ export const clock = new Clock();
  */
 export const graph = new EntityGraph();
 
+/**
+ * Optional hooks other modules can call without importing the scene. `SceneView` sets `onFitRequest` while it is
+ * mounted: it frames the given entity ids (bounding sphere, smooth fly-to, leaves follow mode).
+ * Use `runtime.onFitRequest?.(ids)`, e.g. from a launch-group filter that wants to show all of its objects.
+ */
+export const runtime: { onFitRequest?: (ids: string[]) => void } = {};
+
 /** Make sure the record has a live provider on the main thread (the scene does this too; panels must not race it). */
 export function ensureInGraph(rec: EntityRecord): void {
   if (graph.get(rec.id) !== rec) graph.upsert(rec);
