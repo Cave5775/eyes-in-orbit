@@ -1,5 +1,5 @@
 import { EARTH, convert, defaultBodies, type CompositeSegment, type FrameId, type ProviderSpec, type StateVector, type Vec3 } from '@eio/core';
-import { compressDeepSpace } from './deepspace';
+import { compressDeepSpace, type DistanceScale } from './deepspace';
 
 /**
  * Path sampling for entities that are not SGP4: pure, no three.js. A path is `provider.stateAt` evaluated
@@ -21,8 +21,12 @@ export const PATH_MAX_PHASES = 10;
 export const PATH_BUFFER_CAPACITY = PATH_MAX_POINTS + 2 * PATH_MAX_PHASES + 8;
 /** Longest window for which a body-fixed provider is still drawn in the body-fixed frame. */
 export const FIXED_FRAME_MAX_WINDOW_MS = 45 * 60_000;
-/** Markers/lines are lifted this far off the surface so they are not half buried (same as the scene's markers). */
-export const GROUND_LIFT_KM = 12;
+/**
+ * Markers and lines at ground level are nudged this far off the surface (a few metres: the Earth mesh is inscribed in the
+ * ellipsoid, so it never pokes above the true surface; this only covers float32 noise in the mesh vertices). Markers
+ * are drawn without depth testing and hidden analytically by the Earth, so they need no lift of their own.
+ */
+export const GROUND_LIFT_KM = 0.005;
 /** A path whose extent stays under this (km) is treated as stationary and not drawn. */
 export const MIN_PATH_EXTENT_KM = 0.02;
 
@@ -105,14 +109,14 @@ export function pathStale(builtAtMs: number, nowMs: number, plan: PathPlan | nul
 }
 
 export interface PathBuffers {
-  /** xyz per point, display space (km) */
-  pos: Float32Array;
+  /** xyz per point, display space (km), float64: the scene re-bases it on the camera every frame */
+  pos: Float64Array;
   /** sample time per point (ms), ascending */
   times: Float64Array;
 }
 
 export const makePathBuffers = (): PathBuffers => ({
-  pos: new Float32Array(PATH_BUFFER_CAPACITY * 3),
+  pos: new Float64Array(PATH_BUFFER_CAPACITY * 3),
   times: new Float64Array(PATH_BUFFER_CAPACITY),
 });
 
@@ -150,8 +154,12 @@ export function liftNearSurface(r: Vec3, liftKm = GROUND_LIFT_KM): Vec3 {
   return [r[0] * k, r[1] * k, r[2] * k];
 }
 
-/** Display position for an Earth-inertial position: deep-space shell compression, else the ground lift. */
-export function displayPosition(r: Vec3): { r: Vec3; compressed: boolean } {
+/**
+ * Display position for an Earth-inertial position: deep-space shell compression (default) or true scale (identity),
+ * else the ground lift. `compressed` is true only when the position was actually moved onto the shell.
+ */
+export function displayPosition(r: Vec3, scale: DistanceScale = 'compressed'): { r: Vec3; compressed: boolean } {
+  if (scale === 'true') return { r: liftNearSurface(r), compressed: false };
   const c = compressDeepSpace(r);
   return c.compressed ? c : { r: liftNearSurface(r), compressed: false };
 }
@@ -194,7 +202,7 @@ export function sampleTimes(plan: PathPlan, spec: ProviderSpec | undefined, maxP
  * Evaluate the entity over `plan` into `buf`. Samples with no state are skipped. See the module comment for
  * the display frame; inertial points get deep-space compression, so a probe's path matches its marker.
  */
-export function samplePath(src: PathSource, id: string, plan: PathPlan, spec: ProviderSpec | undefined, buf: PathBuffers): PathResult {
+export function samplePath(src: PathSource, id: string, plan: PathPlan, spec: ProviderSpec | undefined, buf: PathBuffers, scale: DistanceScale = 'compressed'): PathResult {
   const wanted = sampleTimes(plan, spec, Math.min(PATH_MAX_POINTS, buf.times.length - 2 * PATH_MAX_PHASES));
   const states: { t: number; s: StateVector }[] = [];
   for (const t of wanted) {
@@ -219,7 +227,7 @@ export function samplePath(src: PathSource, id: string, plan: PathPlan, spec: Pr
       } catch {
         continue;
       }
-      const d = displayPosition(inertial.r);
+      const d = displayPosition(inertial.r, scale);
       compressed ||= d.compressed;
       r = d.r;
     }

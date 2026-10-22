@@ -1,4 +1,5 @@
 import { EARTH } from '@eio/core';
+import type { DistanceScale } from './deepspace';
 
 /** Pure camera maths (no three.js): altitude-scaled zoom, fit distance, local surface frames. Units km. */
 
@@ -7,9 +8,24 @@ export type V3 = [number, number, number];
 const RE = EARTH.radiusKm;
 const F = EARTH.flattening;
 
-/** Closest the camera may get to the ellipsoid: clears the mesh facet sag (~1 km) and the marker lift. */
+/** Closest the camera may get to the ellipsoid: clears the Earth mesh facet sag (~0.12 km) with a wide margin. */
 export const MIN_ALT_KM = 3;
 export const MAX_DIST_KM = 3e7;
+/** Farthest the camera may be from its target when probes are drawn at their real distances (Voyager 1 is ~2.5e10 km out). */
+export const MAX_DIST_TRUE_KM = 1e11;
+
+/** Zoom-out limit for a distance scale: the compressed shell fits well inside 3e7 km, true scale needs ~1e11 km. */
+export const maxDistKm = (scale: DistanceScale): number => (scale === 'true' ? MAX_DIST_TRUE_KM : MAX_DIST_KM);
+
+/** Camera-to-target distance at which a fly-to settles for a target at geocentric radius `rKm`. */
+export function settleDistance(rKm: number): number {
+  return rKm < 20000 ? 3200 : rKm < 2e6 ? rKm * 0.6 : rKm * 0.45;
+}
+
+/** Camera distance that frames a sphere of `radius`, never beyond the zoom limit of the distance scale. */
+export function fitDistanceClamped(radius: number, fovDeg: number, aspect: number, margin: number, minDist: number, scale: DistanceScale): number {
+  return Math.min(maxDistKm(scale), Math.max(minDist, fitDistance(radius, fovDeg, aspect, margin)));
+}
 /** Smallest camera-to-target distance when the target is not the Earth's centre (a followed object). */
 export const MIN_TARGET_DIST_KM = 0.2;
 /** Reference altitude is never taken below this, so the zoom step near the ground stays a usable size. */
@@ -57,6 +73,7 @@ export function zoomDistance(
   camAltKm: number,
   opts: { minDist: number; maxDist?: number; minRefFrac?: number },
 ): number {
+  // `camAltKm` is the height above the Earth: for a camera orbiting a distant probe it is huge, so `ref` falls back to `dist`
   const ref = Math.min(dist, Math.max(camAltKm, (opts.minRefFrac ?? 0) * dist, MIN_REF_KM));
   const next = dist + ref * (factor - 1);
   return Math.min(opts.maxDist ?? MAX_DIST_KM, Math.max(opts.minDist, next));

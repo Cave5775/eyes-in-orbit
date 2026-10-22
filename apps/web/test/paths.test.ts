@@ -5,7 +5,7 @@ import {
 } from '@eio/core';
 import { SHELL_THRESHOLD_KM, shellRadius } from '../src/lib/deepspace';
 import {
-  FIXED_FRAME_MAX_WINDOW_MS, PATH_BUFFER_CAPACITY, PATH_MAX_POINTS, displayPosition, liftNearSurface, makePathBuffers,
+  FIXED_FRAME_MAX_WINDOW_MS, GROUND_LIFT_KM, PATH_BUFFER_CAPACITY, PATH_MAX_POINTS, displayPosition, liftNearSurface, makePathBuffers,
   nowIndex, pathStale, planPathWindow, sampleTimes, samplePath,
 } from '../src/lib/paths';
 import { mockGroundAndProbes } from '../src/mock/generators';
@@ -141,9 +141,9 @@ describe('samplePath: composite booster in EARTH:fixed (real-server data shape)'
   it('starts on the pad and ends at the landing zone, apex ~70 km up, all in display space', () => {
     const pos = (i: number): Vec3 => [buf.pos[i * 3], buf.pos[i * 3 + 1], buf.pos[i * 3 + 2]];
     const radius = (i: number) => Math.hypot(...pos(i));
-    // first point: pad phase (lifted ~12 km), last: landed
-    expect(radius(0) - RE).toBeGreaterThan(5);
-    expect(radius(0) - RE).toBeLessThan(40);
+    // first point: pad phase (a few metres above the ground), last: landed
+    expect(radius(0) - RE).toBeGreaterThan(-30);
+    expect(radius(0) - RE).toBeLessThan(20);
     let maxAlt = 0;
     for (let i = 0; i < res.count; i++) maxAlt = Math.max(maxAlt, radius(i) - RE * (1 - EARTH.flattening * (pos(i)[2] / radius(i)) ** 2));
     expect(maxAlt).toBeGreaterThan(70);
@@ -241,7 +241,7 @@ describe('samplePath: mock data', () => {
 describe('display position', () => {
   it('lifts a surface point by the marker nudge and leaves higher points alone', () => {
     const lifted = liftNearSurface([RE, 0, 0]);
-    expect(lifted[0] - RE).toBeCloseTo(12, 6);
+    expect(lifted[0] - RE).toBeCloseTo(GROUND_LIFT_KM, 6);
     expect(liftNearSurface([RE + 400, 0, 0])).toEqual([RE + 400, 0, 0]);
     expect(displayPosition([3e6, 0, 0]).compressed).toBe(true);
     expect(displayPosition([RE + 400, 0, 0]).compressed).toBe(false);

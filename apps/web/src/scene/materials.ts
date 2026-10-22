@@ -1,25 +1,56 @@
 import * as THREE from 'three';
 
-/** Per-point colour, pixel size (0 hides) and glyph; screen-space sized so 12k objects stay legible. */
+/**
+ * Uniforms the point shader needs for the analytic Earth occlusion test (see `lib/occlusion.ts`, same maths):
+ * the camera in Earth-scaled space, `|o'|^2 - R'^2` computed in float64 on the CPU, and the ellipsoid z scale.
+ */
+export function occlusionUniforms(): Record<string, THREE.IUniform> {
+  return { uOriginS: { value: new THREE.Vector3() }, uC2: { value: 0 }, uOccK: { value: 1 }, uOcc: { value: 1 } };
+}
+
+/**
+ * Per-point colour, pixel size (0 hides), glyph and scope flag; screen-space sized so 12k objects stay legible.
+ * Positions arrive camera-relative (floating origin). Points are NOT depth tested: a sprite has one depth for all its
+ * pixels, so against the Earth's depth it was half clipped at the limb (and z-fought on the ground). Instead the vertex
+ * shader hides a point whose line of sight crosses the Earth (analytic ray test) and `aShow` (scope policy, 0/1) hides
+ * out-of-scope points.
+ */
 export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { uPx: { value: pixelRatio } },
+    uniforms: { uPx: { value: pixelRatio }, ...occlusionUniforms() },
     transparent: true,
     depthWrite: false,
+    depthTest: false,
     vertexShader: /* glsl */ `
       attribute vec3 aColor;
       attribute float aSize;
       attribute float aGlyph;
+      attribute float aShow;
       uniform float uPx;
+      uniform vec3 uOriginS;
+      uniform float uC2;
+      uniform float uOccK;
+      uniform float uOcc;
       varying vec3 vColor;
       varying float vGlyph;
+      bool earthHides(vec3 rel) {
+        if (uOcc < 0.5 || uC2 <= 0.0) return false;
+        vec3 d = vec3(rel.xy, rel.z * uOccK);
+        float L = length(d);
+        if (L <= 0.0) return false;
+        float b = dot(uOriginS, d / L);
+        if (b >= 0.0) return false;
+        float disc = b * b - uC2;
+        if (disc <= 0.0) return false;
+        return uC2 / (-b + sqrt(disc)) < L;
+      }
       void main() {
         vColor = aColor;
         vGlyph = aGlyph;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = aSize * uPx;
         // size 0 means hidden: a zero point size is clamped up to 1 px on some GPUs/ANGLE, so also clip the vertex away
-        if (aSize <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        if (aSize <= 0.0 || aShow < 0.5 || earthHides(position)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
       varying vec3 vColor;
@@ -51,6 +82,8 @@ const NOISE = /* glsl */ `
  * Earth surface lit by an ECI sun vector. Body-fixed direction comes from the (z-up) geometry normal,
  * world normal from the model matrix, so the same shader works as the group rotates by GMST.
  * Without a texture a noise land/ocean mask is used (clearly procedural, not geography).
+ * The scene uses a logarithmic depth buffer (see SceneController), so every depth-writing material includes the
+ * `logdepthbuf` chunks: mixing log and linear depth would make the Earth, atmosphere and lines disagree.
  */
 export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture | null): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
@@ -60,18 +93,23 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
       uHasTex: { value: texture ? 1 : 0 },
     },
     vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
       varying vec3 vL; varying vec3 vN; varying vec2 vUv;
       void main() {
         vUv = uv;
         vL = normal;
         vN = normalize(mat3(modelMatrix) * normal);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
       }`,
     fragmentShader: /* glsl */ `
+      #include <logdepthbuf_pars_fragment>
       uniform vec3 uSun; uniform sampler2D uTex; uniform float uHasTex;
       varying vec3 vL; varying vec3 vN; varying vec2 vUv;
       ${NOISE}
       void main() {
+        #include <logdepthbuf_fragment>
         vec3 base;
         if (uHasTex > 0.5) {
           base = texture2D(uTex, vUv).rgb;
@@ -103,6 +141,8 @@ export function createAtmosphereMaterial(sun: THREE.Vector3): THREE.ShaderMateri
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
       varying vec3 vN; varying vec3 vView; varying vec3 vWN;
       void main() {
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
@@ -110,11 +150,14 @@ export function createAtmosphereMaterial(sun: THREE.Vector3): THREE.ShaderMateri
         vWN = normalize(mat3(modelMatrix) * normal);
         vView = mv.xyz;
         gl_Position = projectionMatrix * mv;
+        #include <logdepthbuf_vertex>
       }`,
     fragmentShader: /* glsl */ `
+      #include <logdepthbuf_pars_fragment>
       uniform vec3 uSun;
       varying vec3 vN; varying vec3 vView; varying vec3 vWN;
       void main() {
+        #include <logdepthbuf_fragment>
         float d = clamp(dot(normalize(vN), normalize(vView)), 0.0, 1.0);
         float a = pow(clamp(d / 0.19, 0.0, 1.0), 1.7);
         float sunlit = 0.2 + 0.8 * smoothstep(-0.5, 0.35, dot(normalize(vWN), normalize(uSun)));
@@ -124,11 +167,11 @@ export function createAtmosphereMaterial(sun: THREE.Vector3): THREE.ShaderMateri
 }
 
 /**
- * Stars pinned to the far plane (xyww trick, depth just inside 1.0), unaffected by near/far changes
- * while zooming. They must be depth TESTED: the Earth is opaque and writes depth, but this material is
- * transparent and so is drawn after the opaque pass. With `depthTest: false` (the old setting) every
- * star was painted over the Earth disc whatever `renderOrder` said; with the test on, the far-plane
- * depth loses to the Earth (and to anything else drawn in front) and the stars are occluded.
+ * Stars pinned to the far plane: the fragment depth is forced to 1.0, the cleared value, so they pass the (LEQUAL) depth
+ * test only where nothing else was drawn. They must be depth TESTED: the Earth is opaque and writes depth, but this
+ * material is transparent and so is drawn after the opaque pass; with `depthTest: false` every star was painted over the
+ * Earth disc whatever `renderOrder` said. The logarithmic depth buffer breaks the usual `w * 0.99999` trick, so the
+ * depth is written explicitly.
  */
 export function createStarMaterial(pixelRatio: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
@@ -142,8 +185,7 @@ export function createStarMaterial(pixelRatio: number): THREE.ShaderMaterial {
       varying float vB;
       void main() {
         vB = aBright;
-        vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        gl_Position = vec4(p.xy, p.w * 0.99999, p.w);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = aSize * uPx;
       }`,
     fragmentShader: /* glsl */ `
@@ -152,6 +194,7 @@ export function createStarMaterial(pixelRatio: number): THREE.ShaderMaterial {
         float d = length(gl_PointCoord * 2.0 - 1.0);
         float a = (1.0 - smoothstep(0.3, 1.0, d)) * vB;
         gl_FragColor = vec4(vec3(0.8, 0.86, 1.0), a);
+        gl_FragDepth = 1.0;
       }`,
   });
 }
