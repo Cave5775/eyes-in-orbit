@@ -6,3 +6,4 @@ data/trajectories/*.local.*
 apps/web/public/textures/*.jpg
 npmOutput.txt
 *.log
+.claude/
