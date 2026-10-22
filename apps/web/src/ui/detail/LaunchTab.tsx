@@ -2,6 +2,7 @@ import { formatCountdown, type Launch } from '@eio/core';
 import { fmtLat, fmtLon, fmtUtc } from '../../lib/format';
 import { liveMission, statusTone } from '../../lib/launch';
 import { useSimNow } from '../hooks';
+import { AscentTelemetry } from './AscentTelemetry';
 import { Field } from './Field';
 
 export function LaunchTab({ launch }: { launch: Launch }) {
@@ -34,6 +35,7 @@ export function LaunchTab({ launch }: { launch: Launch }) {
         {launch.pad && <Field label="Pad longitude" value={fmtLon(launch.pad.longitude)} mono />}
       </dl>
       {launch.mission?.description && <p className="desc">{launch.mission.description}</p>}
+      <AscentTelemetry launch={launch} />
     </div>
   );
 }

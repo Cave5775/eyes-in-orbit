@@ -23,5 +23,5 @@ export const notam: Connector = {
 export const webcastOcr: Connector = {
   id: 'webcast-ocr',
   stub: (c) =>
-    `Not implemented. Would OCR the T+/velocity/altitude overlay of a launch webcast (ffmpeg + tesseract) and feed reconstructDownrange(). WEBCAST_URL ${c.webcastUrl ? 'is set' : 'is not set'}.`,
+    `Not implemented (no OCR here). A script that reads the T+/velocity/altitude overlay of a webcast (ffmpeg + tesseract) can already feed the server: POST [{tSec, altKm, speedKmS}] to /api/telemetry/<launch id> (localhost only, see README "Ascent telemetry"); rows go through reconstructDownrange() and replace the modeled path. WEBCAST_URL ${c.webcastUrl ? 'is set' : 'is not set'}.`,
 };

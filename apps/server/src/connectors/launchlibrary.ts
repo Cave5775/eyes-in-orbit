@@ -1,15 +1,14 @@
-import { deriveMissionState, type CompositeSegment, type Launch, type StreamLink } from '@eio/core';
+import { deriveMissionState, type Launch, type LiveAscent, type StreamLink } from '@eio/core';
 import type { Connector } from '../connector';
 import type { Hub, NewEntity } from '../hub';
-import { matchTrajectory, trajectorySamples, type Trajectory } from '../trajectory';
+import { planAscent } from '../telemetry';
+import { matchTrajectory, type Trajectory } from '../trajectory';
 
 const POLL_MS = 10 * 60_000;
 const PHASE_TICK_MS = 15_000;
 const UPCOMING_TTL_MS = 9 * 60_000;
 /** past launches change rarely; a longer TTL keeps the anonymous tier (~15 req/h) comfortable */
 const PREVIOUS_TTL_MS = 55 * 60_000;
-const DAY_MS = 86_400_000;
-
 type Json = Record<string, any>;
 
 export function streamKind(url: string): StreamLink['kind'] {
@@ -47,6 +46,13 @@ const num = (v: unknown): number | undefined => {
   return Number.isFinite(n) ? n : undefined;
 };
 
+/** First-stage recovery plan from `rocket.launcher_stage[0].landing` (detailed mode), if present. */
+function normalizeLanding(raw: Json): Launch['landing'] {
+  const l = raw.rocket?.launcher_stage?.[0]?.landing;
+  if (!l || typeof l.attempt !== 'boolean') return undefined;
+  return { attempt: l.attempt, location: l.location?.abbrev ?? undefined, type: l.type?.abbrev ?? undefined };
+}
+
 export function normalizeLaunch(raw: Json, nowMs = Date.now()): Launch {
   const status = raw.status ?? {};
   const orbit = raw.mission?.orbit;
@@ -70,27 +76,26 @@ export function normalizeLaunch(raw: Json, nowMs = Date.now()): Launch {
       : undefined,
     streams: normalizeStreams(raw, nowMs),
     image: typeof raw.image === 'string' ? raw.image : raw.image?.image_url ?? undefined,
+    landing: normalizeLanding(raw),
     phase: state.phase,
     hold: state.hold,
     entityId: `launch-${raw.id}`,
   };
 }
 
-/** `launch-<id>` entity: geodetic at the pad, or pad -> sampled ascent composite when a trajectory exists. */
-export function launchEntity(launch: Launch, trajectory?: Trajectory): NewEntity {
-  const netMs = Date.parse(launch.net);
+/**
+ * `launch-<id>` entity. Provider: geodetic at the pad, or a pad -> ascent composite from (in order)
+ * measured telemetry (`live`), a trajectory file, or the nominal Falcon 9 model (see `telemetry.ts`).
+ * `attrs.trajectorySource` says which: `live`, `file` or `modeled` (null: pad only).
+ */
+export function launchEntity(launch: Launch, trajectory?: Trajectory, live?: LiveAscent): NewEntity {
   const pad = launch.pad;
   let provider: NewEntity['provider'];
+  const plan = planAscent(launch, trajectory, live);
   if (pad) {
-    const geodetic = { type: 'geodetic', bodyId: 'EARTH', latDeg: pad.latitude, lonDeg: pad.longitude, altKm: 0 } as const;
-    if (trajectory && Number.isFinite(netMs)) {
-      const samples = trajectorySamples(trajectory, { latDeg: pad.latitude, lonDeg: pad.longitude }, netMs);
-      const segments: CompositeSegment[] = [
-        { fromMs: netMs - 30 * DAY_MS, toMs: netMs - 1, phase: 'pad', spec: geodetic },
-        { fromMs: netMs, toMs: samples[samples.length - 1][0], phase: 'ascent', spec: { type: 'sampled', frame: 'EARTH:fixed', samples } },
-      ];
-      provider = { type: 'composite', segments };
-    } else provider = geodetic;
+    provider = plan.segments
+      ? { type: 'composite', segments: plan.segments }
+      : { type: 'geodetic', bodyId: 'EARTH', latDeg: pad.latitude, lonDeg: pad.longitude, altKm: 0 };
   }
   return {
     id: launch.entityId,
@@ -101,6 +106,7 @@ export function launchEntity(launch: Launch, trajectory?: Trajectory): NewEntity
     group: 'launches',
     provider,
     phase: launch.phase,
+    events: plan.events,
     links: { streams: launch.streams, newsQuery: launch.mission?.name ?? launch.name, launchId: launch.id },
     render: { colorKey: 'vehicle', glyph: 'triangle', label: true },
     attrs: {
@@ -113,6 +119,13 @@ export function launchEntity(launch: Launch, trajectory?: Trajectory): NewEntity
       net: launch.net,
       hold: launch.hold,
       trajectory: trajectory?.id ?? null,
+      trajectorySource: plan.source,
+      trajectoryNote: plan.source === 'modeled' ? 'MODELED nominal ascent, not measured' : plan.source === 'live' ? 'measured rows posted to /api/telemetry' : null,
+      ascentInclinationDeg: plan.source === 'modeled' ? plan.modeled?.inclinationDeg ?? null : null,
+      ascentAzimuthDeg: plan.azimuthDeg ?? null,
+      liveRows: live?.rows.length ?? null,
+      liveLastTSec: live?.rows.length ? live.rows[live.rows.length - 1].tSec : null,
+      liveExtrapolatedFromSec: plan.extrapolatedFromSec,
     },
   };
 }
@@ -127,7 +140,7 @@ export function syncLaunchEntities(hub: Hub, nowMs = Date.now()): void {
     return { ...l, phase: state.phase, hold: state.hold };
   });
   if (phaseChanged) hub.setLaunches(launches);
-  hub.upsert(...(phaseChanged ? launches : hub.launches).map((l) => launchEntity(l, matchTrajectory(hub.trajectories, l))));
+  hub.upsert(...(phaseChanged ? launches : hub.launches).map((l) => launchEntity(l, matchTrajectory(hub.trajectories, l), hub.liveTelemetry.get(l.id))));
 }
 
 let phaseTimer: NodeJS.Timeout | undefined;

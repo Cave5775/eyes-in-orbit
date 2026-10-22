@@ -36,6 +36,14 @@ export class Store {
       .run(key, JSON.stringify(value), fetchedAt, ttlMs);
   }
 
+  /** Rows whose key starts with `prefix` (no SQL wildcards are expected in prefixes). */
+  list<T = unknown>(prefix: string): { key: string; row: CacheRow<T> }[] {
+    const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
+    const rows = this.db.prepare("SELECT key, value, fetchedAt, ttl FROM kv WHERE key LIKE ? ESCAPE '\\'").all(`${escaped}%`) as
+      { key: string; value: string; fetchedAt: number; ttl: number }[];
+    return rows.map((r) => ({ key: r.key, row: { value: JSON.parse(r.value) as T, fetchedAt: r.fetchedAt, ttlMs: r.ttl } }));
+  }
+
   delete(key: string): void {
     this.db.prepare('DELETE FROM kv WHERE key = ?').run(key);
   }

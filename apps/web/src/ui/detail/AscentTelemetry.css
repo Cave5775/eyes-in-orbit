@@ -1,0 +1,66 @@
+/* Ascent telemetry section of the Launch tab. Colours come from the app's CSS variables. */
+.at { --at-modeled: var(--accent); --at-live: var(--ok); --at-file: var(--c-probe); padding-bottom: 6px; }
+.at-chips { padding: 0 12px 6px; }
+.at-note { margin: 4px 12px; font-size: 11px; }
+.at-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.at-readouts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 8px; padding: 2px 12px 6px; }
+.at-readouts.plan { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.at-cell { display: flex; flex-direction: column; min-width: 0; }
+.at-lab { font-size: 9.5px; letter-spacing: 0.1em; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.at-val { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.at-src { grid-column: 1 / -1; font-size: 9.5px; letter-spacing: 0.1em; min-height: 12px; }
+
+.at-legend { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 2px 12px 4px; font-size: 10.5px; color: var(--dim); }
+.at-sw { display: inline-block; width: 18px; height: 0; border-top: 2px solid currentColor; vertical-align: middle; margin-right: 5px; }
+.at-sw.dash { border-top-style: dashed; }
+.at-sw.at-modeled { color: var(--at-modeled); }
+.at-sw.at-live { color: var(--at-live); }
+.at-sw.at-file { color: var(--at-file); }
+.at-sw.cursor { color: var(--text); border-top-width: 1px; }
+
+.at-chart { margin: 0; padding: 2px 12px 4px; }
+.at-chart figcaption { font-size: 10px; letter-spacing: 0.12em; color: var(--text); display: flex; gap: 4px; align-items: baseline; padding-bottom: 1px; }
+.at-chart svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; }
+.at-grid { stroke: var(--line); stroke-width: 1; }
+.at-axis { fill: var(--dim); font: 9px var(--mono); }
+.at-evtick { stroke: var(--line-2); stroke-width: 1; stroke-dasharray: 1 3; }
+.at-line { stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.at-line.at-modeled { stroke: var(--at-modeled); }
+.at-line.at-modeled.dash { stroke-dasharray: 4 3; stroke-width: 1.3; opacity: 0.85; }
+.at-line.at-live { stroke: var(--at-live); stroke-width: 2; }
+.at-line.at-file { stroke: var(--at-file); }
+.at-pt { fill: var(--at-live); stroke: var(--panel); stroke-width: 1; }
+.at-hover { stroke: var(--dim); stroke-width: 1; }
+.at-cursor line, .at-cursor-line { stroke: var(--text); stroke-width: 1; opacity: 0.85; }
+.at-cursor circle { fill: var(--text); stroke: var(--panel); stroke-width: 2; }
+.at-tip { fill: var(--text); font: 10px var(--mono); paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
+
+.at-band { fill: var(--accent); opacity: 0.12; }
+.at-band.on { opacity: 0.38; stroke: var(--accent); stroke-width: 1; }
+.at-bandlab { fill: var(--dim); font: 8.5px var(--sans); letter-spacing: 0.08em; }
+.at-bandlab.on { fill: var(--text); }
+.at-ev line { stroke: var(--dim); stroke-width: 1; }
+.at-ev text { fill: var(--dim); font: 9px var(--mono); }
+.at-ev circle { fill: var(--panel); stroke: var(--dim); stroke-width: 1.5; }
+.at-ev.past text { fill: var(--text); }
+.at-ev.past line { stroke: var(--text); }
+.at-ev.past circle { fill: var(--c-vehicle); stroke: var(--c-vehicle); }
+
+.at-events { width: calc(100% - 24px); margin: 4px 12px 0; border-collapse: collapse; font-size: 11px; }
+.at-events th, .at-events td { text-align: left; padding: 1px 4px 1px 0; font-weight: 400; white-space: nowrap; }
+.at-events thead th { color: var(--dim); font-size: 9.5px; letter-spacing: 0.1em; border-bottom: 1px solid var(--line); }
+.at-events tr.past th, .at-events tr.past td { color: var(--text); }
+.at-events tr:not(.past) th, .at-events tr:not(.past) td.mono { color: var(--dim); }
+
+.at-data { margin: 4px 12px 0; font-size: 11px; }
+.at-data summary { cursor: pointer; color: var(--dim); }
+.at-data table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.at-data th, .at-data td { text-align: right; padding: 1px 4px; font-weight: 400; }
+.at-data thead th { color: var(--dim); font-size: 9.5px; border-bottom: 1px solid var(--line); }
+.at-data tbody th { text-align: left; color: var(--dim); }
+
+@media (forced-colors: active) {
+  .at-line.at-modeled.dash { stroke-dasharray: 4 3; }
+  .at-line.at-live { stroke-width: 3; }
+}

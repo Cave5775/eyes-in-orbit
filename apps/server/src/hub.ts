@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import {
   EntityGraph, type Article, type ConnectorHealth, type DsnSnapshot, type EntityRecord, type IssFix, type Launch,
-  type TelemetryPoint,
+  type LiveAscent, type TelemetryPoint,
 } from '@eio/core';
 import type { Trajectory } from './trajectory';
 
@@ -21,6 +21,8 @@ export class Hub extends EventEmitter {
   readonly telemetry = new Map<string, TelemetryPoint>();
   /** ascent trajectories loaded from data/trajectories */
   trajectories: Trajectory[] = [];
+  /** measured ascent rows posted to POST /api/telemetry/:launchId, by LL2 launch id */
+  readonly liveTelemetry = new Map<string, LiveAscent>();
   readonly health = new Map<string, ConnectorHealth>();
 
   private topics = new Map<string, number>();

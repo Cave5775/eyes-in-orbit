@@ -98,20 +98,50 @@ describe('launch entity provider', () => {
     't.json',
   );
 
-  it('is geodetic at the pad without a trajectory', () => {
-    const e = launchEntity(launch());
+  it('is geodetic at the pad for vehicles the ascent model does not cover', () => {
+    const e = launchEntity({ ...launch(), vehicle: 'Ariane 64', name: 'Ariane 6 | CSO-4' });
     expect(e).toMatchObject({
       id: launch().entityId, kind: 'launch_vehicle', bodyId: 'EARTH', phase: 'SCHEDULED',
       provider: { type: 'geodetic', latDeg: 34.632, lonDeg: -120.611, altKm: 0 },
       links: { launchId: launch().id, newsQuery: 'Starlink Group 15-15' },
-      attrs: { provider: 'SpaceX', vehicle: 'Falcon 9 Block 5', orbit: 'LEO', status: 'Go for Launch' },
+      attrs: { provider: 'SpaceX', orbit: 'LEO', status: 'Go for Launch', trajectorySource: null },
     });
+    expect(e.events).toBeUndefined();
     expect(e.links!.streams).toHaveLength(3);
+  });
+
+  it('attaches the modeled Falcon 9 ascent and its events when no trajectory file matches', () => {
+    const e = launchEntity(launch());
+    expect(e.provider!.type).toBe('composite');
+    expect(e.attrs).toMatchObject({ trajectorySource: 'modeled', trajectory: null, vehicle: 'Falcon 9 Block 5', ascentInclinationDeg: 70 });
+    const names = e.events!.map((ev) => ev.name);
+    expect(names).toEqual(expect.arrayContaining(['LIFTOFF', 'MAX_Q', 'MECO', 'STAGE_SEP', 'SES', 'FAIRING_SEP', 'SECO', 'LANDING']));
+    expect(e.events!.find((ev) => ev.name === 'MECO')!.tMs).toBe(NET + 150_000);
+    expect(e.events!.every((ev, i, a) => i === 0 || ev.tMs >= a[i - 1].tMs)).toBe(true);
+
+    const p = providerFromSpec(e.provider!) as CompositeProvider;
+    expect(p.segmentAt(NET - 5000)!.phase).toBe('pad');
+    expect(p.segmentAt(NET + 60_000)!.phase).toBe('stage 1 ascent');
+    expect(p.segmentAt(NET + 300_000)!.phase).toBe('stage 2 burn');
+    const g = stateToGeodetic(p.stateAt(NET + 150_000)!, NET + 150_000, 'EARTH');
+    expect(g.alt).toBeGreaterThan(60);
+    expect(g.alt).toBeLessThan(80);
+    expect(g.lat / DEG).toBeLessThan(34.632); // southbound from Vandenberg
+  });
+
+  it('reads the booster recovery plan from LL2', () => {
+    const stage = (landing: unknown) => ({ ...raw(), rocket: { ...raw().rocket, launcher_stage: [{ landing }] } });
+    expect(launch().landing).toBeUndefined(); // the fixture has no launcher_stage
+    expect(normalizeLaunch(stage({ attempt: true, location: { abbrev: 'OCISLY' }, type: { abbrev: 'ASDS' } })).landing)
+      .toEqual({ attempt: true, location: 'OCISLY', type: 'ASDS' });
+    expect(normalizeLaunch(stage({ attempt: false })).landing).toEqual({ attempt: false, location: undefined, type: undefined });
   });
 
   it('becomes a pad -> sampled ascent composite when a trajectory matches', () => {
     const e = launchEntity(launch(), trajectory);
     expect(e.provider!.type).toBe('composite');
+    expect(e.attrs).toMatchObject({ trajectory: 't', trajectorySource: 'file' });
+    expect(e.events).toBeUndefined();
     const p = providerFromSpec(e.provider!) as CompositeProvider;
     expect(p.segmentAt(NET - 5000)!.phase).toBe('pad');
     expect(p.segmentAt(NET + 30_000)!.phase).toBe('ascent');

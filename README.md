@@ -13,7 +13,7 @@ Monorepo (npm workspaces): `packages/core` (`@eio/core`, shared model), `apps/se
 - **Launch filter**: a searchable list of launch groups (objects that share a launch, derived from the COSPAR designator `YYYY-NNN`, only groups with 2 or more members, largest first; type `2251`, `cosmos` or `1993-036`). Selecting one filters the entity list and the globe. SHOW ONLY hides everything else, HIGHLIGHT dims it; members are drawn larger. A chip shows the active group and clears it. Selecting a group also calls `runtime.onFitRequest?.(ids)` so the camera can frame the members once a fit handler is installed (none is wired yet). Example: pick COSMOS 2251 to see its debris cloud at once.
 - **Detail panel** with tabs:
   - Telemetry: lat/lon/altitude, geocentric range, speed, period, phase, element age, confidence, attributes, identifiers; ISS live fix and telemetry; the current DSN link for DSN-tracked probes.
-  - Launch (launch entities only): countdown, status, phase, window, provider, vehicle, mission, pad.
+  - Launch (launch entities only): countdown, status, phase, window, provider, vehicle, mission, pad, and for Falcon 9 an [ascent telemetry](#ascent-telemetry) section (modeled or measured altitude, speed and downrange charts, event timeline).
   - Stream (when the entity or its launch has streams): YouTube links are embedded; NASA TV, X and other links open in a new tab.
   - News: Spaceflight News articles for the object (`links.newsQuery` or name), or all spaceflight.
 - **Launch board**: upcoming launches (plus the last 2 hours) with live countdowns, LL2 status and derived mission phase. Click a card to select the launch entity or fly to its pad.
@@ -88,17 +88,19 @@ All variables are optional. Copy `.env.example` to `.env` (git-ignored, read fro
 | `iss-rest` | wheretheiss.at | 1 Hz, only while topic `iss` has subscribers | ISS live fix | wired |
 | `iss-live` | Lightstreamer ISSLIVE over WebSocket | reconnect every 5 s, only while topic `iss` has subscribers | ISS telemetry points | wired, labels unverified |
 | `flightclub` | local files in `data/trajectories/` | rescanned every 30 s, no network | ascent trajectories for launches | wired (file import; Flight Club has no stable public API) |
+| `ascent model` (in `launchlibrary` / core) | parametric nominal Falcon 9 ascent (`packages/core/src/ascent-model.ts`) | recomputed with each launch sync, no network | modeled ascent path, `events` and `trajectorySource: 'modeled'` for every Falcon 9 launch without a trajectory file | wired, MODELED (not measured) |
+| `POST /api/telemetry/:launchId` | rows posted by a script or by hand | on demand, localhost only | measured ascent series, replaces the modeled path (`trajectorySource: 'live'`) | wired; see [Ascent telemetry](#ascent-telemetry) |
 | `demo` | generated | every 20 min | demo entities | wired, no network |
 | `spacetrack` | Space-Track SATCAT/GP | none | none | stub |
 | `satnogs` | SatNOGS observations | none | none | stub |
 | `notam` | FAA NOTAM / NGA NAVAREA hazard areas | none | none | stub |
-| `webcast-ocr` | OCR of webcast T+/altitude overlay | none | none | stub |
+| `webcast-ocr` | OCR of webcast T+/altitude overlay | none | none | stub (no OCR; a script can already feed `POST /api/telemetry/:launchId`) |
 
 Stubs report status `stub` in `/api/health` and never run. Feed background lives in `spaceflight_live_data_streams_reference.md`.
 
 ## API
 
-REST under `/api` (health, entities, entity by id, search, launches, news, dsn, iss, bodies) and a JSON WebSocket at `/stream` that pushes `entities.changed`, `launches`, `news`, `dsn`, `health` and, for subscribers of the `iss` topic, `iss.fix` and `iss.telemetry`. Routes, query parameters, message types and entity conventions are specified in [`docs/CONTRACT.md`](docs/CONTRACT.md); shared types are in `packages/core/src/{types,feeds}.ts`.
+REST under `/api` (health, entities, entity by id, search, launches, news, dsn, iss, bodies, telemetry) and a JSON WebSocket at `/stream` that pushes `entities.changed`, `launches`, `news`, `dsn`, `health` and, for subscribers of the `iss` topic, `iss.fix` and `iss.telemetry`. Routes, query parameters, message types and entity conventions are specified in [`docs/CONTRACT.md`](docs/CONTRACT.md); shared types are in `packages/core/src/{types,feeds}.ts`.
 
 ## Trajectory files
 
@@ -127,6 +129,34 @@ Rules (see the format comment at the top of `apps/server/src/trajectory.ts`):
 - Every row needs either `downrangeKm`, or `speedKmS` (downrange is then integrated from speed and altitude rate).
 - `azimuthDeg` defaults to 90 (due east).
 
+## Ascent telemetry
+
+Launch entities of **Falcon 9** launches (not Falcon Heavy) get an ascent path and an event timeline even though no open ascent telemetry exists (reference doc, section 2). Three sources, in order of precedence, reported as `attrs.trajectorySource`:
+
+| `trajectorySource` | What it is | Measured? |
+|---|---|---|
+| `live` | rows posted to `POST /api/telemetry/:launchId` | yes, as accurate as whoever posts them |
+| `file` | a file in `data/trajectories/` (Flight Club export, hand-made) | no |
+| `modeled` | the parametric nominal ascent in `packages/core/src/ascent-model.ts` | **no, a model** |
+
+**Modeled ascent.** Built from typical Falcon 9 / Starlink webcast figures: max-Q at about T+1:10 (12 km, 0.42 km/s), MECO at about T+2:30 (68 km, 2.3 km/s Earth-relative), stage separation 3 s and second-stage ignition 8 s after MECO, fairing at T+3:30, SECO-1 at about T+8:30 (165 km, about 7.6 km/s), booster entry burn, landing burn and touchdown (droneship about T+8:20, RTLS about T+7:45; the recovery plan comes from LL2 `launcher_stage[0].landing`). The launch azimuth follows from the target inclination and pad latitude (`sin Az = cos i / cos lat`, southward branch for Vandenberg, corrected for the Earth's rotation); the inclination comes from the launch description, a per-Starlink-group table (group 15 is the 70 degree shell) or a per-orbit and per-site default, and the used value is shown in the Launch tab. Downrange is integrated from speed and altitude rate with `reconstructDownrange`. After SECO the state is held for 10 minutes (a placeholder; the real orbit rises towards apogee), then the entity returns to the pad marker. Real flights differ by tens of seconds and a few percent. Everything in the UI is labelled MODELED until real rows arrive.
+
+**Ingest.** Send measured rows (for example from a webcast OCR script or typed by hand):
+
+```
+curl -X POST http://localhost:8787/api/telemetry/<LL2 launch id> -H "content-type: application/json" -d '[
+  {"tSec": 0,  "altKm": 0,    "speedKmS": 0},
+  {"tSec": 60, "altKm": 8.4,  "speedKmS": 0.38},
+  {"tSec": 120,"altKm": 38.0, "speedKmS": 1.25}
+]'
+```
+
+`tSec` is seconds since liftoff (T+0 is the launch NET), `altKm` kilometres, `speedKmS` the Earth-relative speed in km/s (convert km/h by dividing by 3600). Rows are validated (finite numbers, `tSec` 0..7200, `altKm` -0.5..2000, `speedKmS` 0..15, at most 2000 rows per request, 7200 stored) and merged by `tSec`, so a script can post a row or a batch every second; add `"replace": true` to start over. The object form `{"rows": [...], "events": [{"name": "MECO", "tSec": 151}], "azimuthDeg": 158, "source": "webcast OCR", "replace": false}` also reports events (names `A-Z0-9_`, e.g. `MECO`, `SECO`, `STAGE_SEP`, `LANDING`; they replace the modeled time of the same name) and an azimuth (default: the modeled one). Downrange is integrated from the rows; the path is measured up to the last row and then follows the modeled shape re-anchored at the last measured point (reported as `liveExtrapolatedFromSec` and a lower sample `confidence`), or holds the last fix when the launch has no model. The call answers with `{ok, source, rows, lastTSec, extrapolatedFromSec}` and the server pushes `entities.changed`. `DELETE /api/telemetry/:launchId` clears the series. Posting and deleting are accepted from localhost sockets only (and only without a foreign `Origin`); rows are kept in memory and in the SQLite cache (7 days) so they survive a restart. `GET /api/telemetry/:launchId` returns `{launchId, entityId, liftoffMs, source, modeled, file, live}` (the modeled series with events and phases next to the posted rows).
+
+**UI.** The Launch tab ends with an ASCENT TELEMETRY section: altitude, speed and downrange charts against T+ (modeled dashed once measured rows exist, measured solid), a cursor that follows the simulation clock (scrub, pause, rate), event markers (MAX-Q, MECO, SEP, SES, FAIRING, SECO and the booster ENTRY, LAND BURN, LANDING) with the current phase highlighted, readouts at the cursor, an events table and a data table. Before liftoff it shows the countdown and the nominal MAX-Q, MECO and SECO values. On the globe the same path is drawn by the usual path overlay with phase labels (stage 1 ascent, staging, stage 2 burn, orbit (held)). Try it offline with `?mock=1` (a Starlink Group 15-15 launch from Vandenberg about 40 minutes ahead): scrub to its NET plus 4 minutes.
+
+**Limits.** There is no OCR here (the `webcast-ocr` connector stays a stub). The model knows nothing about the actual payload mass, trajectory shaping or weather, its inclination for a given mission can be wrong when the provider data does not state it, and non-Falcon vehicles have no modeled ascent (they stay at the pad unless a trajectory file or posted rows exist). A launch id that LL2 no longer lists (older than the previous-10 window) cannot receive rows.
+
 ## Architecture
 
 ```
@@ -151,14 +181,14 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Testing
 
-`npm test` runs Vitest (201 tests in 19 files, no network). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). The three.js scene itself is checked by hand in a browser. `npm run typecheck` checks all three packages.
+`npm test` runs Vitest (268 tests in 22 files, no network; includes the ascent model, the telemetry ingest and the chart helpers). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). The three.js scene itself is checked by hand in a browser. `npm run typecheck` checks all three packages.
 
 ## Project layout
 
 | Path | Purpose |
 |---|---|
-| `packages/core/src` | `types`, `bodies`, `frames`, `launch-group`, `kepler`, `ephemeris`, `clock`, `mission-fsm`, `entity-graph`, `ascent`, `feeds` (wire types), `providers/` |
-| `apps/server/src` | `main`, `config`, `connector` (scheduler), `http`, `store`, `hub`, `api`, `ws`, `search`, `trajectory`, `connectors/` |
+| `packages/core/src` | `types`, `bodies`, `frames`, `launch-group`, `kepler`, `ephemeris`, `clock`, `mission-fsm`, `entity-graph`, `ascent`, `ascent-model`, `feeds` (wire types), `providers/` |
+| `apps/server/src` | `main`, `config`, `connector` (scheduler), `http`, `store`, `hub`, `api`, `ws`, `search`, `trajectory`, `telemetry` (ascent ingest and source selection), `connectors/` |
 | `apps/web/src` | `App.tsx`, `ui/` (panels, `Splitter`, `ui/detail/` tabs), `scene/` (three.js: `SceneController`, `controls` camera rig, `PathOverlay`, `overlays`, `materials`), `workers/`, `state/`, `api/`, `lib/` (formatting, filters and launch groups, deep-space, `camera`, `paths`, `related`), `mock/` |
 | `data/` | `cache.sqlite` (git-ignored) and `trajectories/` |
 | `docs/CONTRACT.md` | Server/web API contract |

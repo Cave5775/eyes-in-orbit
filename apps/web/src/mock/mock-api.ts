@@ -1,7 +1,7 @@
 import type { Api } from '../api/types';
 import { rankEntities } from '../lib/filters';
 import {
-  mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockSatellites,
+  mockAscentSeries, mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockSatellites,
 } from './generators';
 
 /** Offline stand-in for the server: same shapes as the REST contract, synthesised in memory. */
@@ -26,5 +26,9 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
       telemetry: mockIssTelemetry(Date.now()),
     }),
     health: async () => ({ serverTime: Date.now(), entityCount: entities.length, connectors: mockHealth(Date.now()) }),
+    ascent: async (launchId) => {
+      const launch = launches.find((l) => l.id === launchId);
+      return launch ? mockAscentSeries(launch) : null;
+    },
   };
 }

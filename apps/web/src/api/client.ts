@@ -1,4 +1,4 @@
-import type { Article, Launch, ServerMessage } from '@eio/core';
+import type { Article, AscentSeries, Launch, ServerMessage } from '@eio/core';
 import { isIss } from '../lib/entity';
 import { createMockApi } from '../mock/mock-api';
 import { useStore } from '../state/store';
@@ -26,6 +26,7 @@ export const restApi: Api = {
   dsn: () => getJson('/api/dsn'),
   iss: () => getJson('/api/iss'),
   health: () => getJson('/api/health', 4_000),
+  ascent: (launchId) => getJson<AscentSeries>(`/api/telemetry/${encodeURIComponent(launchId)}`, 8_000).catch(() => null),
 };
 
 /** Active data source: the REST client, or the offline mock when the API is unreachable (or `?mock=1`). */

@@ -1,7 +1,7 @@
 import {
-  DEG, EARTH, LL2_STATUS, Sgp4Provider, convert, deriveMissionState, enuBasis, geodeticToFixed, stateToGeodetic,
-  sunDirectionEci,
-  type Article, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
+  DEG, EARTH, LL2_STATUS, Sgp4Provider, ascentEntityEvents, convert, deriveMissionState, enuBasis, geodeticToFixed,
+  modeledAscentForLaunch, modeledAscentSegments, stateToGeodetic, sunDirectionEci,
+  type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
 } from '@eio/core';
 
@@ -212,6 +212,7 @@ interface LaunchDef {
 const LAUNCH_DEFS: LaunchDef[] = [
   { key: 'm01', name: 'Falcon 9 Block 5 | Starlink Group 10-31', provider: 'SpaceX', vehicle: 'Falcon 9 Block 5', mission: { name: 'Starlink Group 10-31', type: 'Communications', orbit: 'Low Earth Orbit', description: 'A batch of Starlink broadband satellites.' }, pad: 'vsfb', offsetMs: -3 * HOUR, statusId: LL2_STATUS.SUCCESS, statusName: 'Launch Successful', abbrev: 'Success' },
   { key: 'm02', name: 'Falcon 9 Block 5 | Crew-14', provider: 'SpaceX', vehicle: 'Falcon 9 Block 5', mission: { name: 'Crew-14', type: 'Human Exploration', orbit: 'Low Earth Orbit', description: 'Crew rotation to the ISS.' }, pad: 'kscA', offsetMs: 12 * MIN, statusId: LL2_STATUS.GO, statusName: 'Go for Launch', abbrev: 'Go' },
+  { key: 'm07', name: 'Falcon 9 Block 5 | Starlink Group 15-15', provider: 'SpaceX', vehicle: 'Falcon 9 Block 5', mission: { name: 'Starlink Group 15-15', type: 'Communications', orbit: 'Low Earth Orbit', description: 'A batch of 27 satellites for the Starlink mega-constellation - SpaceX\'s project for space-based Internet communication system.' }, pad: 'vsfb', offsetMs: 40 * MIN, statusId: LL2_STATUS.GO, statusName: 'Go for Launch', abbrev: 'Go' },
   { key: 'm03', name: 'Ariane 6 | CSO-4', provider: 'Arianespace', vehicle: 'Ariane 64', mission: { name: 'CSO-4', type: 'Earth Science', orbit: 'Sun-Synchronous Orbit', description: 'French military optical reconnaissance satellite.' }, pad: 'kou', offsetMs: 5 * HOUR + 20 * MIN, statusId: LL2_STATUS.GO, statusName: 'Go for Launch', abbrev: 'Go' },
   { key: 'm04', name: 'Soyuz 2.1a | Progress MS-35', provider: 'Roscosmos', vehicle: 'Soyuz 2.1a', mission: { name: 'Progress MS-35', type: 'Resupply', orbit: 'Low Earth Orbit', description: 'Cargo resupply to the ISS.' }, pad: 'bkn', offsetMs: 30 * HOUR, statusId: LL2_STATUS.TBC, statusName: 'To Be Confirmed', abbrev: 'TBC' },
   { key: 'm05', name: 'Starship | Flight 14', provider: 'SpaceX', vehicle: 'Starship', mission: { name: 'Starship Flight 14', type: 'Test Flight', orbit: 'Suborbital', description: 'Integrated flight test.' }, pad: 'stbs', offsetMs: 3 * DAY + 2 * HOUR, statusId: LL2_STATUS.TBD, statusName: 'To Be Determined', abbrev: 'TBD' },
@@ -233,17 +234,38 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
       net: new Date(net).toISOString(), windowStart: new Date(net).toISOString(), windowEnd: new Date(net + 30 * MIN).toISOString(),
       provider: d.provider, vehicle: d.vehicle, mission: d.mission, pad, streams, phase: state.phase, hold: state.hold, entityId,
     });
+    // Falcon 9 launches get the same MODELED nominal ascent the server attaches (composite: pad, then ascent samples)
+    const modeled = modeledAscentForLaunch(launches[launches.length - 1]);
     entities.push({
       id: entityId, name: d.name, kind: 'launch_vehicle', bodyId: 'EARTH', aliases: { ll2: id }, group: 'launch',
-      provider: { type: 'geodetic', bodyId: 'EARTH', latDeg: pad.latitude, lonDeg: pad.longitude, altKm: 0.01 },
+      provider: modeled
+        ? { type: 'composite', segments: modeledAscentSegments(net, { latDeg: pad.latitude, lonDeg: pad.longitude }, modeled) }
+        : { type: 'geodetic', bodyId: 'EARTH', latDeg: pad.latitude, lonDeg: pad.longitude, altKm: 0.01 },
       phase: state.phase, links: { streams, newsQuery: d.mission?.name ?? d.name, launchId: id },
+      events: modeled ? ascentEntityEvents(modeled.events, net) : undefined,
       render: { colorKey: 'vehicle', glyph: 'triangle', label: true },
-      attrs: { provider: d.provider, vehicle: d.vehicle, orbit: d.mission?.orbit ?? null, pad: pad.name, status: d.statusName },
+      attrs: {
+        provider: d.provider, vehicle: d.vehicle, orbit: d.mission?.orbit ?? null, pad: pad.name, status: d.statusName,
+        trajectorySource: modeled ? 'modeled' : null,
+        trajectoryNote: modeled ? 'MODELED nominal ascent, not measured' : null,
+        ascentInclinationDeg: modeled?.inclinationDeg ?? null,
+        ascentAzimuthDeg: modeled?.azimuthDeg ?? null,
+      },
       updatedAt: nowMs,
     });
   }
   launches.sort((a, b) => Date.parse(a.net) - Date.parse(b.net));
   return { launches, entities };
+}
+
+/** Offline stand-in for `GET /api/telemetry/:launchId`: the modeled series, nothing measured. */
+export function mockAscentSeries(launch: Launch): AscentSeries | null {
+  const modeled = modeledAscentForLaunch(launch);
+  if (!modeled) return null;
+  return {
+    launchId: launch.id, entityId: launch.entityId, liftoffMs: Date.parse(launch.net),
+    source: 'modeled', modeled, file: null, live: null,
+  };
 }
 
 // ---------------------------------------------------------------- deep space / ground / demo
