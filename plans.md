@@ -12,7 +12,8 @@
 - [x] Better camera controls: align with the planetary surface, zoom according to altitude, fit associated objects
 - [ ] Realistic distance projection
 - [ ] Unrender objects outside of reasonable view or scope of the current focus object
-- [ ] try implementing data stream visualization for the upcoming starlink group 15-15 launch (or 15-16 if too late)
+- [x] try implementing data stream visualization for the upcoming starlink group 15-15 launch (or 15-16 if too late)
+  - Delivered as modeled Falcon 9 ascent charts plus a telemetry ingest endpoint; no open live telemetry source exists, so measured data needs a feed (webcast OCR is still a stub)
 - [ ] 3D models for (some?) objects. Try implementing the ISS and making use of its special data streams for solar array angles.
 - [x] Livestreams can be popped out and dragged around within the interface
 

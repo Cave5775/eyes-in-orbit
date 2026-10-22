@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import compress from '@fastify/compress';
 import cors from '@fastify/cors';
 import Fastify from 'fastify';
-import { registerApi } from './api';
+import { loadLiveTelemetry, registerApi } from './api';
 import { loadConfig, loadDotEnv } from './config';
 import { Scheduler, type Connector } from './connector';
 import { celestrak } from './connectors/celestrak';
@@ -36,7 +36,8 @@ async function main(): Promise<void> {
   const app = Fastify({ logger: { level: 'warn' } });
   await app.register(cors, { origin: true });
   await app.register(compress, { global: true, threshold: 1024 });
-  registerApi(app, hub, http);
+  loadLiveTelemetry(hub, store);
+  registerApi(app, hub, http, store);
   await registerStream(app, hub);
 
   await app.listen({ port: config.port, host: config.host });

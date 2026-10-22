@@ -15,6 +15,8 @@ export interface Launch {
   pad?: { name: string; latitude: number; longitude: number; location?: string; countryCode?: string };
   streams: StreamLink[];
   image?: string;
+  /** first-stage recovery plan (LL2 `launcher_stage[0].landing`), when known */
+  landing?: { attempt: boolean; location?: string; type?: string };
   phase: MissionPhase;
   hold: boolean;
   /** entity id of the launch vehicle entity */
