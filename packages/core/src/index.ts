@@ -10,3 +10,4 @@ export * from './entity-graph';
 export * from './providers';
 export * from './feeds';
 export * from './ascent';
+export * from './launch-group';

@@ -2,8 +2,8 @@ import { create } from 'zustand';
 import type {
   Article, ClockSnapshot, ConnectorHealth, DsnSnapshot, EntityRecord, IssFix, Launch, TelemetryPoint,
 } from '@eio/core';
-import { NO_FILTERS, toggled, type Filters, type SearchHit } from '../lib/filters';
-import { clock } from './runtime';
+import { NO_FILTERS, toggled, type Filters, type LaunchMode, type SearchHit } from '../lib/filters';
+import { clock, runtime } from './runtime';
 
 export type ConnState = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'mock';
 
@@ -46,6 +46,9 @@ interface State {
   setSearchResults(r: SearchHit[] | null): void;
   toggleKind(kind: string): void;
   toggleGroup(group: string): void;
+  /** Select a launch group (`YYYY-NNN`) or clear it with null; `memberIds` are passed to `runtime.onFitRequest`. */
+  setLaunchFilter(launchId: string | null, memberIds?: string[]): void;
+  setLaunchMode(mode: LaunchMode): void;
   clearFilters(): void;
   setLaunches(l: Launch[]): void;
   setNews(n: Article[]): void;
@@ -95,7 +98,12 @@ export const useStore = create<State>((set, get) => ({
   setSearchResults: (searchResults) => set({ searchResults }),
   toggleKind: (k) => set((s) => ({ filters: { ...s.filters, kinds: toggled(s.filters.kinds, k) } })),
   toggleGroup: (g) => set((s) => ({ filters: { ...s.filters, groups: toggled(s.filters.groups, g) } })),
-  clearFilters: () => set({ filters: NO_FILTERS }),
+  setLaunchFilter(launchId, memberIds) {
+    set((s) => ({ filters: { ...s.filters, launch: launchId } }));
+    if (launchId && memberIds?.length) runtime.onFitRequest?.(memberIds);
+  },
+  setLaunchMode: (launchMode) => set((s) => ({ filters: { ...s.filters, launchMode } })),
+  clearFilters: () => set((s) => ({ filters: { ...NO_FILTERS, launchMode: s.filters.launchMode } })),
   setLaunches: (launches) => set({ launches }),
   setNews: (news) => set({ news }),
   setDsn: (dsn) => set({ dsn }),

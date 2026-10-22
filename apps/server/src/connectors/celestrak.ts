@@ -2,10 +2,21 @@ import type { Omm, StreamLink } from '@eio/core';
 import type { Connector } from '../connector';
 import type { NewEntity } from '../hub';
 
-export type SatGroup = 'stations' | 'starlink' | 'active';
+/**
+ * Fragmentation-event debris clouds. GROUP names verified against the CelesTrak index page
+ * (https://celestrak.org/NORAD/elements/). `cosmos-1408-debris` is not listed there any more, so it is
+ * deliberately absent: an unknown GROUP returns plain text and would fail on every retry.
+ */
+export const DEBRIS_GROUPS = ['cosmos-2251-debris', 'iridium-33-debris', 'fengyun-1c-debris'] as const;
+export type DebrisGroup = (typeof DEBRIS_GROUPS)[number];
+export type SatGroup = 'stations' | 'starlink' | 'active' | DebrisGroup;
 
-/** Dedupe priority: a NORAD id seen in several groups keeps the most specific one. */
-const GROUP_PRIORITY: SatGroup[] = ['stations', 'starlink', 'active'];
+const isDebrisGroup = (g: SatGroup): g is DebrisGroup => (DEBRIS_GROUPS as readonly string[]).includes(g);
+
+/** Dedupe priority: a NORAD id seen in several groups keeps the most specific one (debris clouds beat `active`). */
+const GROUP_PRIORITY: SatGroup[] = ['stations', 'starlink', ...DEBRIS_GROUPS, 'active'];
+/** Download order: the big, important groups first so a debris failure never delays them. */
+const FETCH_ORDER: SatGroup[] = ['stations', 'starlink', 'active', ...DEBRIS_GROUPS];
 const TTL_MS = 3 * 3600_000;
 const ISS_NORAD = 25544;
 const STATION_NAME = /^(ISS|CSS)\b|^(POISK|NAUKA|ZARYA|ZVEZDA|TIANGONG|TIANHE|WENTIAN|MENGTIAN)\b/i;
@@ -48,7 +59,9 @@ export function satKind(omm: Omm): 'station' | 'debris' | 'satellite' {
 }
 
 export function satelliteEntity(omm: Omm, group: SatGroup): NewEntity {
-  const kind = satKind(omm);
+  const sk = satKind(omm);
+  // everything in a fragmentation-event group is debris for display, even the defunct parent (no ' DEB' in its name)
+  const kind = sk === 'satellite' && isDebrisGroup(group) ? 'debris' : sk;
   const norad = omm.NORAD_CAT_ID;
   const aliases: Record<string, string> = { norad: String(norad) };
   if (omm.OBJECT_ID) aliases.cospar = omm.OBJECT_ID;
@@ -70,7 +83,7 @@ export function satelliteEntity(omm: Omm, group: SatGroup): NewEntity {
   return rec;
 }
 
-/** Merge fetched groups, deduping by NORAD id (stations > starlink > active). */
+/** Merge fetched groups, deduping by NORAD id (stations > starlink > debris clouds > active). */
 export function normalizeCelestrak(groups: Partial<Record<SatGroup, Omm[]>>): NewEntity[] {
   const byNorad = new Map<number, NewEntity>();
   for (const group of GROUP_PRIORITY) {
@@ -88,7 +101,7 @@ export const celestrak: Connector = {
   async run(ctx) {
     const groups: Partial<Record<SatGroup, Omm[]>> = {};
     const failures: string[] = [];
-    for (const group of GROUP_PRIORITY) {
+    for (const group of FETCH_ORDER) {
       try {
         const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=json`;
         groups[group] = (await ctx.cachedFetch(`celestrak:${group}`, url, TTL_MS, parseOmmJson)).value;

@@ -8,6 +8,7 @@ Monorepo (npm workspaces): `packages/core` (`@eio/core`, shared model), `apps/se
 
 - **Globe and tracking**: three.js scene with Earth, atmosphere, star field and terminator lighting. Thousands of satellites (SGP4 propagated in a Web Worker), stations, debris, launch pads, DSN ground stations and deep-space probes. Hover for a name tooltip, click to select, FOLLOW keeps the camera on the selection, EARTH VIEW / Esc resets. Left-drag orbits, right-drag or shift-drag pans, wheel and pinch zoom.
 - **Search and filter**: debounced search by name, NORAD id or COSPAR id (server-ranked via `/api/search`, local ranking if the request fails), kind and group filter chips with counts, virtualised entity list. Filters also hide non-matching objects in the scene.
+- **Launch filter**: a searchable list of launch groups (objects that share a launch, derived from the COSPAR designator `YYYY-NNN`, only groups with 2 or more members, largest first; type `2251`, `cosmos` or `1993-036`). Selecting one filters the entity list and the globe. SHOW ONLY hides everything else, HIGHLIGHT dims it; members are drawn larger. A chip shows the active group and clears it. Selecting a group also calls `runtime.onFitRequest?.(ids)` so the camera can frame the members once a fit handler is installed (none is wired yet). Example: pick COSMOS 2251 to see its debris cloud at once.
 - **Detail panel** with tabs:
   - Telemetry: lat/lon/altitude, geocentric range, speed, period, phase, element age, confidence, attributes, identifiers; ISS live fix and telemetry; the current DSN link for DSN-tracked probes.
   - Launch (launch entities only): countdown, status, phase, window, provider, vehicle, mission, pad.
@@ -60,7 +61,7 @@ All variables are optional. Copy `.env.example` to `.env` (git-ignored, read fro
 
 | Connector id | Source | Cadence | Feeds | Status |
 |---|---|---|---|---|
-| `celestrak` | CelesTrak GP JSON (`stations`, `starlink`, `active`) | every 3 h (cache TTL 3 h; retry 30 min after a partial failure) | `sat-<NORAD>` SGP4 entities | wired; see Known issues |
+| `celestrak` | CelesTrak GP JSON (`stations`, `starlink`, `active`, debris clouds `cosmos-2251-debris`, `iridium-33-debris`, `fengyun-1c-debris`) | every 3 h (cache TTL 3 h per group; retry 30 min after a partial failure) | `sat-<NORAD>` SGP4 entities; debris-cloud objects get kind `debris` and `group` = the CelesTrak group | wired; see Known issues |
 | `launchlibrary` | Launch Library 2 (upcoming 15, previous 10) | every 10 min; phases re-derived every 15 s | launch board, `launch-<id>` entities | wired |
 | `snapi` | Spaceflight News API v4 | every 5 min; per-query search cached 10 min | ticker, News tab | wired |
 | `dsn` | NASA DSN Now XML | every 5 s | DSN panel, ground stations, probe link attrs | wired |
@@ -129,15 +130,15 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Testing
 
-`npm test` runs Vitest (134 tests in 14 files, no network). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters, deep-space compression, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). `npm run typecheck` checks all three packages.
+`npm test` runs Vitest (157 tests in 16 files, no network). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). `npm run typecheck` checks all three packages.
 
 ## Project layout
 
 | Path | Purpose |
 |---|---|
-| `packages/core/src` | `types`, `bodies`, `frames`, `kepler`, `ephemeris`, `clock`, `mission-fsm`, `entity-graph`, `ascent`, `feeds` (wire types), `providers/` |
+| `packages/core/src` | `types`, `bodies`, `frames`, `launch-group`, `kepler`, `ephemeris`, `clock`, `mission-fsm`, `entity-graph`, `ascent`, `feeds` (wire types), `providers/` |
 | `apps/server/src` | `main`, `config`, `connector` (scheduler), `http`, `store`, `hub`, `api`, `ws`, `search`, `trajectory`, `connectors/` |
-| `apps/web/src` | `App.tsx`, `ui/` (panels, `Splitter`, `ui/detail/` tabs), `scene/` (three.js), `workers/`, `state/`, `api/`, `lib/` (formatting, filters, deep-space), `mock/` |
+| `apps/web/src` | `App.tsx`, `ui/` (panels, `Splitter`, `ui/detail/` tabs), `scene/` (three.js), `workers/`, `state/`, `api/`, `lib/` (formatting, filters and launch groups, deep-space), `mock/` |
 | `data/` | `cache.sqlite` (git-ignored) and `trajectories/` |
 | `docs/CONTRACT.md` | Server/web API contract |
 | `scripts/fetch-assets.mjs` | Earth texture download (`npm run assets`) |
@@ -153,7 +154,8 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Known issues
 
-- **CelesTrak 403**: CelesTrak answers HTTP 403 to repeated downloads of unchanged groups. The server caches each group for 3 h and retries failed groups every 30 min, so on a cold start `active` and/or `starlink` may be missing for a while and only stations load. The connector reports `partial: ...` in its health note.
+- **CelesTrak 403**: CelesTrak answers HTTP 403 to repeated downloads of unchanged groups. The server caches each group for 3 h and retries failed groups every 30 min, so on a cold start `active` and/or `starlink` may be missing for a while and only stations load. The connector reports `partial: ...` in its health note. The debris groups (`cosmos-2251-debris`, `iridium-33-debris`, `fengyun-1c-debris`) are fetched after the main three and were only tested against recorded fixtures: while CelesTrak blocks this machine they are missing, so the launch filter then has no live debris groups (it still groups any objects that share a COSPAR launch id, e.g. Starlink batches). `cosmos-1408-debris` is not offered because CelesTrak's index page does not list that group.
+- **Launch groups**: derived only from the COSPAR designator, so objects without one (launches, probes, ground stations, demo entities) are never in a group, and launch groups are not linked to Launch Library 2 `launch-<id>` entities (LL2 carries no COSPAR id). A group is labelled by its `A` piece, else the most common name; Starlink batches therefore show the name of one satellite. The scene fit on selection needs a handler on `runtime.onFitRequest`; until one is installed the camera does not move.
 - **Horizons ephemerides**: Horizons has no ephemeris for M20 (Mars 2020) and MAVEN, so those probes have no position. The connector logs them as failed targets and retries hourly.
 - **ISS telemetry labels**: the Lightstreamer item ids (`USLAB000032`, `USLAB000033`, `S0000001`-`S0000004`) and their labels come from the reference document and are unverified; live values of `USLAB000032/33` do not look like geodetic position and velocity. Treat the ISS telemetry table as raw data. The wheretheiss.at fix is the trustworthy source.
 - **`npm audit`**: reports advisories in dev tooling only (Vite 5, Vitest 2). Upgrading means major versions and is deferred.
@@ -162,4 +164,4 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Known limitations / roadmap
 
-The two UI/UX requests from `usertest.md` (stable value layout, resizable panels) are implemented; performance was reported fine, including with `?mock=1`. Nothing else from the owner's notes is open.
+Implemented from `usertest.md`: the two UI/UX requests (stable value layout, resizable panels) and the launch filter (see the Launch filter feature). Still open from the owner's wanted features: better camera controls (surface alignment, altitude-based zoom, fit associated objects), realistic distance projection, and unrendering objects outside the focus object's scope. Performance was reported fine, including with `?mock=1`.

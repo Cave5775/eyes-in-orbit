@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { colorKeyOf, kindLabel } from '../lib/entity';
-import { browseOrder, facetCounts, filtersActive, matchesFilters, rankEntities, type SearchHit } from '../lib/filters';
+import { browseOrder, buildLaunchGroups, facetCounts, filtersActive, matchesFilters, rankEntities, type SearchHit } from '../lib/filters';
 import { useStore } from '../state/store';
+import { LaunchFilter } from './LaunchFilter';
 import { VirtualList } from './VirtualList';
 
 const ROW_H = 28;
@@ -37,6 +38,7 @@ export function EntityBrowser() {
   }, [query, setSearchResults]);
 
   const facets = useMemo(() => facetCounts(entities.values()), [entities]);
+  const launchGroups = useMemo(() => buildLaunchGroups(entities.values()), [entities]);
 
   const rows: SearchHit[] = useMemo(() => {
     if (query) return (results ?? []).filter((r) => matchesFilters(r, filters));
@@ -73,6 +75,7 @@ export function EntityBrowser() {
           ))}
           {filtersActive(filters) && <button className="chip clear" onClick={clearFilters}>CLEAR</button>}
         </div>
+        <LaunchFilter groups={launchGroups} />
       </div>
       {rows.length === 0 ? (
         <div className="empty">{query && results === null ? 'Searching...' : 'No matching entities.'}</div>

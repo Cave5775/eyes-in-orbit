@@ -183,6 +183,31 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .search input:focus { border-color: var(--accent); }
 .facets { flex: none; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
 .facets .chips { padding: 4px 10px 0; }
+/* launch filter */
+.launch-filter { padding: 6px 10px 2px; }
+.launch-head { font-size: 10px; letter-spacing: 0.08em; margin-bottom: 3px; }
+.launch-filter input {
+  width: 100%; background: var(--bg); border: 1px solid var(--line-2); border-radius: 3px; color: var(--text);
+  padding: 5px 9px; font: 12px var(--mono); outline: none;
+}
+.launch-filter input:focus { border-color: var(--accent); }
+.launch-filter input:disabled { opacity: 0.5; }
+.launch-options { list-style: none; margin: 3px 0 0; padding: 0; max-height: 190px; overflow-y: auto; border: 1px solid var(--line-2); border-radius: 3px; background: var(--panel-2); }
+.launch-opt, .launch-none { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; cursor: pointer; }
+.launch-none { cursor: default; }
+.launch-opt.cur { background: rgba(79, 179, 217, 0.14); }
+.launch-opt[aria-selected='true'] { color: var(--accent); }
+.launch-opt-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.launch-opt-id { font-size: 10px; flex: none; }
+.launch-opt-n { flex: none; min-width: 5ch; text-align: right; }
+.launch-active { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.launch-chip { max-width: 100%; }
+.launch-chip-name { overflow: hidden; text-overflow: ellipsis; }
+.seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 3px; overflow: hidden; }
+.seg-btn { background: transparent; border: 0; padding: 2px 8px; font: 10px var(--mono); letter-spacing: 0.06em; color: var(--dim); }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line-2); }
+.seg-btn:hover { color: var(--text); }
+.seg-btn.on { background: rgba(79, 179, 217, 0.12); color: var(--accent); }
 .vlist { flex: 1; min-height: 0; overflow-y: auto; }
 .row {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 0 12px; background: transparent; border: 0;

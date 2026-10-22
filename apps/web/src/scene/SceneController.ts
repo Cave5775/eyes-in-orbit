@@ -5,7 +5,7 @@ import {
 } from '@eio/core';
 import { compressDeepSpace } from '../lib/deepspace';
 import { colorKeyOf, isSgp4, type ColorKey } from '../lib/entity';
-import { NO_FILTERS, matchesFilters, type Filters } from '../lib/filters';
+import { NO_FILTERS, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
@@ -380,21 +380,24 @@ export class SceneController {
   /** Colours, sizes and glyphs from entity metadata, filters and selection. */
   private applyAppearance(): void {
     const { colors } = this.palette;
-    const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, visible: boolean) => {
+    // 'dim' (launch highlight mode) keeps the point but darkens and shrinks it; with a launch selected its members are enlarged
+    const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, vis: Visibility) => {
       const key: ColorKey = rec ? colorKeyOf(rec) : 'satellite';
       const c = colors[key];
-      set.color.setXYZ(i, c.r, c.g, c.b);
+      const k = vis === 'dim' ? 0.3 : 1;
+      set.color.setXYZ(i, c.r * k, c.g * k, c.b * k);
       set.glyph.setX(i, rec?.render?.glyph ? GLYPH_ID[rec.render.glyph] : 0);
-      set.size.setX(i, visible ? POINT_SIZE[key] : 0);
+      set.size.setX(i, vis === 'hide' ? 0 : POINT_SIZE[key] * (vis === 'dim' ? 0.7 : this.filters.launch ? 1.8 : 1));
     };
+    const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters));
     this.propagator.ids.forEach((id, i) => {
       const rec = this.recs.get(id);
-      paint(this.sats, i, rec, !!rec && id !== this.selectedId && matchesFilters(rec, this.filters));
+      paint(this.sats, i, rec, vis(rec, id === this.selectedId));
     });
     this.sats.color.needsUpdate = this.sats.size.needsUpdate = this.sats.glyph.needsUpdate = true;
     this.dynIds.forEach((id, i) => {
       const rec = this.recs.get(id);
-      paint(this.dyn, i, rec, !!rec && matchesFilters(rec, this.filters));
+      paint(this.dyn, i, rec, vis(rec));
       this.dynBaseSize[i] = this.dyn.size.getX(i);
     });
     this.dyn.color.needsUpdate = this.dyn.size.needsUpdate = this.dyn.glyph.needsUpdate = true;

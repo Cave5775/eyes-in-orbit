@@ -39,13 +39,22 @@ export interface OmmSpec {
   argp: number;
   ma: number;
   bstar?: number;
+  /** International designator (`YYYY-NNNPPP`); a unique synthetic one is derived from `norad` when omitted. */
+  cospar?: string;
+}
+
+/** COSPAR piece letters in launch order: A, B .. Z, AA, AB .. */
+export function pieceLetters(i: number): string {
+  if (i < 26) return String.fromCharCode(65 + i);
+  const n = i - 26;
+  return String.fromCharCode(65 + (Math.floor(n / 26) % 26)) + String.fromCharCode(65 + (n % 26));
 }
 
 export function makeOmm(s: OmmSpec): Omm {
   const yy = String(20 + (s.norad % 6)).padStart(2, '0');
   return {
     OBJECT_NAME: s.name,
-    OBJECT_ID: `${yy}${String(s.norad % 100).padStart(2, '0')}-${String(s.norad % 999).padStart(3, '0')}A`,
+    OBJECT_ID: s.cospar ?? `${yy}${String(s.norad % 100).padStart(2, '0')}-${String(s.norad % 999).padStart(3, '0')}A`,
     EPOCH: new Date(s.epochMs).toISOString().replace('Z', '000'),
     MEAN_MOTION: s.meanMotion,
     ECCENTRICITY: s.ecc,
@@ -114,40 +123,49 @@ export function mockSatellites(nowMs: number, count = 2000, seed = 7): EntityRec
     { share: 0.15, alt: 560, incl: 97.6 },
   ];
   let slNum = 1000;
+  let slLaunch = 0;
   for (const sh of shells) {
     const n = Math.round(starlinkCount * sh.share);
     const planes = Math.max(1, Math.ceil(n / 22));
     for (let k = 0; k < n; k++, norad++, slNum++) {
       const p = k % planes;
       const j = Math.floor(k / planes);
+      // one plane = one launch (Falcon 9 batch), so each plane forms a launch group
+      const launchNo = String(100 + slLaunch + p).padStart(3, '0');
       out.push(satRecord(
         makeOmm({
-          name: `STARLINK-${slNum}`, norad, epochMs: nowMs - pick(0, 2) * DAY,
+          name: `STARLINK-${slNum}`, norad, cospar: `2024-${launchNo}${pieceLetters(j)}`, epochMs: nowMs - pick(0, 2) * DAY,
           meanMotion: meanMotionForAlt(sh.alt) + pick(-0.002, 0.002), ecc: pick(0.00005, 0.0003), incl: sh.incl + pick(-0.02, 0.02),
           raan: (p * 360) / planes, argp: pick(0, 360), ma: (j * 360) / 22 + p * 7, bstar: 0.0003,
         }),
         'satellite', 'starlink', 'starlink', nowMs,
       ));
     }
+    slLaunch += planes;
   }
 
-  // debris clouds from three fragmentation events
-  const debrisCount = Math.round(count * 0.11);
+  // debris clouds from three fragmentation events; each cloud is one launch (shared YYYY-NNN) and one CelesTrak-style group
+  const debrisCount = Math.round(count * 0.16);
   const clouds = [
-    { name: 'COSMOS 2251 DEB', alt: 790, incl: 74.0 },
-    { name: 'IRIDIUM 33 DEB', alt: 780, incl: 86.4 },
-    { name: 'FENGYUN 1C DEB', alt: 850, incl: 98.8 },
+    { parent: 'COSMOS 2251', launch: '1993-036', group: 'cosmos-2251-debris', parentNorad: 22675, share: 0.47, alt: 790, incl: 74.0 },
+    { parent: 'IRIDIUM 33', launch: '1997-051', group: 'iridium-33-debris', parentNorad: 24946, share: 0.19, alt: 780, incl: 86.4 },
+    { parent: 'FENGYUN 1C', launch: '1999-025', group: 'fengyun-1c-debris', parentNorad: 25730, share: 0.34, alt: 850, incl: 98.8 },
   ];
-  for (let k = 0; k < debrisCount; k++, norad++) {
-    const c = clouds[k % clouds.length];
-    out.push(satRecord(
-      makeOmm({
-        name: c.name, norad, epochMs: nowMs - pick(0, 5) * DAY,
-        meanMotion: meanMotionForAlt(c.alt + pick(-120, 120)), ecc: pick(0.0005, 0.01), incl: c.incl + pick(-0.8, 0.8),
-        raan: pick(0, 360), argp: pick(0, 360), ma: pick(0, 360), bstar: 0.002,
-      }),
-      'debris', 'active', 'debris', nowMs,
-    ));
+  for (const c of clouds) {
+    const n = Math.max(2, Math.round(debrisCount * c.share));
+    for (let k = 0; k < n; k++) {
+      const parent = k === 0;
+      const cloudNorad = parent ? c.parentNorad : norad++;
+      out.push(satRecord(
+        makeOmm({
+          name: parent ? c.parent : `${c.parent} DEB`, norad: cloudNorad, cospar: `${c.launch}${pieceLetters(k)}`,
+          epochMs: nowMs - pick(0, 5) * DAY,
+          meanMotion: meanMotionForAlt(c.alt + pick(-120, 120)), ecc: pick(0.0005, 0.01), incl: c.incl + pick(-0.8, 0.8),
+          raan: pick(0, 360), argp: pick(0, 360), ma: pick(0, 360), bstar: 0.002,
+        }),
+        'debris', c.group, 'debris', nowMs,
+      ));
+    }
   }
 
   // everything else: a mix of orbit classes

@@ -13,3 +13,10 @@ export const graph = new EntityGraph();
 export function ensureInGraph(rec: EntityRecord): void {
   if (graph.get(rec.id) !== rec) graph.upsert(rec);
 }
+
+/**
+ * Optional hooks the scene layer may install without the state layer depending on it.
+ * `onFitRequest` is called when the UI wants the camera to frame a set of entities
+ * (selecting a launch group); when nothing is installed the request is simply dropped.
+ */
+export const runtime: { onFitRequest?: (ids: string[]) => void } = {};
