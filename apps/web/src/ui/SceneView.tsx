@@ -35,6 +35,7 @@ export function SceneView() {
   const [stats, setStats] = useState<SceneStats | null>(null);
   const [surface, setSurface] = useState(false);
   const [help, setHelp] = useState(false);
+  const [scopeAll, setScopeAll] = useState(false);
   const selectedId = useStore((s) => s.selectedId);
   const follow = useStore((s) => s.follow);
   const resetView = useStore((s) => s.resetView);
@@ -52,6 +53,12 @@ export function SceneView() {
     scene.current?.fitVisible();
   }, []);
   const toggleSurface = useCallback(() => scene.current?.toggleSurface(), []);
+  const toggleScope = useCallback(() => {
+    setScopeAll((v) => {
+      scene.current?.setScopeMode(v ? 'auto' : 'all');
+      return !v;
+    });
+  }, []);
 
   useEffect(() => {
     const store = useStore;
@@ -102,11 +109,18 @@ export function SceneView() {
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
     ctl.setSelected(s0.selectedId);
+    // objects related to the selection are never scoped out (same lookup FIT uses)
+    const syncRelated = (s: ReturnType<typeof store.getState>) => {
+      const rec = s.selectedId ? s.entities.get(s.selectedId) : undefined;
+      ctl.setRelated(rec ? relatedFor(rec, { entities: s.entities, launches: s.launches, dsn: s.dsn }).ids : []);
+    };
+    syncRelated(s0);
     const unsub = store.subscribe((s, p) => {
       if (s.entities !== p.entities) ctl.setEntities(s.entities);
       if (s.filters !== p.filters) ctl.setFilters(s.filters);
       if (s.launches !== p.launches) ctl.setLaunches(s.launches);
       if (s.selectedId !== p.selectedId) ctl.setSelected(s.selectedId);
+      if (s.selectedId !== p.selectedId || s.entities !== p.entities || s.launches !== p.launches || s.dsn !== p.dsn) syncRelated(s);
       if (s.follow !== p.follow) ctl.setFollow(s.follow);
       if (s.focus !== p.focus && s.focus) ctl.focus(s.focus);
       if (s.iss.fix !== p.iss.fix) ctl.setIssFix(s.iss.fix);
@@ -160,6 +174,9 @@ export function SceneView() {
           SURFACE
         </button>
         <button className="btn" onClick={resetView} title="Deselect and return to the Earth view (Esc)">EARTH VIEW</button>
+        <button className={scopeAll ? 'btn active' : 'btn'} onClick={toggleScope} aria-pressed={scopeAll} title="Scope: AUTO draws only what is relevant to the camera focus (nearby objects, the selection and what is related to it, everything a filter lets through); ALL draws everything the filters allow">
+          SCOPE {scopeAll ? 'ALL' : 'AUTO'}
+        </button>
         <button className={help ? 'btn icon active' : 'btn icon'} onClick={() => setHelp((v) => !v)} aria-pressed={help} title="Controls (H)">?</button>
       </div>
       {help && (
@@ -179,9 +196,11 @@ export function SceneView() {
         {stats && (
           <>
             <span>CAM {fmtDist(stats.distKm)}</span>
-            <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>
-            <span>EARTH {stats.earth === 'texture' ? 'TEXTURE' : 'PROCEDURAL'}</span>
+            <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>            <span>EARTH {stats.earth === 'texture' ? 'TEXTURE' : 'PROCEDURAL'}</span>
             <span>{Math.round(stats.fps)} FPS</span>
+            <span style={{ minWidth: '24ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">
+              RENDERED {stats.scope.rendered.toLocaleString('en-US')} / {stats.scope.total.toLocaleString('en-US')}
+            </span>
             {stats.surface && <span className="accent">SURFACE VIEW ALT {fmtDist(stats.altKm)}</span>}
             {path && (
               <span>PATH -{fmtDuration(-path.pastMs / 1000)} / +{fmtDuration(path.futureMs / 1000)}</span>

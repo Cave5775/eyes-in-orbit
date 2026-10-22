@@ -172,7 +172,7 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .help-row { display: grid; grid-template-columns: 136px 1fr; gap: 8px; padding: 3px 0; border-top: 1px solid var(--line); font-size: 11.5px; }
 .help-row kbd { font-family: var(--mono); font-size: 10.5px; color: var(--accent); letter-spacing: 0.04em; }
 .scene-legend {
-  position: absolute; top: 10px; right: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: flex-end; max-width: 60%;
+  position: absolute; top: 46px; right: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: flex-end; max-width: 60%;
   z-index: 4; font-size: 10.5px; color: var(--dim); pointer-events: none;
 }
 .scene-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }

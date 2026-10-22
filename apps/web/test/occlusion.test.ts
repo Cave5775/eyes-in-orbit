@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EARTH, geodeticToFixed } from '@eio/core';
-import { ELLIPSOID_K, earthOccludes, horizonDistanceKm, occlusionC2 } from '../src/lib/occlusion';
+import { ELLIPSOID_K, earthOccludes, horizonDistanceKm, makeOccluder, occlusionC2 } from '../src/lib/occlusion';
 import type { V3 } from '../src/lib/camera';
 
 const RE = EARTH.radiusKm;
@@ -43,6 +43,21 @@ describe('earthOccludes', () => {
     const at = (km: number): V3 => [RE * Math.cos(km / RE), RE * Math.sin(km / RE), 0];
     expect(earthOccludes(cam, sub(at(120), cam))).toBe(false);
     expect(earthOccludes(cam, sub(at(400), cam))).toBe(true);
+  });
+
+  it('makeOccluder agrees with earthOccludes', () => {
+    const cam: V3 = [RE + 3, 40, -20];
+    const occ = makeOccluder(cam);
+    let hidden = 0;
+    for (let i = 0; i < 400; i++) {
+      const a = i * 0.7, b = i * 0.31;
+      const p: V3 = [Math.cos(a) * Math.cos(b) * (RE + (i % 7) * 900), Math.sin(a) * Math.cos(b) * (RE + (i % 5) * 400), Math.sin(b) * (RE + (i % 3) * 5000)];
+      const rel = sub(p, cam);
+      expect(occ(rel[0], rel[1], rel[2])).toBe(earthOccludes(cam, rel));
+      if (occ(rel[0], rel[1], rel[2])) hidden++;
+    }
+    expect(hidden).toBeGreaterThan(50);
+    expect(400 - hidden).toBeGreaterThan(20);
   });
 
   it('treats a camera inside the planet as seeing everything (nothing sensible to hide)', () => {

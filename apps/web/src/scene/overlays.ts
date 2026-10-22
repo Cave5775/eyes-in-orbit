@@ -74,6 +74,11 @@ export class EntityOverlay {
     }
   }
 
+  /** Draw nothing this frame (the entity is out of scope). `update` makes the right lines visible again. */
+  hide(): void {
+    for (const l of [this.orbit, this.trail, this.footprint, this.track]) l.obj.visible = false;
+  }
+
   /** Refill the GPU buffers relative to this frame's camera. Call once per frame after `update`. */
   uploadFrame(f: RenderFrame): void {
     for (const l of [this.orbit, this.trail, this.footprint, this.track]) if (l.obj.visible) l.pos.upload(f, l.n);

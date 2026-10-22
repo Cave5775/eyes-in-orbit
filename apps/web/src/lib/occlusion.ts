@@ -40,5 +40,25 @@ export function earthOccludes(origin: V3, rel: V3, marginKm = OCCLUSION_MARGIN_K
   return t0 < L;
 }
 
+/**
+ * `earthOccludes` for many points from one camera: the camera terms are computed once and no arrays are allocated per
+ * point (the scope pass tests every catalogue object a few times a second).
+ */
+export function makeOccluder(origin: V3, marginKm = OCCLUSION_MARGIN_KM): (rx: number, ry: number, rz: number) => boolean {
+  const c2 = occlusionC2(origin, marginKm);
+  const ox = origin[0], oy = origin[1], oz = origin[2] * ELLIPSOID_K;
+  if (c2 <= 0) return () => false;
+  return (rx, ry, rz) => {
+    const dz = rz * ELLIPSOID_K;
+    const L = Math.hypot(rx, ry, dz);
+    if (L === 0) return false;
+    const b = (ox * rx + oy * ry + oz * dz) / L;
+    if (b >= 0) return false;
+    const disc = b * b - c2;
+    if (disc <= 0) return false;
+    return c2 / (-b + Math.sqrt(disc)) < L;
+  };
+}
+
 /** Geocentric distance beyond which the horizon test can be skipped because everything is far outside the planet. */
 export const horizonDistanceKm = (altKm: number): number => Math.sqrt(Math.max(0, 2 * EARTH.radiusKm * altKm + altKm * altKm));

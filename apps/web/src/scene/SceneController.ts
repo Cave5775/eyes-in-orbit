@@ -5,9 +5,10 @@ import {
 } from '@eio/core';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistance, groundPoint, viewAnglesFor } from '../lib/camera';
 import { colorKeyOf, isSgp4, type ColorKey } from '../lib/entity';
-import { NO_FILTERS, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
-import { ELLIPSOID_K, earthOccludes, occlusionC2 } from '../lib/occlusion';
+import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
+import { ELLIPSOID_K, makeOccluder, occlusionC2 } from '../lib/occlusion';
 import { displayPosition } from '../lib/paths';
+import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
@@ -61,6 +62,8 @@ export interface SceneStats {
   surface: boolean;
   /** selected path: window relative to now (ms, negative = past) and whether it is drawn on the compressed shell */
   path: { pastMs: number; futureMs: number; compressed: boolean } | null;
+  /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
+  scope: { mode: ScopeMode; rendered: number; total: number };
 }
 
 /** Where the surface-aligned camera is anchored. */
@@ -112,6 +115,8 @@ export class SceneController {
   /** What is actually rendered: same orientation and lens, but at the origin (floating origin, see `lib/floating.ts`). */
   private rcam = new THREE.PerspectiveCamera(45, 1, NEAR_KM, FAR_KM);
   private frameInfo = new RenderFrame();
+  /** Earth occlusion test for camera-relative points, rebuilt every frame */
+  private occ: (x: number, y: number, z: number) => boolean = () => false;
   private rig: OrbitRig;
   private palette: Palette;
   private sun = new THREE.Vector3(1, 0, 0);
@@ -146,6 +151,18 @@ export class SceneController {
   private groundLock: [number, number, number] | null = null;
   private launches: Launch[] = [];
   private filters: Filters = NO_FILTERS;
+  // scope policy (see lib/scope.ts)
+  private scopeMode: ScopeMode = 'auto';
+  /** the selection's related objects (parent, children, pad, linked probes ...): never scoped out */
+  private related: ReadonlySet<string> = new Set();
+  /** 1 where an active filter lets the object through: never scoped out */
+  private satKeep = new Uint8Array(0);
+  private dynKeep = new Uint8Array(0);
+  private scopeDirty = true;
+  private lastScopeAt = -Infinity;
+  private scopeCounts = { rendered: 0, total: 0 };
+  /** overlays (orbit lines, footprints) of entities that are in scope */
+  private overlayInScope = new Map<string, boolean>();
   private selectedId: string | null = null;
   private hoverId: string | null = null;
   private issFix: IssFix | undefined;
@@ -293,6 +310,18 @@ export class SceneController {
     this.applyAppearance();
   }
 
+  /** Scope policy: `auto` draws only what is relevant to the camera focus, `all` draws everything the filters allow. */
+  setScopeMode(mode: ScopeMode): void {
+    this.scopeMode = mode;
+    this.scopeDirty = true;
+  }
+
+  /** Ids that scope never removes besides the selection: its related objects. */
+  setRelated(ids: Iterable<string>): void {
+    this.related = new Set(ids);
+    this.scopeDirty = true;
+  }
+
   setLaunches(launches: Launch[]): void {
     this.launches = launches.filter((l) => l.pad);
     const n = this.launches.length;
@@ -308,6 +337,7 @@ export class SceneController {
       this.pads.glyph.setX(i, GLYPH_ID.ring);
     });
     this.updatePadAppearance();
+    this.scopeDirty = true;
   }
 
   setIssFix(fix: IssFix | undefined): void {
@@ -544,6 +574,7 @@ export class SceneController {
       shellSelected: this.shellSelected,
       surface: this.surfaceOn,
       path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
+      scope: { mode: this.scopeMode, ...this.scopeCounts },
     };
   }
 
@@ -636,17 +667,26 @@ export class SceneController {
       set.size.setX(i, vis === 'hide' ? 0 : POINT_SIZE[key] * (vis === 'dim' ? 0.7 : this.filters.launch ? 1.8 : 1));
     };
     const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters));
+    // with a filter on, the objects it lets through ('show') are exempt from the scope policy
+    const filtering = filtersActive(this.filters);
+    this.satKeep = new Uint8Array(this.propagator.ids.length);
     this.propagator.ids.forEach((id, i) => {
       const rec = this.recs.get(id);
-      paint(this.sats, i, rec, vis(rec, id === this.selectedId));
+      const v = vis(rec, id === this.selectedId);
+      paint(this.sats, i, rec, v);
+      if (filtering && v === 'show') this.satKeep[i] = 1;
     });
     this.sats.color.needsUpdate = this.sats.size.needsUpdate = this.sats.glyph.needsUpdate = true;
+    this.dynKeep = new Uint8Array(this.dynIds.length);
     this.dynIds.forEach((id, i) => {
       const rec = this.recs.get(id);
-      paint(this.dyn, i, rec, vis(rec));
+      const v = vis(rec);
+      paint(this.dyn, i, rec, v);
       this.dynBaseSize[i] = this.dyn.size.getX(i);
+      if (filtering && v === 'show') this.dynKeep[i] = 1;
     });
     this.dyn.color.needsUpdate = this.dyn.size.needsUpdate = this.dyn.glyph.needsUpdate = true;
+    this.scopeDirty = true;
   }
 
   private updatePadAppearance(): void {
@@ -733,7 +773,7 @@ export class SceneController {
 
   /** Earth between the camera and the camera-relative point `rel`? */
   private occludedRel(x: number, y: number, z: number): boolean {
-    return earthOccludes(this.frameInfo.originV3, [x, y, z]);
+    return this.occ(x, y, z);
   }
 
   /** Screen-space nearest visible point within a small radius; occluded-by-Earth and out-of-scope points are skipped. */
@@ -878,6 +918,7 @@ export class SceneController {
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
 
     this.prepareRender(gmst);
+    this.refreshScope(wall);
 
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
       this.lastPickAt = wall;
@@ -916,6 +957,7 @@ export class SceneController {
     u.uOriginS.value.set(f.origin.x, f.origin.y, f.origin.z * ELLIPSOID_K);
     u.uC2.value = occlusionC2(f.originV3);
     u.uOccK.value = ELLIPSOID_K;
+    this.occ = makeOccluder(f.originV3);
 
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);
@@ -923,6 +965,64 @@ export class SceneController {
     this.hi.pos.upload(f);
     this.overlays.forEach((o) => o.uploadFrame(f));
     this.pathOverlay?.uploadFrame(f);
+  }
+
+  /**
+   * Scope policy (lib/scope.ts), a few times a second and whenever its inputs change: sets each point's `aShow` flag
+   * (distance from the camera focus, selection/related/filter exemptions) and tallies what is actually drawn for the HUD
+   * (in scope, not filtered out, not behind the Earth, inside the view). The Earth's own occlusion stays exact per frame in
+   * the point shader; here it is only counted.
+   */
+  private refreshScope(wall: number): void {
+    if (!this.scopeDirty && wall - this.lastScopeAt < 125) return;
+    this.scopeDirty = false;
+    this.lastScopeAt = wall;
+    const mode = this.scopeMode;
+    const focus = this.rig.target;
+    const radius = scopeRadius(this.rig.dist);
+    const sel = this.selectedId, hov = this.hoverId;
+    const f = this.frameInfo;
+    const occluded = makeOccluder(f.originV3);
+    const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
+    let total = 0, rendered = 0;
+    const tmp = this.tmp2;
+
+    const scan = (set: PointSet, ids: readonly string[], bulk: boolean, keepFlags: Uint8Array | null) => {
+      const show = set.show.array as Float32Array, size = set.size.array as Float32Array;
+      const rel = set.pos.attr.array as Float32Array;
+      let changed = false;
+      for (let i = 0; i < ids.length; i++) {
+        const w = set.pos.worldOf(i, f.spin, tmp);
+        if (w.x === 0 && w.y === 0 && w.z === 0) continue; // no position (failed propagation, provider without a state)
+        total++;
+        const id = ids[i];
+        const keep = id === sel || id === hov || this.related.has(id) || (keepFlags !== null && keepFlags[i] === 1);
+        const d = Math.hypot(w.x - focus.x, w.y - focus.y, w.z - focus.z);
+        const v = inScope({ d, key: i, bulk, keep }, radius, mode) ? 1 : 0;
+        if (show[i] !== v) {
+          show[i] = v;
+          changed = true;
+        }
+        if (v === 0 || size[i] <= 0) continue;
+        const x = rel[i * 3], y = rel[i * 3 + 1], z = rel[i * 3 + 2];
+        if (!inView(m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[3] * x + m[7] * y + m[11] * z + m[15])) continue;
+        if (!occluded(x, y, z)) rendered++;
+      }
+      if (changed) set.show.needsUpdate = true;
+    };
+    scan(this.sats, this.propagator.ids, true, this.satKeep);
+    scan(this.dyn, this.dynIds, false, this.dynKeep);
+    scan(this.pads, this.launches.map((l) => l.entityId), false, null);
+    this.scopeCounts = { rendered, total };
+
+    // light overlays (orbit line, footprint) of entities that are scoped out are not drawn either
+    this.overlayInScope.clear();
+    for (const id of this.overlays.keys()) {
+      const keep = id === sel || this.related.has(id);
+      let d = 0;
+      if (!keep && this.pointPos(id, tmp)) d = Math.hypot(tmp.x - focus.x, tmp.y - focus.y, tmp.z - focus.z);
+      this.overlayInScope.set(id, inScope({ d, key: 0, bulk: false, keep }, radius, mode));
+    }
   }
 
   private updateDyn(t: number): void {
@@ -970,7 +1070,9 @@ export class SceneController {
   private updateOverlays(t: number, wall: number): void {
     for (const [id, o] of this.overlays) {
       const rec = this.recs.get(id);
-      if (rec) o.update(graph, rec, t, wall, this.fullOverlays.has(id));
+      if (!rec) continue;
+      if (this.overlayInScope.get(id) === false) o.hide();
+      else o.update(graph, rec, t, wall, this.fullOverlays.has(id));
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
     if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false);
