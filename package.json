@@ -11,7 +11,7 @@
     "dev": "concurrently -n server,web -c cyan,magenta \"npm run dev -w @eio/server\" \"npm run dev -w @eio/web\"",
     "build": "npm run build -w @eio/web",
     "test": "vitest run",
-    "typecheck": "tsc -b --noEmit false || tsc -p packages/core --noEmit && tsc -p apps/server --noEmit && tsc -p apps/web --noEmit",
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p apps/server --noEmit && tsc -p apps/web --noEmit",
     "assets": "node scripts/fetch-assets.mjs"
   },
   "devDependencies": {
@@ -19,11 +19,6 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
-  },
-  "dependencies": {
-    "assets": "^3.0.1",
-    "npm": "^12.2.1",
-    "run": "^2.1.10"
   },
   "allowScripts": {
     "esbuild@0.28.2": true,
