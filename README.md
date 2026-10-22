@@ -129,7 +129,7 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Testing
 
-`npm test` runs Vitest (107 tests in 12 files, no network). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters, deep-space compression, YouTube URL handling and the mock API (`apps/web/test`). `npm run typecheck` checks all three packages.
+`npm test` runs Vitest (134 tests in 14 files, no network). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters, deep-space compression, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). `npm run typecheck` checks all three packages.
 
 ## Project layout
 
@@ -137,12 +137,19 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 |---|---|
 | `packages/core/src` | `types`, `bodies`, `frames`, `kepler`, `ephemeris`, `clock`, `mission-fsm`, `entity-graph`, `ascent`, `feeds` (wire types), `providers/` |
 | `apps/server/src` | `main`, `config`, `connector` (scheduler), `http`, `store`, `hub`, `api`, `ws`, `search`, `trajectory`, `connectors/` |
-| `apps/web/src` | `App.tsx`, `ui/` (panels, `ui/detail/` tabs), `scene/` (three.js), `workers/`, `state/`, `api/`, `lib/` (formatting, filters, deep-space), `mock/` |
+| `apps/web/src` | `App.tsx`, `ui/` (panels, `Splitter`, `ui/detail/` tabs), `scene/` (three.js), `workers/`, `state/`, `api/`, `lib/` (formatting, filters, deep-space), `mock/` |
 | `data/` | `cache.sqlite` (git-ignored) and `trajectories/` |
 | `docs/CONTRACT.md` | Server/web API contract |
 | `scripts/fetch-assets.mjs` | Earth texture download (`npm run assets`) |
 | `spaceflight_live_data_streams_reference.md` | Feed reference |
 | `usertest.md` | Owner's test notes |
+
+## Layout
+
+- **Resizing**: drag the borders between the entity list and the globe, the globe and the detail panel, the globe and the bottom row, and the launch board and the DSN panel. Double-click a border (or press Enter on it) to reset it to its default. Borders are keyboard focusable: arrow keys move by 16 px (Shift: 64 px), Home/End jump to the minimum/maximum. Sizes are clamped (the globe always keeps at least 360 x 200 px) and re-clamped when the window shrinks.
+- **Persistence**: sizes are stored in `localStorage` under `eio.layout.v1` (per browser; a default size is simply not stored). If storage is unavailable the layout works but is not remembered. At 820 px and narrower the page stacks vertically and the borders are hidden.
+- **Implementation**: sizes are CSS variables (`--left-w`, `--right-w`, `--bottom-h`, `--dsn-w`) on `.app` set by `ui/ResizableLayout.tsx`; `ui/Splitter.tsx` is the reusable pointer-capture splitter; pure clamp and persistence logic is in `lib/layout.ts`. The three.js canvas follows through the `ResizeObserver` in `SceneController`.
+- **Displayed values**: all number formatting goes through `lib/format.ts` with fixed decimals per unit (lat/lon 3, altitude 1, distances by unit band (km, Mkm, AU), speed 3 km/s or 0 km/h, period in minutes 1, light time 1 s, data rates scaled to b/s, kb/s, Mb/s, Gb/s). Server `attrs` are formatted by key (`rangeKm`, `rtltSec`, `dataRateBps`, ...) and any other long decimal inside attribute or telemetry text is rounded to 3 decimals. Numeric cells use tabular digits and stay on one line (ellipsis when too narrow); only ids and URLs may break anywhere.
 
 ## Known issues
 
@@ -155,7 +162,4 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Known limitations / roadmap
 
-Open requests from `usertest.md` (performance was reported fine, including with `?mock=1`), not implemented yet:
-
-- **Stable value layout**: some values are already rounded (coordinates to 3 decimals, altitude to 1, speed to 3), but panels still reflow and wrap as values change, and some strings and attributes are shown unrounded. Remaining work is consistent rounding of long decimals and layouts that do not wrap.
-- **Resizable panels**: panel sizes are fixed in CSS (`apps/web/src/styles.css`); there are no draggable borders.
+The two UI/UX requests from `usertest.md` (stable value layout, resizable panels) are implemented; performance was reported fine, including with `?mock=1`. Nothing else from the owner's notes is open.

@@ -1,6 +1,9 @@
 import type { EntityRecord } from '@eio/core';
 import { isIss } from '../../lib/entity';
-import { fmtAgo, fmtBitrate, fmtDist, fmtDuration, fmtLat, fmtLon, fmtNum, humanize } from '../../lib/format';
+import {
+  fmtAgo, fmtAttr, fmtBitrate, fmtDays, fmtDeg, fmtDist, fmtKm, fmtLat, fmtLightTime, fmtLon, fmtPercent, fmtPeriod,
+  fmtSpeedKmS, fmtSpeedKmh, fmtTelemetryValue, humanize,
+} from '../../lib/format';
 import { computeTelemetry } from '../../lib/telemetry';
 import { ensureInGraph, graph } from '../../state/runtime';
 import { useStore } from '../../state/store';
@@ -9,7 +12,7 @@ import { Field } from './Field';
 
 function confidenceLabel(c: number | undefined): { text: string; tone: string } | null {
   if (c === undefined) return null;
-  return { text: `${Math.round(c * 100)}%`, tone: c > 0.8 ? 'ok' : c > 0.4 ? 'warn' : 'bad' };
+  return { text: fmtPercent(c), tone: c > 0.8 ? 'ok' : c > 0.4 ? 'warn' : 'bad' };
 }
 
 export function TelemetryTab({ rec }: { rec: EntityRecord }) {
@@ -34,13 +37,13 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
         <dl className="kv">
           {tel.latDeg !== undefined && <Field label="Latitude" value={fmtLat(tel.latDeg)} mono />}
           {tel.lonDeg !== undefined && <Field label="Longitude" value={fmtLon(tel.lonDeg)} mono />}
-          {tel.altKm !== undefined && <Field label="Altitude" value={`${fmtNum(tel.altKm, 1)} km`} mono />}
+          {tel.altKm !== undefined && <Field label="Altitude" value={fmtKm(tel.altKm)} mono />}
           <Field label="Geocentric range" value={fmtDist(tel.rangeKm)} mono />
-          <Field label="Speed" value={tel.speedKmS !== undefined ? `${fmtNum(tel.speedKmS, 3)} km/s` : undefined} mono />
-          <Field label="Period" value={tel.periodSec ? fmtDuration(tel.periodSec) : undefined} mono />
+          <Field label="Speed" value={tel.speedKmS !== undefined ? fmtSpeedKmS(tel.speedKmS) : undefined} mono />
+          <Field label="Period" value={tel.periodSec ? fmtPeriod(tel.periodSec) : undefined} mono />
           <Field label="Phase" value={tel.phase?.replace(/_/g, ' ')} />
           <Field label="Confidence" value={conf?.text} mono tone={conf?.tone} />
-          <Field label="Element age" value={tel.elementAgeDays !== undefined ? `${fmtNum(tel.elementAgeDays, 1)} d` : undefined} mono />
+          <Field label="Element age" value={tel.elementAgeDays !== undefined ? fmtDays(tel.elementAgeDays) : undefined} mono />
           {tel.shell && <Field label="Display" value="Compressed deep-space shell (distance not to scale)" tone="warn" />}
         </dl>
       )}
@@ -52,10 +55,10 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
             <dl className="kv">
               <Field label="Latitude" value={fmtLat(iss.fix.latitude)} mono />
               <Field label="Longitude" value={fmtLon(iss.fix.longitude)} mono />
-              <Field label="Altitude" value={`${fmtNum(iss.fix.altitudeKm, 1)} km`} mono />
-              <Field label="Velocity" value={`${fmtNum(iss.fix.velocityKmh, 0)} km/h`} mono />
+              <Field label="Altitude" value={fmtKm(iss.fix.altitudeKm)} mono />
+              <Field label="Velocity" value={fmtSpeedKmh(iss.fix.velocityKmh)} mono />
               <Field label="Visibility" value={iss.fix.visibility} />
-              <Field label="Footprint" value={`${fmtNum(iss.fix.footprintKm, 0)} km`} mono />
+              <Field label="Footprint" value={fmtKm(iss.fix.footprintKm, 0)} mono />
               <Field label="Fix age" value={fmtAgo(iss.fix.t, wall)} mono />
             </dl>
           ) : (
@@ -67,7 +70,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
                 {iss.telemetry.map((p) => (
                   <tr key={p.id}>
                     <td className="dim">{p.label}</td>
-                    <td className="mono">{p.value}</td>
+                    <td className="mono">{fmtTelemetryValue(p.value)}</td>
                     <td className="dim">{p.unit}</td>
                   </tr>
                 ))}
@@ -84,8 +87,8 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
             <dl className="kv">
               <Field label="Dish" value={`${link.dish} (${link.complex})`} />
               <Field label="Range" value={fmtDist(link.rangeKm)} mono />
-              <Field label="Round-trip light time" value={fmtDuration(link.rtltSec)} mono />
-              <Field label="Az / El" value={link.azimuthDeg !== undefined ? `${fmtNum(link.azimuthDeg, 1)}° / ${fmtNum(link.elevationDeg, 1)}°` : undefined} mono />
+              <Field label="Round-trip light time" value={fmtLightTime(link.rtltSec)} mono />
+              <Field label="Az / El" value={link.azimuthDeg !== undefined ? `${fmtDeg(link.azimuthDeg)} / ${fmtDeg(link.elevationDeg)}` : undefined} mono />
               <Field label="Downlink" value={link.downlink?.active ? `${link.downlink.band ?? ''} ${fmtBitrate(link.downlink.dataRateBps)}`.trim() : 'inactive'} mono />
               <Field label="Uplink" value={link.uplink ? (link.uplink.active ? `${link.uplink.band ?? ''} ${fmtBitrate(link.uplink.dataRateBps)}`.trim() : 'inactive') : undefined} mono />
             </dl>
@@ -100,7 +103,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
           <div className="section-title">ATTRIBUTES</div>
           <dl className="kv">
             {attrs.map(([k, v]) => (
-              <Field key={k} label={humanize(k)} value={typeof v === 'number' ? fmtNum(v, Number.isInteger(v) ? 0 : 2) : String(v)} mono={typeof v === 'number'} />
+              <Field key={k} label={humanize(k)} value={fmtAttr(k, v as string | number | boolean)} mono={typeof v === 'number'} />
             ))}
           </dl>
         </>
@@ -110,8 +113,8 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
         <>
           <div className="section-title">IDENTIFIERS</div>
           <dl className="kv">
-            <Field label="id" value={rec.id} mono />
-            {Object.entries(rec.aliases).map(([k, v]) => <Field key={k} label={k} value={v} mono />)}
+            <Field label="id" value={rec.id} mono wrap />
+            {Object.entries(rec.aliases).map(([k, v]) => <Field key={k} label={k} value={v} mono wrap />)}
           </dl>
         </>
       )}

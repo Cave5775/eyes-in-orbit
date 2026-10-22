@@ -30,7 +30,8 @@ export function LaunchTab({ launch }: { launch: Launch }) {
         <Field label="Orbit" value={launch.mission?.orbit} />
         <Field label="Pad" value={launch.pad?.name} />
         <Field label="Site" value={launch.pad?.location} />
-        {launch.pad && <Field label="Pad lat/lon" value={`${fmtLat(launch.pad.latitude)}  ${fmtLon(launch.pad.longitude)}`} mono />}
+        {launch.pad && <Field label="Pad latitude" value={fmtLat(launch.pad.latitude)} mono />}
+        {launch.pad && <Field label="Pad longitude" value={fmtLon(launch.pad.longitude)} mono />}
       </dl>
       {launch.mission?.description && <p className="desc">{launch.mission.description}</p>}
     </div>

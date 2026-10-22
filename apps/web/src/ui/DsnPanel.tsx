@@ -1,5 +1,5 @@
 import { dsnEntityId } from '../lib/entity';
-import { fmtAgo, fmtBitrate, fmtDist, fmtDuration } from '../lib/format';
+import { fmtAgo, fmtBitrate, fmtDist, fmtLightTime } from '../lib/format';
 import { useStore } from '../state/store';
 import { useWallNow } from './hooks';
 
@@ -44,7 +44,7 @@ export function DsnPanel() {
                     })}
                   </td>
                   <td className="num mono">{fmtDist(l.rangeKm)}</td>
-                  <td className="num mono">{fmtDuration(l.rtltSec)}</td>
+                  <td className="num mono">{fmtLightTime(l.rtltSec)}</td>
                   <td className="num mono">{l.downlink?.active ? `${l.downlink.band ?? ''} ${fmtBitrate(l.downlink.dataRateBps)}`.trim() : '—'}</td>
                 </tr>
               );
