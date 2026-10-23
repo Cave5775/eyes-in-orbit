@@ -14,7 +14,8 @@
   - Delivered as a KEYS panel: values go to the local server (localhost only), which makes the requests with them; the browser never calls Space-Track itself. Needs a manual check against a real Space-Track account
 - [ ] Implement the Moon and Sun
   - [ ] Change positional reference point between celestial bodies (includes the Sun)
-- [ ] Higher resolution Earth texture
+- [x] Higher resolution Earth texture
+  - Code done: the scene prefers `earth-hires.jpg` (NASA Blue Marble 5400 x 2700) and falls back to the 2k map. Run `npm run assets` to download it and check it looks right; NASA licence terms not verified
 - [ ] Booster trajectory for Falcon 9 and similar
 - [ ] Trajectories for rockets other than Falcon 9
   - what other sources are there for launch trajectories?

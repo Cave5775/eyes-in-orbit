@@ -13,6 +13,14 @@ const ASSETS = [
     out: 'apps/web/public/textures/earth.jpg',
     minBytes: 50_000,
   },
+  {
+    // NASA Blue Marble Next Generation (topography and bathymetry, August), 5400 x 2700. The scene prefers this file over
+    // earth.jpg when the GPU can hold it. NASA imagery is generally free to use; check NASA's media usage guidelines.
+    // EARTH_HIRES_URL swaps in any other equirectangular JPEG (an 8192 x 4096 map, say).
+    url: process.env.EARTH_HIRES_URL ?? 'https://assets.science.nasa.gov/dynamicimage/assets/science/esd/eo/images/bmng/bmng-topography-bathymetry/august/world.topo.bathy.200408.3x5400x2700.jpg',
+    out: 'apps/web/public/textures/earth-hires.jpg',
+    minBytes: 500_000,
+  },
 ];
 
 for (const a of ASSETS) {
@@ -27,6 +35,6 @@ for (const a of ASSETS) {
     console.log(`ok   ${a.out} (${(buf.length / 1024).toFixed(0)} KiB)`);
   } catch (err) {
     console.warn(`skip ${a.out}: ${err instanceof Error ? err.message : err}`);
-    console.warn('     The app falls back to a procedural Earth; download any equirectangular 2k JPG to that path to override.');
+    console.warn('     The app falls back to a lower-resolution or procedural Earth; download any equirectangular JPG to that path to override.');
   }
 }

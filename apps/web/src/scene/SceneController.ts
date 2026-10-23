@@ -749,19 +749,36 @@ export class SceneController {
     return lines;
   }
 
+  /**
+   * Earth map: the high-resolution file (`npm run assets`) when it exists and the GPU can hold it, else the 2k one, else
+   * the procedural shading stays. A missing file is a failed load (or an undecodable page from the dev server's fallback).
+   */
   private loadEarthTexture(): void {
+    const apply = (tex: THREE.Texture) => {
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+      this.earthMat.uniforms.uTex.value = tex;
+      this.earthMat.uniforms.uHasTex.value = 1;
+      this.earthMode = 'texture';
+    };
+    const loadStandard = () => {
+      new THREE.TextureLoader().load('/textures/earth.jpg', (tex) => {
+        if (this.disposed) tex.dispose();
+        else apply(tex);
+      }, undefined, () => undefined);
+    };
     new THREE.TextureLoader().load(
-      '/textures/earth.jpg',
+      '/textures/earth-hires.jpg',
       (tex) => {
-        if (this.disposed) return;
-        tex.colorSpace = THREE.NoColorSpace;
-        tex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
-        this.earthMat.uniforms.uTex.value = tex;
-        this.earthMat.uniforms.uHasTex.value = 1;
-        this.earthMode = 'texture';
+        if (this.disposed) return tex.dispose();
+        const w = (tex.image as { width?: number } | undefined)?.width ?? 0;
+        if (w > this.renderer.capabilities.maxTextureSize) {
+          tex.dispose(); // too big for this GPU
+          loadStandard();
+        } else apply(tex);
       },
       undefined,
-      () => undefined, // missing/invalid texture: procedural shading stays
+      loadStandard,
     );
   }
 
