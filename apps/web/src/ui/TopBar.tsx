@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { fmtUtc } from '../lib/format';
+import type { RefBody } from '../lib/ref-body';
 import { clock } from '../state/runtime';
 import { useStore } from '../state/store';
 import { CredentialsPanel } from './CredentialsPanel';
@@ -9,10 +10,13 @@ import { useSimNow } from './hooks';
 const RATES = [1, 10, 60, 600];
 const SCRUB_MIN = 24 * 60;
 
-const BODIES: [string, boolean][] = [['Earth', true], ['Moon', false], ['Mars', false]];
+/** Views the app can centre on; Mars has no ephemeris or map yet. */
+const BODIES: [string, RefBody | null][] = [['Earth', 'EARTH'], ['Moon', 'MOON'], ['Sun', 'SUN'], ['Mars', null]];
 
 export function TopBar() {
   const snap = useStore((s) => s.clock);
+  const refBody = useStore((s) => s.refBody);
+  const setRefBody = useStore((s) => s.setRefBody);
   const now = useSimNow(200);
   const [drag, setDrag] = useState<number | null>(null);
 
@@ -36,8 +40,12 @@ export function TopBar() {
       </div>
 
       <div className="bodies" role="tablist" aria-label="Body">
-        {BODIES.map(([name, enabled]) => (
-          <button key={name} role="tab" aria-selected={enabled} disabled={!enabled} className={enabled ? 'btn active' : 'btn'} title={enabled ? name : `${name} view: not available yet`}>
+        {BODIES.map(([name, id]) => (
+          <button
+            key={name} role="tab" aria-selected={id !== null && id === refBody} disabled={!id}
+            className={id && id === refBody ? 'btn active' : 'btn'}
+            onClick={() => id && setRefBody(id)}
+            title={id ? `Centre the view on the ${name} and measure positions from it` : `${name} view: not available yet`}>
             {name.toUpperCase()}
           </button>
         ))}

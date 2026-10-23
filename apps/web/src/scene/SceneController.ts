@@ -4,6 +4,7 @@ import {
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
+import { refMaxDistKm, refMinDistKm, refPositionEci, refViewDistKm, type RefBody } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, panGround, settleDistance, surfaceFrame, surfaceLift, viewAnglesFor, type V3 } from '../lib/camera';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
@@ -16,6 +17,7 @@ import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
 import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial } from './materials';
 import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
+import { CelestialLayer } from './celestial';
 import { EntityOverlay } from './overlays';
 import { PathOverlay, type PathStatus } from './PathOverlay';
 import { PropagatorClient } from './propagator-client';
@@ -69,6 +71,8 @@ export interface SceneStats {
   /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
   scope: { mode: ScopeMode; rendered: number; total: number };
   distanceScale: DistanceScale;
+  /** body the view is centred on ('EARTH' unless the camera is following the Moon or the Sun) */
+  ref: RefBody;
   /** ids of entities whose 3D model is drawn this frame (camera within the model's LOD distance) */
   models: string[];
   /** ISS array pose in use while the ISS model is drawn: the source of each part and the joint angles (rad) */
@@ -134,6 +138,9 @@ export class SceneController {
   private sun = new THREE.Vector3(1, 0, 0);
   private earthGroup = new THREE.Group();
   private atmo: THREE.Mesh;
+  private celestial: CelestialLayer;
+  /** the Moon or the Sun while the camera is centred on it (the followFn tracks its centre), else null */
+  private bodyTarget: RefBody | null = null;
   private earthMat: THREE.ShaderMaterial;
   private earthMode: 'texture' | 'procedural' = 'procedural';
   private stars: THREE.Points;
@@ -270,6 +277,7 @@ export class SceneController {
     this.atmo = new THREE.Mesh(new THREE.SphereGeometry(RE * 1.02, 96, 64), createAtmosphereMaterial(this.sun));
     this.atmo.renderOrder = 1;
     this.scene.add(this.atmo);
+    this.celestial = new CelestialLayer(this.scene, this.sun);
 
     this.sats = makePointSet(0, this.pointMat);
     this.dyn = makePointSet(0, this.pointMat);
@@ -428,6 +436,11 @@ export class SceneController {
 
   focus(req: FocusRequest): void {
     this.groundLock = null;
+    if (req.body && req.body !== 'EARTH') {
+      this.focusBody(req.body);
+      return;
+    }
+    this.bodyTarget = null;
     if (req.id) {
       const rec = this.recs.get(req.id);
       if (!rec) return;
@@ -464,6 +477,23 @@ export class SceneController {
     if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
   }
 
+  /** Centre the view on the Moon or the Sun and follow it (they move); everything is then seen relative to that body. */
+  private focusBody(body: RefBody): void {
+    if (this.surfaceOn) this.setSurfaceMode(false);
+    this.followId = null;
+    this.focusLatLon = null;
+    this.bodyTarget = body;
+    this.followFn = (out, t) => {
+      const p = refPositionEci(body, t);
+      out.set(p[0], p[1], p[2]);
+      return true;
+    };
+    this.follow = true;
+    this.cb.onFollowChange?.(true);
+    const sun = sunDirectionEci(clock.now());
+    this.rig.flyTo({ dist: refViewDistKm(body), az: Math.atan2(sun[1], sun[0]) + 0.5, el: 0.35 });
+  }
+
   // ------------------------------------------------------------------ camera modes and fit
 
   get surfaceMode(): boolean {
@@ -482,6 +512,7 @@ export class SceneController {
   setSurfaceMode(on: boolean): void {
     if (on === this.surfaceOn) return;
     if (on) {
+      if (this.bodyTarget) return; // surface views are Earth-only for now
       const src = this.pickSurfaceSource();
       if (!src) return;
       this.globeDist = this.rig.dist;
@@ -587,6 +618,7 @@ export class SceneController {
     const dist = view?.dist ?? fitDistanceClamped(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN, MIN_TARGET_DIST_KM, this.distScale);
     const look = view ?? fitAngles(c, radius);
     this.follow = false;
+    this.bodyTarget = null;
     this.freeTarget.set(c[0], c[1], c[2]);
     this.rig.pan.set(0, 0, 0);
     this.rig.flyTo({ dist, az: look?.az ?? this.rig.az, el: look?.el ?? this.rig.el });
@@ -709,6 +741,7 @@ export class SceneController {
       path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
       scope: { mode: this.scopeMode, ...this.scopeCounts },
       distanceScale: this.distScale,
+      ref: this.bodyTarget ?? 'EARTH',
       models: this.models.activeIds,
       arrays: this.models.activeIds.some((id) => this.models.defOf(id)?.key === 'iss') ? { sources: this.issSources, joints: this.issJointsNow } : null,
     };
@@ -722,6 +755,7 @@ export class SceneController {
     this.rig.destroy();
     this.propagator.dispose();
     this.models.dispose();
+    this.celestial.dispose();
     this.overlays.forEach((o) => o.dispose());
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
@@ -1073,11 +1107,13 @@ export class SceneController {
       if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget, t);
       // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
       const modelMin = anchored ? this.models.defOf(this.followId)?.minViewKm : undefined;
-      this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
+      const bodyMin = anchored && this.bodyTarget ? refMinDistKm(this.bodyTarget) : undefined;
+      this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? bodyMin ?? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
     }
+    this.rig.maxDist = refMaxDistKm(anchored && this.bodyTarget ? this.bodyTarget : 'EARTH', maxDistKm(this.distScale));
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
 
-    this.prepareRender(gmst);
+    this.prepareRender(gmst, t);
     this.updateModels(t);
     this.refreshScope(wall);
 
@@ -1096,7 +1132,7 @@ export class SceneController {
    * camera sits at the origin with the logical camera's orientation; the Earth and atmosphere objects are moved to minus
    * the camera position (their own vertices are static and only a few hundred metres of float32 noise at the surface).
    */
-  private prepareRender(gmst: number): void {
+  private prepareRender(gmst: number, t: number): void {
     const cam = this.camera;
     const f = this.frameInfo;
     f.set(cam.position, gmst);
@@ -1113,6 +1149,7 @@ export class SceneController {
 
     this.earthGroup.position.copy(f.origin).negate();
     this.atmo.position.copy(f.origin).negate();
+    this.celestial.update(t, f.origin);
 
     const u = this.pointMat.uniforms;
     u.uOriginS.value.set(f.origin.x, f.origin.y, f.origin.z * ELLIPSOID_K);

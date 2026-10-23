@@ -3,6 +3,7 @@ import {
 } from '@eio/core';
 import { SHELL_THRESHOLD_KM } from './deepspace';
 import { orbitPeriodSec } from './orbit';
+import type { RefBody } from './ref-body';
 
 export interface Telemetry {
   /** geocentric distance, km */
@@ -18,16 +19,28 @@ export interface Telemetry {
   shell: boolean;
   /** SGP4 element age, days */
   elementAgeDays?: number;
+  /** distance and speed relative to the reference body, when that is not the Earth */
+  refRangeKm?: number;
+  refSpeedKmS?: number;
 }
 
 /** Live state of an entity from the shared graph at sim time `t`, in display-ready units. */
-export function computeTelemetry(graph: EntityGraph, rec: EntityRecord, t: number): Telemetry | null {
+export function computeTelemetry(graph: EntityGraph, rec: EntityRecord, t: number, ref: RefBody = 'EARTH'): Telemetry | null {
   const s = graph.stateOf(rec.id, t);
   if (!s) return null;
   const inertial = graph.stateIn(rec.id, t, 'EARTH:inertial');
   const rangeKm = inertial ? norm(inertial.r) : NaN;
   const shell = rangeKm > SHELL_THRESHOLD_KM;
   const out: Telemetry = { rangeKm, shell, confidence: s.confidence, speedKmS: inertial?.v ? norm(inertial.v) : undefined };
+
+  if (ref !== 'EARTH') {
+    // the frame hop in core re-expresses the state relative to the Moon or the Sun
+    const rel = graph.stateIn(rec.id, t, `${ref}:inertial`);
+    if (rel) {
+      out.refRangeKm = norm(rel.r);
+      out.refSpeedKmS = rel.v ? norm(rel.v) : undefined;
+    }
+  }
 
   // surface coordinates only make sense near the owning body
   if (!shell || rec.bodyId !== 'EARTH') {

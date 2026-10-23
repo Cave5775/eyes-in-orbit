@@ -7,6 +7,7 @@ import {
   closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, viewportNow,
   type FloatWindow,
 } from '../lib/floating';
+import type { RefBody } from '../lib/ref-body';
 import { clock, runtime } from './runtime';
 
 export type ConnState = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'mock';
@@ -14,6 +15,8 @@ export type ConnState = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'mo
 /** One-shot camera request; `nonce` makes repeated requests for the same target distinct. */
 export interface FocusRequest {
   id?: string;
+  /** centre the view on a body ('EARTH' is the default home view) */
+  body?: RefBody;
   lat?: number;
   lon?: number;
   nonce: number;
@@ -30,6 +33,8 @@ interface State {
   entities: Map<string, EntityRecord>;
   selectedId: string | null;
   follow: boolean;
+  /** body the view is centred on and readouts are measured from */
+  refBody: RefBody;
   focus: FocusRequest | null;
   query: string;
   searchResults: SearchHit[] | null;
@@ -56,6 +61,8 @@ interface State {
   select(id: string | null): void;
   focusLaunch(launch: Launch): void;
   resetView(): void;
+  /** Centre the view on a body (and measure readouts from it). Deselects. */
+  setRefBody(body: RefBody): void;
   setFollow(follow: boolean): void;
   setQuery(q: string): void;
   setSearchResults(r: SearchHit[] | null): void;
@@ -79,6 +86,7 @@ export const useStore = create<State>((set, get) => ({
   entities: new Map(),
   selectedId: null,
   follow: true,
+  refBody: 'EARTH',
   focus: null,
   query: '',
   searchResults: null,
@@ -111,7 +119,11 @@ export const useStore = create<State>((set, get) => ({
     else if (launch.pad) set({ focus: { lat: launch.pad.latitude, lon: launch.pad.longitude, nonce: ++nonce }, follow: true });
   },
   resetView() {
-    set({ selectedId: null, follow: false, focus: { nonce: ++nonce } });
+    set({ selectedId: null, follow: false, refBody: 'EARTH', focus: { nonce: ++nonce } });
+  },
+  setRefBody(body) {
+    if (body === 'EARTH') get().resetView();
+    else set({ selectedId: null, follow: true, refBody: body, focus: { body, nonce: ++nonce } });
   },
   setFollow: (follow) => set({ follow }),
   setQuery: (query) => set({ query }),

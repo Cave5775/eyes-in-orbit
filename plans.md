@@ -12,8 +12,9 @@
   - Delivered: procedural ISS, satellite and rocket-stage models; SARJ angles and attitude verified against live data. The 8 beta gimbal (BGA) angles are unverified (observed ~43 deg vs computed ~3 deg), so arrays fall back to a computed sun-tracking pose when the BGA mapping cannot be trusted
 - [x] allow users to enter optional supported api keys and credentials in the user interface, which will locally get the data instead of the eyesinorbit server
   - Delivered as a KEYS panel: values go to the local server (localhost only), which makes the requests with them; the browser never calls Space-Track itself. Needs a manual check against a real Space-Track account
-- [ ] Implement the Moon and Sun
-  - [ ] Change positional reference point between celestial bodies (includes the Sun)
+- [x] Implement the Moon and Sun
+  - [x] Change positional reference point between celestial bodies (includes the Sun)
+  - Delivered: Moon and Sun at true size and position (low-precision almanac series in core, `Body.ephemeris` hook, ecliptic-to-equatorial fix for heliocentric orbits), EARTH / MOON / SUN tabs centre and follow the body, readouts relative to it. Orbit lines are translated rather than re-sampled in the new frame, Mars is still disabled, surface view is Earth-only, and the views were only checked in a headless browser
 - [x] Higher resolution Earth texture
   - Code done: the scene prefers `earth-hires.jpg` (NASA Blue Marble 5400 x 2700) and falls back to the 2k map. Run `npm run assets` to download it and check it looks right; NASA licence terms not verified
 - [ ] Booster trajectory for Falcon 9 and similar

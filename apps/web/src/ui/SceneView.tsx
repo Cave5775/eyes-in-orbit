@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { sourceLabel } from '../lib/arrays';
 import { fmtDist, fmtDuration } from '../lib/format';
+import { REF_LABEL } from '../lib/ref-body';
 import { relatedFor } from '../lib/related';
 import { modelDef } from '../scene/models/registry';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
@@ -214,7 +215,7 @@ export function SceneView() {
       <div className="scene-hud mono">
         {stats && (
           <>
-            <span>CAM {fmtDist(stats.distKm)}</span>
+            <span>CAM {fmtDist(stats.distKm)}{stats.ref !== 'EARTH' ? ` FROM ${REF_LABEL[stats.ref].toUpperCase()}` : ''}</span>
             <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>            <span>EARTH {stats.earth === 'texture' ? 'TEXTURE' : 'PROCEDURAL'}</span>
             <span>{Math.round(stats.fps)} FPS</span>
             <span style={{ minWidth: '24ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">

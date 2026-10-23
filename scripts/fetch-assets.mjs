@@ -14,6 +14,12 @@ const ASSETS = [
     minBytes: 50_000,
   },
   {
+    // three.js example texture of the Moon (equirectangular, from NASA LRO imagery); used by the Moon view
+    url: 'https://threejs.org/examples/textures/planets/moon_1024.jpg',
+    out: 'apps/web/public/textures/moon.jpg',
+    minBytes: 50_000,
+  },
+  {
     // NASA Blue Marble Next Generation (topography and bathymetry, August), 5400 x 2700. The scene prefers this file over
     // earth.jpg when the GPU can hold it. NASA imagery is generally free to use; check NASA's media usage guidelines.
     // EARTH_HIRES_URL swaps in any other equirectangular JPEG (an 8192 x 4096 map, say).

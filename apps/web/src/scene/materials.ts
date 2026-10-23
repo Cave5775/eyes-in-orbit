@@ -132,6 +132,46 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
   });
 }
 
+/**
+ * Moon surface lit by the Sun: plain Lambert with a trace of earthshine on the night side. Geometry and UVs follow the
+ * Earth's convention (z = pole, +x at the centre of an equirectangular map). Without a texture a grey noise surface is
+ * used (clearly procedural, not geography).
+ */
+export function createMoonMaterial(sun: THREE.Vector3, texture: THREE.Texture | null): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uSun: { value: sun },
+      uTex: { value: texture },
+      uHasTex: { value: texture ? 1 : 0 },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying vec3 vL; varying vec3 vN; varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        vL = normal;
+        vN = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */ `
+      #include <logdepthbuf_pars_fragment>
+      uniform vec3 uSun; uniform sampler2D uTex; uniform float uHasTex;
+      varying vec3 vL; varying vec3 vN; varying vec2 vUv;
+      ${NOISE}
+      void main() {
+        #include <logdepthbuf_fragment>
+        vec3 base = uHasTex > 0.5
+          ? texture2D(uTex, vUv).rgb
+          : vec3(0.18 + 0.30 * fbm(vL * 3.0 + 1.7) + 0.12 * fbm(vL * 14.0));
+        float d = dot(normalize(vN), normalize(uSun));
+        float lit = smoothstep(-0.02, 0.35, d) * (0.15 + 0.95 * max(d, 0.0));
+        gl_FragColor = vec4(base * (0.012 + 1.05 * lit), 1.0);
+      }`,
+  });
+}
+
 /** Limb glow drawn on the back faces of a slightly larger sphere. */
 export function createAtmosphereMaterial(sun: THREE.Vector3): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
