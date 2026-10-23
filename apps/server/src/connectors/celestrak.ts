@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Omm, StreamLink } from '@eio/core';
-import type { Connector } from '../connector';
+import { clearBackoff, isBackedOff, readBackoff, recordFailure } from '../backoff';
+import type { Connector, ConnectorContext } from '../connector';
 import type { NewEntity } from '../hub';
 
 /**
@@ -20,6 +23,7 @@ const FETCH_ORDER: SatGroup[] = ['stations', 'starlink', 'active', ...DEBRIS_GRO
 const TTL_MS = 3 * 3600_000;
 const ISS_NORAD = 25544;
 const STATION_NAME = /^(ISS|CSS)\b|^(POISK|NAUKA|ZARYA|ZVEZDA|TIANGONG|TIANHE|WENTIAN|MENGTIAN)\b/i;
+const STARLINK_NAME = /^STARLINK\b/i;
 
 export const ISS_STREAMS: StreamLink[] = [
   { title: 'NASA Live: Official Stream of NASA TV', url: 'https://www.youtube.com/watch?v=21X5lGlDOfg', kind: 'youtube', live: true },
@@ -58,7 +62,9 @@ export function satKind(omm: Omm): 'station' | 'debris' | 'satellite' {
   return 'satellite';
 }
 
-export function satelliteEntity(omm: Omm, group: SatGroup): NewEntity {
+export function satelliteEntity(omm: Omm, sourceGroup: SatGroup): NewEntity {
+  // Starlink shows up in `active` too, so it stays a Starlink (group, colour) when only `active` could be fetched
+  const group: SatGroup = sourceGroup === 'active' && STARLINK_NAME.test(omm.OBJECT_NAME) ? 'starlink' : sourceGroup;
   const sk = satKind(omm);
   // everything in a fragmentation-event group is debris for display, even the defunct parent (no ' DEB' in its name)
   const kind = sk === 'satellite' && isDebrisGroup(group) ? 'debris' : sk;
@@ -94,6 +100,30 @@ export function normalizeCelestrak(groups: Partial<Record<SatGroup, Omm[]>>): Ne
   return [...byNorad.values()];
 }
 
+/**
+ * A group file saved by hand (`data/celestrak/<group>.json`, the same JSON `gp.php?GROUP=<group>&FORMAT=json` returns).
+ * The escape hatch when CelesTrak blocks this IP and nothing is cached yet.
+ */
+export function loadGroupFile(dir: string, group: SatGroup): Omm[] | undefined {
+  try {
+    return parseOmmJson(readFileSync(join(dir, `${group}.json`), 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+type Source = 'live' | 'cache' | 'file';
+
+/** Everything that does not touch the network: the SQLite entry of any age, then the hand-saved file. */
+function localGroup(ctx: ConnectorContext, group: SatGroup): { omms: Omm[]; source: Source } | undefined {
+  const cached = ctx.store.get<Omm[]>(`celestrak:${group}`);
+  if (cached) return { omms: cached.value, source: 'cache' };
+  const omms = loadGroupFile(join(ctx.config.dataDir, 'celestrak'), group);
+  return omms && { omms, source: 'file' };
+}
+
+const hhmm = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
+
 export const celestrak: Connector = {
   id: 'celestrak',
   intervalMs: TTL_MS,
@@ -101,21 +131,46 @@ export const celestrak: Connector = {
   async run(ctx) {
     const groups: Partial<Record<SatGroup, Omm[]>> = {};
     const failures: string[] = [];
+    const degraded: string[] = [];
+    let retryAt = Infinity;
     for (const group of FETCH_ORDER) {
+      const source = `celestrak:${group}`;
+      const gate = readBackoff(ctx.store, source);
+      const give = (local: { omms: Omm[]; source: Source } | undefined, why: string): void => {
+        if (local) {
+          groups[group] = local.omms;
+          degraded.push(`${group}: ${why}, using ${local.source === 'file' ? 'data file' : 'cache'}`);
+        } else failures.push(`${group}: ${why}`);
+      };
+      if (isBackedOff(gate)) {
+        // CelesTrak 403s clients that re-download; stay off the network until the stored retry time, even across restarts
+        retryAt = Math.min(retryAt, gate.notBefore);
+        give(localGroup(ctx, group), `waiting until ${hhmm(gate.notBefore)} (${gate.message ?? 'earlier failure'})`);
+        continue;
+      }
       try {
         const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=json`;
-        groups[group] = (await ctx.cachedFetch(`celestrak:${group}`, url, TTL_MS, parseOmmJson)).value;
+        const res = await ctx.cachedFetch(source, url, TTL_MS, parseOmmJson);
+        groups[group] = res.value;
+        if (res.stale) {
+          // cachedFetch fell back to an old entry because the download failed
+          const next = recordFailure(ctx.store, source, res.error ?? 'download failed');
+          retryAt = Math.min(retryAt, next.notBefore);
+          degraded.push(`${group}: ${res.error ?? 'download failed'}, using cache`);
+        } else clearBackoff(ctx.store, source);
       } catch (err) {
-        failures.push(`${group}: ${(err as Error).message}`);
+        const next = recordFailure(ctx.store, source, err);
+        retryAt = Math.min(retryAt, next.notBefore);
+        give(localGroup(ctx, group), (err as Error).message);
       }
     }
     if (!Object.keys(groups).length) throw new Error(failures.join('; '));
     const changed = ctx.hub.upsert(...normalizeCelestrak(groups));
-    ctx.log(`${ctx.hub.graph.size} entities, ${changed} changed${failures.length ? `, failed: ${failures.join('; ')}` : ''}`);
-    if (failures.length) {
-      ctx.health.note = `partial: ${failures.join('; ')}`;
-      // CelesTrak answers 403 until its data changes (every ~2 h); do not hammer it
-      ctx.softFail(failures[0], 30 * 60_000);
+    const problems = [...failures, ...degraded];
+    ctx.log(`${ctx.hub.graph.size} entities, ${changed} changed${problems.length ? `; ${problems.join('; ')}` : ''}`);
+    if (problems.length) {
+      ctx.health.note = `partial: ${problems.join('; ')}`;
+      ctx.softFail(problems[0], Math.max(retryAt - Date.now(), 60_000));
     }
   },
 };

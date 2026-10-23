@@ -5,6 +5,7 @@ import Fastify from 'fastify';
 import { loadLiveTelemetry, registerApi } from './api';
 import { loadConfig, loadDotEnv } from './config';
 import { Scheduler, type Connector } from './connector';
+import { Credentials } from './credentials';
 import { celestrak } from './connectors/celestrak';
 import { demo } from './connectors/demo';
 import { dsn } from './connectors/dsn';
@@ -14,7 +15,8 @@ import { issLive } from './connectors/iss-live';
 import { issRest } from './connectors/iss-rest';
 import { launchlibrary } from './connectors/launchlibrary';
 import { snapi } from './connectors/snapi';
-import { notam, satnogs, spacetrack, webcastOcr } from './connectors/stubs';
+import { spacetrack } from './connectors/spacetrack';
+import { notam, satnogs, webcastOcr } from './connectors/stubs';
 import { Http } from './http';
 import { Hub } from './hub';
 import { Store } from './store';
@@ -41,7 +43,11 @@ async function main(): Promise<void> {
   await app.register(cors, { origin: true });
   await app.register(compress, { global: true, threshold: 1024 });
   loadLiveTelemetry(hub, store);
-  registerApi(app, hub, http, store);
+  const credentials = new Credentials(config, store);
+  registerApi(app, hub, http, store, {
+    credentials,
+    onChanged: (ids) => ids.forEach((id) => void scheduler.refresh(id)),
+  });
   await registerStream(app, hub);
 
   await app.listen({ port: config.port, host: config.host });

@@ -154,6 +154,25 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .health-row .mono { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .health-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 
+/* ---- API keys panel ---- */
+.keys-btn { min-width: 0; }
+.keys-pop { width: 400px; }
+.keys-note { margin: 0 0 6px; font-size: 11px; line-height: 1.4; }
+.keys-note code { font-family: var(--mono); }
+.keys-group { border-top: 1px solid var(--line); padding: 6px 0 4px; }
+.keys-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.keys-status { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.keys-field { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; align-items: center; margin-bottom: 5px; font-size: 11px; }
+.keys-field > span { grid-column: 1 / -1; color: var(--dim); }
+.keys-field input {
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 3px; color: var(--text);
+  font-family: var(--mono); font-size: 11px; padding: 4px 6px; min-width: 0;
+}
+.keys-field input:focus { outline: none; border-color: var(--accent); }
+.keys-error { color: var(--bad); font-size: 11px; margin: 4px 0; }
+.keys-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.keys-saved { font-size: 11px; }
+
 /* ---- scene ---- */
 .scene { position: relative; min-width: 0; min-height: 0; background: var(--bg); overflow: hidden; }
 .scene-host, .scene-canvas { position: absolute; inset: 0; }

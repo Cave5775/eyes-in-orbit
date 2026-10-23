@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { fmtUtc } from '../lib/format';
 import { clock } from '../state/runtime';
 import { useStore } from '../state/store';
+import { CredentialsPanel } from './CredentialsPanel';
 import { HealthIndicator } from './HealthIndicator';
 import { useSimNow } from './hooks';
 
@@ -68,6 +69,7 @@ export function TopBar() {
         </label>
       </div>
 
+      <CredentialsPanel />
       <HealthIndicator />
     </header>
   );

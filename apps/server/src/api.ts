@@ -2,6 +2,7 @@ import { defaultBodies, type LiveAscent } from '@eio/core';
 import type { FastifyInstance } from 'fastify';
 import { searchNews } from './connectors/snapi';
 import { syncLaunchEntities } from './connectors/launchlibrary';
+import { CredentialError, type Credentials } from './credentials';
 import type { Http } from './http';
 import type { Hub } from './hub';
 import { filterEntities, searchEntities } from './search';
@@ -29,7 +30,13 @@ const int = (v: unknown, fallback?: number): number | undefined => {
   return v !== undefined && v !== '' && Number.isFinite(n) ? n : fallback;
 };
 
-export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store): void {
+export interface CredentialsApi {
+  credentials: Credentials;
+  /** called after a successful change with the connectors whose settings moved */
+  onChanged(connectors: string[]): void;
+}
+
+export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store, creds?: CredentialsApi): void {
   app.get('/api/health', async () => ({
     serverTime: Date.now(),
     entityCount: hub.graph.size,
@@ -122,6 +129,25 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
     refresh();
     return { ok: true, launchId: launch.id, cleared: had };
   });
+
+  // ---- credentials typed into the UI: local requests only, secrets are write-only
+  if (creds) {
+    const denied = { error: 'credentials can be read and changed from localhost only' };
+    app.get('/api/credentials', async (req, reply) =>
+      requireLocal(req) ? { credentials: creds.credentials.describe() } : reply.code(403).send(denied));
+
+    app.put<{ Body: { values?: unknown } }>('/api/credentials', async (req, reply) => {
+      if (!requireLocal(req)) return reply.code(403).send(denied);
+      try {
+        const { changed, connectors } = creds.credentials.update(req.body?.values);
+        if (connectors.length) creds.onChanged(connectors);
+        return { ok: true, changed, credentials: creds.credentials.describe() };
+      } catch (err) {
+        if (err instanceof CredentialError) return reply.code(400).send({ error: err.message });
+        throw err;
+      }
+    });
+  }
 
   app.get('/api/dsn', async () => hub.dsn);
 
