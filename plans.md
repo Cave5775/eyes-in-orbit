@@ -2,26 +2,16 @@
 - [x] Performance has no issues (also tested with `?mock=1`)
 
 # UI/UX
-- [x] Round unnecessary decimals so changing values stop adding and removing newlines in their text boxes
-- [x] Drag borders to resize the UI
 
 # Wanted features
 - [x] Filter objects by associated launch (e.g. toggle a visual filter to see all COSMOS 2251 debris at once)
   - [x] Selecting a launch group frames its members in the camera (needs `fitEntities`, in progress with the camera work)
   - [ ] Verify the CelesTrak debris groups against live data (blocked: CelesTrak returns HTTP 403 for repeated downloads)
 - [x] Better camera controls: align with the planetary surface, zoom according to altitude, fit associated objects
-- [x] Realistic distance projection
-- [x] Unrender objects outside of reasonable view or scope of the current focus object
-- [x] try implementing data stream visualization for the upcoming starlink group 15-15 launch (or 15-16 if too late)
   - Delivered as modeled Falcon 9 ascent charts plus a telemetry ingest endpoint; no open live telemetry source exists, so measured data needs a feed (webcast OCR is still a stub)
-- [ ] 3D models for (some?) objects. Try implementing the ISS and making use of its special data streams for solar array angles.
-- [x] Livestreams can be popped out and dragged around within the interface
+- [x] 3D models for (some?) objects. Try implementing the ISS and making use of its special data streams for solar array angles.
+  - Delivered: procedural ISS, satellite and rocket-stage models; SARJ angles and attitude verified against live data. The 8 beta gimbal (BGA) angles are unverified (observed ~43 deg vs computed ~3 deg), so arrays fall back to a computed sun-tracking pose when the BGA mapping cannot be trusted
+- [ ] Implement the Moon and Sun
 
 # Feature issues
-- [x] Earth does not block the background stars behind it
-- [x] Demo booster and deep space objects do not have a trajectory
-- [x] Trajectories and objects seem to oscillate at high zoom; found while watching the demo booster landing
-- [x] Flickering of the 3D viewport when resized (not urgent)
-- [x] Icons on the surface of the earth clip into it when the earth is rotated
-- [ ] Youtube embedded streams do not hide their youtube overlay which obstructs streams
-  - Mitigated with supported embed parameters and a hover control strip; YouTube branding, title and error cards cannot be hidden without breaching its terms
+- [ ] Surface view pan does not work
