@@ -1,4 +1,5 @@
 import { Body, BodyRegistry, defaultBodies } from './bodies';
+import { eclipticToEquatorial } from './ephemeris';
 import { keplerState } from './kepler';
 import {
   DEG, J2000_MS, Mat3, MS_PER_DAY, Vec3, add, mulMM, mulMV, rotX, rotZ, sub, transpose, wrap2Pi,
@@ -42,8 +43,12 @@ export function bodyStateInParent(
   tMs: number,
   bodies: BodyRegistry = defaultBodies,
 ): { r: Vec3; v: Vec3 } | null {
-  if (!body.orbit || !body.parentId) return null;
-  return keplerState(body.orbit, bodies.get(body.parentId).gm, tMs);
+  if (!body.parentId) return null;
+  if (body.ephemeris) return body.ephemeris(tMs);
+  if (!body.orbit) return null;
+  const s = keplerState(body.orbit, bodies.get(body.parentId).gm, tMs);
+  // heliocentric elements are ecliptic; all inertial frames use the equatorial axes (what `sunDirectionEci` is expressed in)
+  return body.orbitPlane === 'ecliptic' ? { r: eclipticToEquatorial(s.r), v: eclipticToEquatorial(s.v) } : s;
 }
 
 /** Convert a state into `to`. Handles inertial<->fixed and hops across body inertial frames. */
@@ -62,7 +67,7 @@ export function convert(
   // 1. bring to inertial of the source body
   if (from.kind === 'fixed') cur = fixedToInertial(cur, bodies.get(from.bodyId), tMs);
 
-  // 2. hop between bodies' inertial frames (axes assumed parallel)
+  // 2. hop between bodies' inertial frames (all inertial frames share the equatorial axes)
   if (from.bodyId !== dst.bodyId) cur = hopInertial(cur, from.bodyId, dst.bodyId, tMs, bodies);
 
   // 3. to the destination kind
