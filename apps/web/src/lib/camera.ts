@@ -186,6 +186,46 @@ export function slerpDir(a: V3, b: V3, k: number): V3 {
   return [ua[0] * w0 + ub[0] * w1, ua[1] * w0 + ub[1] * w1, ua[2] * w0 + ub[2] * w1];
 }
 
+/** Surface view of an object: closest and farthest the fit may put the camera from the framed segment's middle, km. */
+export const SURFACE_FIT_MIN_KM = 20;
+export const SURFACE_FIT_MAX_KM = 60000;
+/** The surface target rises at most this far above the ground, so a very high object (GEO, a compressed probe) does not drag it into space. */
+const SURFACE_LIFT_MAX_KM = 10000;
+
+/** How far above its ground point the surface view aims for an object `heightKm` up: halfway, so the ground and the object both fit. */
+export const surfaceLift = (heightKm: number): number => Math.min(SURFACE_LIFT_MAX_KM, Math.max(0, heightKm) / 2);
+
+/**
+ * Surface view of an object `heightKm` above its ground point: the camera looks at the middle of the vertical segment
+ * between the ground and the object (`lift` above the ground), from a distance that frames the whole segment, so both
+ * the horizon below and the object above stay on screen. Objects on the ground get the minimum distance.
+ */
+export function surfaceFrame(heightKm: number, fovDeg: number, aspect: number, margin = 1.6): { lift: number; dist: number } {
+  const lift = surfaceLift(heightKm);
+  const dist = Math.min(SURFACE_FIT_MAX_KM, Math.max(SURFACE_FIT_MIN_KM, fitDistance(lift, fovDeg, aspect, margin)));
+  return { lift, dist };
+}
+
+/**
+ * Ground movement (km east, km north) of the surface view's target for a drag of (`dx`, `dy`) pixels, as if grabbing the
+ * ground: dragging right moves the target to the left (west when looking north), dragging down moves it forward (north).
+ * `kmPerPx` is the size of a pixel at the target's depth; the forward component is stretched by the view's foreshortening.
+ */
+export function groundPanDelta(az: number, el: number, dx: number, dy: number, kmPerPx: number): { east: number; north: number } {
+  const ca = Math.cos(az), sa = Math.sin(az);
+  const right = kmPerPx * dx, forward = (kmPerPx * dy) / Math.max(Math.sin(el), 0.2);
+  return { east: sa * right - ca * forward, north: -ca * right - sa * forward };
+}
+
+/** Move a geodetic point (radians) by `eastKm`/`northKm` over the ground; latitude is kept off the poles and longitude wrapped. */
+export function panGround(lat: number, lon: number, eastKm: number, northKm: number): { lat: number; lon: number } {
+  const maxLat = Math.PI / 2 - 1e-3;
+  const nlat = Math.max(-maxLat, Math.min(maxLat, lat + northKm / RE));
+  const dlon = eastKm / (RE * Math.max(Math.cos(nlat), 1e-3));
+  const nlon = lon + dlon;
+  return { lat: nlat, lon: Math.atan2(Math.sin(nlon), Math.cos(nlon)) };
+}
+
 /** Camera azimuth/elevation that views a subject at `c` from outside, with the Earth behind it; null when `c` is near the centre (keep the current angles). */
 export function viewAnglesFor(c: V3, minRadius = RE * 1.2): { az: number; el: number } | null {
   const r = len(c);

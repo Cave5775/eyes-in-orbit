@@ -145,6 +145,15 @@ export function layoutLabels(items: { x: number; text: string }[], width: number
   });
 }
 
+/**
+ * Baseline y of a label row above the event band. Row 0 (the earliest label of a cluster) is the highest and later rows
+ * sit below it, so a later label's leader line, which runs down to the band, starts below the earlier labels' text
+ * instead of cutting through it.
+ */
+export function labelY(row: number, rows: number, bandY: number, rowH: number): number {
+  return bandY - 4 - (Math.max(1, rows) - 1 - Math.min(row, rows - 1)) * rowH;
+}
+
 // ---------------------------------------------------------------- cursor readout
 
 export interface Reading {

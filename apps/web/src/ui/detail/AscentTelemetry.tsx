@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatCountdown, sampleAscentRows, type AscentEvent, type AscentSeries, type Launch } from '@eio/core';
 import { api } from '../../api/client';
 import {
-  METRICS, chartDomain, chartSeries, fmtAxisT, fmtTPlus, layoutLabels, linePath, linear, niceTicks, phaseNow, readingAt,
+  METRICS, chartDomain, chartSeries, fmtAxisT, fmtTPlus, labelY, layoutLabels, linePath, linear, niceTicks, phaseNow, readingAt,
   timeTicks, timelineEvents, timelinePhases, valueDomain, visibleRows, type ChartSeries, type Metric, type Reading, type SeriesId,
 } from '../../lib/ascent-chart';
 import { fmtDeg, fmtKm, fmtNum, fmtSpeedKmS, fmtUtc } from '../../lib/format';
@@ -257,7 +257,7 @@ function Timeline({ series, events, tMax, tSec, hoverT, onHover }: {
         })}
         {vehicle.map((e, i) => {
           const l = vLabels[i];
-          const ly = TL.bandY - 4 - l.row * TL.rowH;
+          const ly = labelY(l.row, TL.labelRows, TL.bandY, TL.rowH);
           return (
             <g key={e.name} className={tSec >= e.tSec ? 'at-ev past' : 'at-ev'}>
               <title>{`${e.label} ${fmtTPlus(e.tSec)}${e.reported ? ' (reported)' : ' (modeled)'}`}</title>

@@ -21,5 +21,7 @@
 - [ ] trajectory data OCR using the existing livestream embedding?
 
 # Feature issues
-- [ ] Surface mode does not vertically fit an object, only tracks its surface position. When toggled without a focused object, locks to a specific point on Earth and cannot pan
-- [ ] Events timeline in Falcon 9 launch viewer stacks overlapping events so that the first event's text overlaps with the next event's line; change the stacking so that the first event is highest and subsequent ones are below it
+- [x] Surface mode does not vertically fit an object, only tracks its surface position. When toggled without a focused object, locks to a specific point on Earth and cannot pan
+  - Fixed, needs a manual look in the browser: the surface view now aims halfway up to the object and frames the whole ground-to-object segment (also on FIT of one object), and right/shift drag slides the ground target (a followed object is let go; with nothing focused the view roams)
+- [x] Events timeline in Falcon 9 launch viewer stacks overlapping events so that the first event's text overlaps with the next event's line; change the stacking so that the first event is highest and subsequent ones are below it
+  - Fixed (`labelY` in `lib/ascent-chart.ts`, unit-tested); needs a visual check on a real launch

@@ -4,7 +4,7 @@ import {
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, settleDistance, viewAnglesFor, type V3 } from '../lib/camera';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, panGround, settleDistance, surfaceFrame, surfaceLift, viewAnglesFor, type V3 } from '../lib/camera';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
 import { ELLIPSOID_K, makeOccluder, occlusionC2 } from '../lib/occlusion';
@@ -76,7 +76,10 @@ export interface SceneStats {
 }
 
 /** Where the surface-aligned camera is anchored. */
-type SurfaceSource = { kind: 'entity'; id: string } | { kind: 'latlon'; lat: number; lon: number };
+type SurfaceSource = { kind: 'entity'; id: string } | { kind: 'latlon'; lat: number; lon: number; lift?: number };
+
+/** Elevation of the surface camera on entry and after a fit, radians above the local horizon. */
+const SURFACE_EL = 0.35;
 
 interface PointSet {
   geo: THREE.BufferGeometry;
@@ -220,6 +223,7 @@ export class SceneController {
 
     this.camera.up.set(0, 0, 1);
     this.rig = new OrbitRig(this.camera, this.renderer.domElement);
+    this.rig.onGroundPan = (east, north) => this.panSurface(east, north);
     const sun0 = sunDirectionEci(clock.now());
     this.rig.az = Math.atan2(sun0[1], sun0[0]) + 0.5;
     this.rig.el = 0.35;
@@ -483,13 +487,10 @@ export class SceneController {
       this.globeDist = this.rig.dist;
       this.surfaceSrc = src;
       let dist = 300;
-      if (src.kind === 'entity' && this.worldPos(src.id, clock.now(), this.tmp)) {
-        // an object high above its sub-point (ISS) needs a camera far enough back (and high enough) to see it and the ground
-        dist = Math.min(60000, Math.max(300, (this.tmp.length() - RE) * 3.6));
-      }
+      if (src.kind === 'entity') dist = this.surfaceFitDist(src.id) ?? dist;
       this.rig.switchMode('surface');
       this.rig.az = NORTH_UP_AZ;
-      this.rig.el = 0.35;
+      this.rig.el = SURFACE_EL;
       this.rig.dist = dist;
       this.surfaceOn = true;
     } else {
@@ -515,6 +516,8 @@ export class SceneController {
    * Returns false when none of the ids has a position.
    */
   fitEntities(ids: string[], opts: { points?: { latDeg: number; lonDeg: number }[]; includePath?: boolean } = {}): boolean {
+    // surface view of one object: refit inside the surface view instead of leaving it for the globe
+    if (this.surfaceOn && ids.length === 1 && !opts.points?.length && this.fitSurface(ids[0])) return true;
     // an entity with a 3D model and nothing else to frame: show the model (following it), not a 3,200 km view of a dot
     if (ids.length === 1 && !opts.points?.length && this.viewModel(ids[0])) return true;
     const pts: number[] = [];
@@ -631,9 +634,48 @@ export class SceneController {
     return { kind: 'latlon', lat: geo.lat, lon: geo.lon };
   }
 
+  /** Pin an entity source to where its sub-point is now (keeping the target's height), so the view stays put on the rotating ground. */
   private freezeSurfaceSource(): void {
-    const ground = this.surfaceTarget(this.tmp, clock.now());
-    this.surfaceSrc = (ground && this.latLonOfWorld(this.tmp)) || this.surfaceSrc;
+    const src = this.surfaceSrc;
+    if (src?.kind !== 'entity' || !this.worldPos(src.id, clock.now(), this.tmp)) return;
+    const lift = surfaceLift(altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z]));
+    const ll = this.latLonOfWorld(this.tmp);
+    if (ll?.kind === 'latlon') this.surfaceSrc = { kind: 'latlon', lat: ll.lat, lon: ll.lon, lift };
+  }
+
+  /** Surface camera distance that frames the ground and the entity above it, or null when it has no position. */
+  private surfaceFitDist(id: string): number | null {
+    if (!this.worldPos(id, clock.now(), this.tmp)) return null;
+    return surfaceFrame(altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z]), this.camera.fov, this.camera.aspect).dist;
+  }
+
+  /**
+   * FIT of one entity while in surface view: stay in the view, follow the entity and refit so the ground and the object are
+   * both on screen. False when the entity has no position (the caller falls back to the globe fit).
+   */
+  private fitSurface(id: string): boolean {
+    const rec = this.recs.get(id);
+    if (!rec?.provider) return false;
+    if (!graph.get(id)) graph.upsert(rec);
+    const dist = this.surfaceFitDist(id);
+    if (dist === null) return false;
+    this.focus({ id, nonce: 0 });
+    this.cb.onFollowChange?.(true);
+    this.rig.flyTo({ dist, az: this.rig.az, el: SURFACE_EL });
+    return true;
+  }
+
+  /** A pan drag in surface view: slide the ground target over the Earth. A followed object is let go first. */
+  private panSurface(eastKm: number, northKm: number): void {
+    if (!this.surfaceOn) return;
+    if (this.follow) {
+      this.setFollow(false);
+      this.cb.onFollowChange?.(false);
+    }
+    this.freezeSurfaceSource();
+    const src = this.surfaceSrc;
+    if (src?.kind !== 'latlon') return;
+    this.surfaceSrc = { ...src, ...panGround(src.lat, src.lon, eastKm, northKm) };
   }
 
   /** World position of the surface camera's ground target at sim time `t`, or null when its source has no position. */
@@ -642,11 +684,13 @@ export class SceneController {
     if (!src) return false;
     if (src.kind === 'entity') {
       if (!this.worldPos(src.id, t, out)) return false;
-      const g = groundPoint([out.x, out.y, out.z]);
+      // aim at the middle of the segment between the ground and the object, so a high object is framed vertically
+      const p: V3 = [out.x, out.y, out.z];
+      const g = groundPoint(p, surfaceLift(altitudeOf(p)));
       out.set(g[0], g[1], g[2]);
       return true;
     }
-    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: 0 }, EARTH), out, t);
+    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: src.lift ?? 0 }, EARTH), out, t);
     return true;
   }
 

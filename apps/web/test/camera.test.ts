@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { EARTH, enuBasis, geodeticToFixed } from '@eio/core';
 import {
   MAX_DIST_KM, MIN_ALT_KM, SMALL_FIT_TILT, altitudeOf, basisFromUp, basisOffset, boundingSphere, ellipsoidUp, fitAngles, fitDistance,
-  groundPoint, localBasis, minElevation, slerpDir, surfaceRadius, viewAnglesFor, zoomDistance, type V3,
+  SURFACE_FIT_MAX_KM, SURFACE_FIT_MIN_KM, groundPanDelta, groundPoint, localBasis, minElevation, panGround, slerpDir, surfaceFrame, surfaceLift,
+  surfaceRadius, viewAnglesFor, zoomDistance, type V3,
 } from '../src/lib/camera';
 
 const RE = EARTH.radiusKm;
@@ -188,5 +189,61 @@ describe('local surface frame', () => {
     const v = viewAnglesFor([0, 20000, 0])!;
     expect(v.az).toBeCloseTo(Math.PI / 2, 9);
     expect(v.el).toBeCloseTo(0.3, 9);
+  });
+});
+
+describe('surface view fit and ground pan', () => {
+  it('aims halfway up to a high object and frames the whole segment', () => {
+    const iss = surfaceFrame(420, 45, 1.6);
+    expect(iss.lift).toBe(210);
+    expect(iss.dist).toBeCloseTo(fitDistance(210, 45, 1.6, 1.6), 9);
+    // a taller object needs a camera farther back
+    expect(surfaceFrame(2000, 45, 1.6).dist).toBeGreaterThan(iss.dist);
+    // a narrow (portrait) window needs more distance than a wide one for the same segment
+    expect(surfaceFrame(420, 45, 0.5).dist).toBeGreaterThan(iss.dist);
+  });
+
+  it('keeps ground-level objects at the minimum distance and very high ones within the zoom and lift limits', () => {
+    expect(surfaceFrame(0, 45, 1.6)).toEqual({ lift: 0, dist: SURFACE_FIT_MIN_KM });
+    expect(surfaceFrame(-5, 45, 1.6).lift).toBe(0);
+    const geo = surfaceFrame(35786, 45, 1.6);
+    expect(geo.lift).toBe(surfaceLift(35786));
+    expect(surfaceLift(1e9)).toBe(surfaceLift(1e12)); // capped: a probe on the compressed shell does not pull the target into space
+    expect(surfaceFrame(1e9, 45, 1.6).dist).toBe(geo.dist);
+    expect(surfaceFrame(35786, 45, 0.1).dist).toBe(SURFACE_FIT_MAX_KM); // a very narrow window hits the zoom-out limit
+  });
+
+  it('turns a drag into ground motion in the camera\'s own frame', () => {
+    const north = -Math.PI / 2; // camera south of the target, looking north
+    const right = groundPanDelta(north, 0.35, 10, 0, 1);
+    expect(right.east).toBeCloseTo(-10, 9); // dragging right moves the target west
+    expect(right.north).toBeCloseTo(0, 9);
+    const down = groundPanDelta(north, Math.PI / 2, 0, 10, 1);
+    expect(down.east).toBeCloseTo(0, 9);
+    expect(down.north).toBeCloseTo(10, 9); // dragging down moves it forward, which is north here
+    // looking east (camera west of the target) the same drag runs along the other axis
+    const east = groundPanDelta(Math.PI, Math.PI / 2, 0, 10, 1);
+    expect(east.east).toBeCloseTo(10, 9);
+    expect(east.north).toBeCloseTo(0, 9);
+    // a low camera stretches the forward component (foreshortening), capped at 5x
+    expect(groundPanDelta(north, 0.01, 0, 10, 1).north).toBeCloseTo(50, 9);
+  });
+
+  it('moves a geodetic point over the ground, widening longitude steps with latitude', () => {
+    const n = panGround(0, 0, 0, 10);
+    expect(n.lat * RE).toBeCloseTo(10, 6);
+    expect(n.lon).toBe(0);
+    const eq = panGround(0, 0, 10, 0).lon;
+    const hi = panGround(Math.PI / 3, 0, 10, 0).lon;
+    expect(hi / eq).toBeCloseTo(2, 3); // cos 60 deg = 0.5
+  });
+
+  it('stops short of the poles and wraps the date line', () => {
+    const p = panGround(1.5, 0, 0, 1e6);
+    expect(p.lat).toBeLessThan(Math.PI / 2);
+    expect(Number.isFinite(panGround(Math.PI / 2 - 1e-3, 0, 1e5, 0).lon)).toBe(true);
+    const w = panGround(0, Math.PI - 1e-4, 100, 0);
+    expect(w.lon).toBeLessThan(0); // crossed +180 and came out as -179.x
+    expect(w.lon).toBeGreaterThan(-Math.PI);
   });
 });

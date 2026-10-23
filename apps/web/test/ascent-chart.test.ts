@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { providerFromSpec, CompositeProvider, type AscentRow, type AscentSeries } from '@eio/core';
 import {
-  chartDomain, chartSeries, fmtAxisT, fmtTPlus, layoutLabels, linePath, linear, niceTicks, phaseNow, readingAt, timeTicks,
+  chartDomain, chartSeries, fmtAxisT, fmtTPlus, labelY, layoutLabels, linePath, linear, niceTicks, phaseNow, readingAt, timeTicks,
   timelineEvents, valueDomain, visibleRows,
 } from '../src/lib/ascent-chart';
 import { mockAscentSeries, mockLaunches } from '../src/mock/generators';
@@ -139,6 +139,34 @@ describe('label layout', () => {
     expect(a.anchor).toBe('end');
     const many = layoutLabels(Array.from({ length: 8 }, (_, i) => ({ x: 100 + i, text: 'XXXX' })), 340, { maxRows: 3 });
     expect(Math.max(...many.map((p) => p.row))).toBeLessThanOrEqual(2);
+  });
+
+  it('puts the first label highest and later rows below it', () => {
+    const ys = [0, 1, 2].map((row) => labelY(row, 3, 38, 10));
+    expect(ys).toEqual([14, 24, 34]);
+    expect(labelY(5, 3, 38, 10)).toBe(34); // rows past the cap land on the lowest row
+    expect(labelY(0, 1, 38, 10)).toBe(34); // a single row sits next to the band
+  });
+
+  it('never lets a later label\'s leader line cross an earlier label\'s text', () => {
+    const charW = 5.2, bandY = 38, bandH = 14, rowH = 10, rows = 3;
+    const items = [
+      { x: 100, text: 'MECO' }, { x: 102, text: 'SEP' }, { x: 106, text: 'SES' }, { x: 250, text: 'SECO' }, { x: 255, text: 'FAIRING' },
+    ];
+    const placed = layoutLabels(items, 340, { maxRows: rows });
+    const box = (p: (typeof placed)[number]) => {
+      const w = p.text.length * charW, y = labelY(p.row, rows, bandY, rowH);
+      const x0 = p.anchor === 'start' ? p.x - 2 : p.x + 2 - w;
+      return { x0, x1: x0 + w, y0: y - 8, y1: y };
+    };
+    for (let j = 1; j < placed.length; j++) {
+      const leader = { x: placed[j].x, y0: labelY(placed[j].row, rows, bandY, rowH) + 2, y1: bandY + bandH };
+      for (let i = 0; i < j; i++) {
+        const b = box(placed[i]);
+        const crosses = leader.x >= b.x0 && leader.x <= b.x1 && leader.y0 <= b.y1 && leader.y1 >= b.y0;
+        expect(crosses, `${placed[j].text} leader through ${placed[i].text}`).toBe(false);
+      }
+    }
   });
 });
 

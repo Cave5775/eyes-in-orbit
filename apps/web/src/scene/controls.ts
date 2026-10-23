@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  MAX_DIST_KM, MIN_ALT_KM, altitudeOf, basisFromUp, ellipsoidUp, minElevation, slerpDir, zoomDistance, type V3,
+  MAX_DIST_KM, MIN_ALT_KM, altitudeOf, basisFromUp, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type V3,
 } from '../lib/camera';
 
 const MAX_EL = 1.5;
@@ -23,7 +23,7 @@ const tup = (v: THREE.Vector3): V3 => [v.x, v.y, v.z];
  *  - `globe`: world z is up (the Earth's axis); az/el are measured in the world frame.
  *  - `surface`: the target is a point on the ground and the frame is its local east/north/up, so "up" on screen is the
  *    local vertical, the horizon is level and az = -90 deg looks north.
- * Left drag orbits, right/shift drag pans (globe only), wheel and pinch zoom with a step proportional to the height
+ * Left drag orbits, right/shift drag pans (in surface mode it slides the ground target, see `onGroundPan`), wheel and pinch zoom with a step proportional to the height
  * above the surface (see `zoomDistance`). Any user input cancels a fly-to or a mode transition.
  */
 export class OrbitRig {
@@ -39,6 +39,8 @@ export class OrbitRig {
   readonly pan = new THREE.Vector3();
   readonly target = new THREE.Vector3();
   onUserInput?: () => void;
+  /** surface mode: a pan drag asks to move the ground target by this many km east and north */
+  onGroundPan?: (eastKm: number, northKm: number) => void;
 
   private flight: { t0: number; dur: number; from: THREE.Vector3; fromDist: number; fromAz: number; fromEl: number; to: FlyOptions } | null = null;
   private blend: { t0: number; dur: number; target: THREE.Vector3; offset: THREE.Vector3; up: THREE.Vector3 } | null = null;
@@ -67,7 +69,7 @@ export class OrbitRig {
         const d = this.pinchDistance();
         if (this.lastPinch > 0 && d > 0) this.zoomBy(this.lastPinch / d);
         this.lastPinch = d;
-      } else if ((e.buttons & 2 || e.buttons & 4 || e.shiftKey) && this.mode === 'globe') this.panBy(dx, dy);
+      } else if (e.buttons & 2 || e.buttons & 4 || e.shiftKey) this.panBy(dx, dy);
       else this.orbitBy(dx, dy);
     };
     const up = (e: PointerEvent) => {
@@ -207,6 +209,12 @@ export class OrbitRig {
 
   private panBy(dx: number, dy: number): void {
     const k = (2 * this.dist * Math.tan((this.camera.fov * Math.PI) / 360)) / this.dom.clientHeight;
+    if (this.mode === 'surface') {
+      // the target is a ground point: the owner moves it over the ground (and stops following whatever it followed)
+      const d = groundPanDelta(this.az, this.el, dx, dy, k);
+      this.onGroundPan?.(d.east, d.north);
+      return;
+    }
     const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
     const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
     this.pan.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
