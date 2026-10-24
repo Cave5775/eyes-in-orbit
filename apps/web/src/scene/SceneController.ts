@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import {
-  DEG, EARTH, fixedToGeodetic, geodeticToFixed, gmstRad, sunDirectionEci,
+  DEG, EARTH, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, orbitableBodyId, sunDirectionEci,
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
+import { bodyLineIds, bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
 import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
-import { isRefBody, refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } from '../lib/ref-body';
+import { isRegistryBody, refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, maxDistKm, panGround, settleDistance, surfaceFitDistance, viewAnglesFor, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
@@ -13,7 +14,7 @@ import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filter
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
-import { POPUP_MAX, gatherCandidates, type PickExtra, type PickSource } from '../lib/pick';
+import { POPUP_MAX, type PickExtra, type PickSource } from '../lib/pick';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
@@ -130,6 +131,11 @@ function makePointSet(n: number, material: THREE.Material, world?: Float64Array,
   return { geo, points, pos, color, size, glyph, show };
 }
 
+/** Registry id a body entity stands for (`body-mars` -> `MARS`), undefined for any other record. */
+function bodyOfEntity(rec: EntityRecord | undefined): string | undefined {
+  return rec && isBodyEntity(rec) ? orbitableBodyId(rec) : undefined;
+}
+
 /** Distance (km) and angles at which a fly-to settles for a target at world position `p`. */
 function viewFor(p: THREE.Vector3): { dist: number; az: number; el: number } {
   const r = p.length();
@@ -154,8 +160,13 @@ export class SceneController {
   private earthGroup = new THREE.Group();
   private atmo: THREE.Mesh;
   private celestial: CelestialLayer;
-  /** the Moon or the Sun while the camera is centred on it (the followFn tracks its centre), else null */
+  /** a registry body (Moon, Sun, Mars ...) while the camera is centred on it (the followFn tracks its centre), else null */
   private bodyTarget: RefBody | null = null;
+  /** body entity id -> registry id (`body-moon` -> `MOON`): these are drawn by the CelestialLayer, not as points */
+  private bodyRegId = new Map<string, string>();
+  /** body entities whose orbit line is drawn now (selected / followed / frame centre, see lib/body-scene.ts) and their key */
+  private bodyLines: string[] = [];
+  private bodyLineKey = '';
   /** frame of reference: paths, trails and orbit lines are sampled relative to this centre (set by `setFrame`, independent of the camera) */
   private frameCentre: Centre = EARTH_CENTRE;
   private frameLocked = false;
@@ -337,11 +348,28 @@ export class SceneController {
     const upserts: { id: string; omm: Omm }[] = [];
     const gone: string[] = [];
     let dynChanged = false;
+    let bodiesChanged = false;
     for (const rec of map.values()) {
       const prev = this.recs.get(rec.id);
       if (prev === rec) continue;
       this.recs.set(rec.id, rec);
-      if (rec.provider?.type === 'sgp4') {
+      if (prev && isBodyEntity(prev) && !isBodyEntity(rec)) {
+        this.bodyRegId.delete(rec.id);
+        bodiesChanged = true;
+      }
+      if (isBodyEntity(rec)) {
+        // a celestial body: drawn by the CelestialLayer, never a point; in the graph so worldPos and the orbit line work
+        const reg = orbitableBodyId(rec);
+        if (reg) this.bodyRegId.set(rec.id, reg);
+        else this.bodyRegId.delete(rec.id);
+        if (prev && !isBodyEntity(prev)) {
+          if (isSgp4(prev)) gone.push(rec.id);
+          dynChanged = true;
+        }
+        this.satSet.delete(rec.id);
+        graph.upsert(rec);
+        bodiesChanged = true;
+      } else if (rec.provider?.type === 'sgp4') {
         upserts.push({ id: rec.id, omm: rec.provider.omm });
         this.satSet.add(rec.id);
         if (prev && !isSgp4(prev)) dynChanged = true;
@@ -358,8 +386,10 @@ export class SceneController {
       this.recs.delete(id);
       graph.remove(id);
       if (this.satSet.delete(id)) gone.push(id);
+      else if (this.bodyRegId.delete(id)) bodiesChanged = true;
       else dynChanged = true;
     }
+    if (bodiesChanged) this.celestial.setBodies([...this.recs.values()].filter(isBodyEntity));
     this.propagator.remove(gone);
     this.propagator.upsert(upserts);
     // entities with a registered 3D model need an exact main-thread state even when SGP4 (the worker only fills the cloud)
@@ -518,12 +548,15 @@ export class SceneController {
     this.groundLock = null;
     // a frame centre (setFrame with fly): a body pivots the camera on the body, an entity is followed like a selection
     const c = req.centre;
-    if (c?.kind === 'body' && c.id !== 'EARTH' && isRefBody(c.id)) {
-      this.focusBody(c.id);
+    // a body entity (`body-mars`) focused by id is the same as its body centre; the Earth is the home view
+    const idBody = req.id && !c ? bodyOfEntity(this.recs.get(req.id)) : undefined;
+    const bodyId = c?.kind === 'body' ? c.id : idBody;
+    if (bodyId && bodyId !== 'EARTH' && isRegistryBody(bodyId)) {
+      this.focusBody(bodyId);
       return;
     }
     this.bodyTarget = null;
-    const entityId = req.id ?? (c?.kind === 'entity' ? c.id : undefined);
+    const entityId = idBody ? undefined : req.id ?? (c?.kind === 'entity' ? c.id : undefined);
     if (entityId) {
       const rec = this.recs.get(entityId);
       if (!rec) return;
@@ -557,7 +590,7 @@ export class SceneController {
     this.applyAutoSurface(req);
   }
 
-  /** Centre the view on the Moon or the Sun and follow it (they move); everything is then seen relative to that body. */
+  /** Centre the view on a registry body (Moon, Sun, Mars ...) and follow it (they move); everything is then seen relative to that body. */
   private focusBody(body: RefBody): void {
     if (this.surfaceOn) this.setSurfaceMode(false);
     this.followId = null;
@@ -693,6 +726,7 @@ export class SceneController {
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const rec of this.recs.values()) {
+      if (this.bodyRegId.has(rec.id)) continue; // the bodies are scenery here: the Sun on its shell would make FIT VISIBLE a deep-space view
       if (!matchesFilters(rec, this.filters)) continue;
       if (this.fitPos(rec.id, v)) pts.push(v.x, v.y, v.z);
     }
@@ -961,7 +995,7 @@ export class SceneController {
 
   private rebuildDyn(): void {
     const ids: string[] = [];
-    for (const rec of this.recs.values()) if (!isSgp4(rec) && rec.provider) ids.push(rec.id);
+    for (const rec of this.recs.values()) if (!isSgp4(rec) && rec.provider && !this.bodyRegId.has(rec.id)) ids.push(rec.id);
     this.dynIds = ids;
     this.dynIndex = new Map(ids.map((id, i) => [id, i]));
     this.scene.remove(this.dyn.points);
@@ -1027,12 +1061,16 @@ export class SceneController {
     const want = new Map<string, boolean>();
     let hinted = 0;
     for (const rec of this.recs.values()) {
-      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT) {
+      // body entities have their own rule (selected / followed / frame centre), below
+      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyRegId.has(rec.id)) {
         want.set(rec.id, false);
         hinted++;
         graph.upsert(rec);
       }
     }
+    this.bodyLines = this.currentBodyLines();
+    this.bodyLineKey = this.bodyLines.join(',');
+    for (const id of this.bodyLines) want.set(id, false);
     const sel = this.selectedId ? this.recs.get(this.selectedId) : undefined;
     if (sel) {
       graph.upsert(sel);
@@ -1052,7 +1090,7 @@ export class SceneController {
     this.fullOverlays = new Set([...want].filter(([, full]) => full).map(([id]) => id));
 
     // trajectory path for a selected entity that has no SGP4 orbit of its own
-    const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' ? sel.id : null;
+    const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' && !this.bodyRegId.has(sel.id) ? sel.id : null;
     if (pathId !== this.pathOverlayId) {
       this.pathOverlay?.dispose();
       this.pathOverlay = null;
@@ -1062,10 +1100,26 @@ export class SceneController {
     }
   }
 
+  /** Body entities that get an orbit line now (lib/body-scene.ts `bodyLineIds`). */
+  private currentBodyLines(): string[] {
+    if (this.bodyRegId.size === 0) return [];
+    return bodyLineIds(this.recs.values(), { selectedId: this.selectedId, focusBodyId: this.bodyTarget, frame: this.frameCentre, scale: this.distScale });
+  }
+
   // ------------------------------------------------------------------ geometry queries
 
-  /** World (ECI, display-compressed) position of an entity at sim time `t`, float64. */
+  /**
+   * World (ECI, display-compressed) position of an entity at sim time `t`, float64. A body entity is where its mesh is:
+   * `refDisplay`, the shell-compressed position in the compressed scale, so focus, follow, frame and orbit lines agree.
+   */
   private worldPos(id: string, t: number, out: THREE.Vector3): boolean {
+    const reg = this.bodyRegId.get(id);
+    if (reg !== undefined) {
+      const d = refDisplay(reg, t, this.distScale);
+      out.set(d.r[0], d.r[1], d.r[2]);
+      this.lastCompressed = d.k !== 1;
+      return true;
+    }
     const s = graph.stateIn(id, t, 'EARTH:inertial');
     if (!s) return false;
     // deep-space shell compression, else a few-metre nudge for ground contact (shared with the path overlay)
@@ -1084,6 +1138,7 @@ export class SceneController {
       out.set(w[si * 3], w[si * 3 + 1], w[si * 3 + 2]);
       return true;
     }
+    if (this.bodyRegId.has(id)) return this.worldPos(id, clock.now(), out); // a drawn body (hover ring)
     const di = this.dynIndex.get(id);
     if (di === undefined || this.dyn.size.getX(di) === 0) return false;
     const w = this.dyn.pos.world;
@@ -1120,8 +1175,11 @@ export class SceneController {
       const dx = (p.x * 0.5 + 0.5) * w - px, dy = (1 - (p.y * 0.5 + 0.5)) * h - py;
       if (p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) extras.push({ id: this.selectedId, d2: dx * dx + dy * dy, rel });
     }
-    const r = gatherCandidates(
-      [source(this.sats, this.propagator.ids, 0), source(this.dyn, this.dynIds, 60)], extras, m, w, h, px, py,
+    // the drawn bodies (Earth, Moon, Sun, Mars) are candidates only where nothing else is: no ranks yet (the hierarchy
+    // ordering comes with the popup), and the Earth's disc must not turn a click on a satellite into a choice popup
+    const bodies = () => bodyPickExtras(this.celestial.bodies(), { origin: this.frameInfo.originV3, m, w, h, px, py, fovDeg: this.camera.fov });
+    const r = gatherWithBodies(
+      [source(this.sats, this.propagator.ids, 0), source(this.dyn, this.dynIds, 60)], extras, bodies, m, w, h, px, py,
       { max, wantTotal, occluded: (x, y, z) => this.occludedRel(x, y, z) },
     );
     return { ids: r.items.map((i) => i.id), total: r.total };
@@ -1301,14 +1359,15 @@ export class SceneController {
     u.uC2.value = occlusionC2(f.originV3);
     u.uOccK.value = ELLIPSOID_K;
     // the displayed Moon and Sun hide what is behind them like the Earth does (shader uniforms, same maths as `this.occ`)
-    const bodies = this.celestial.occluders();
+    // (the shader has uniforms for exactly two: [Moon, Sun]; every other drawn body, Mars, hides CPU-side points only)
+    const shaderBodies = this.celestial.shaderSpheres();
     const sph = [u.uSph0.value, u.uSph1.value];
     for (let i = 0; i < 2; i++) {
-      const sv = sphereView(f.originV3, bodies[i]);
+      const sv = sphereView(f.originV3, shaderBodies[i]);
       sph[i].set(sv.x, sv.y, sv.z, sv.r);
       u.uSphC2.value.setComponent(i, sv.c2);
     }
-    this.occ = makeOccluder(f.originV3, undefined, bodies);
+    this.occ = makeOccluder(f.originV3, undefined, this.celestial.occluders());
 
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);
@@ -1433,7 +1492,7 @@ export class SceneController {
     // light overlays (orbit line, footprint) of entities that are scoped out are not drawn either
     this.overlayInScope.clear();
     for (const id of this.overlays.keys()) {
-      const keep = id === sel || this.related.has(id);
+      const keep = id === sel || this.related.has(id) || this.bodyRegId.has(id); // a body line is already limited to what is looked at
       let d = 0;
       if (!keep && this.pointPos(id, tmp)) d = Math.hypot(tmp.x - focus.x, tmp.y - focus.y, tmp.z - focus.z);
       this.overlayInScope.set(id, inScope({ d, key: 0, bulk: false, keep }, radius, mode));
@@ -1489,11 +1548,13 @@ export class SceneController {
   private updateOverlays(t: number, wall: number): void {
     const centre = this.frameCentre;
     this.ensureCentreInGraph(); // the record may have been replaced by a refresh
+    // the body lines depend on the selection, the camera's body, the frame and the distance scale: re-evaluate every frame (4 records)
+    if (this.bodyRegId.size && this.currentBodyLines().join(',') !== this.bodyLineKey) this.refreshHints();
     for (const [id, o] of this.overlays) {
       const rec = this.recs.get(id);
       if (!rec) continue;
       if (this.overlayInScope.get(id) === false) o.hide();
-      else o.update(graph, rec, t, wall, this.fullOverlays.has(id), centre);
+      else o.update(graph, rec, t, wall, this.fullOverlays.has(id), centre, this.distScale);
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
     if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, this.distScale, centre);

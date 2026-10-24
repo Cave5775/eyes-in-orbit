@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { EntityGraph, EntityRecord, Vec3 } from '@eio/core';
 import type { DistanceScale } from '../lib/deepspace';
 import { fixedToInertial, type Spin } from '../lib/floating-origin';
-import { EARTH_CENTRE, centreKey, centrePositionEci, frameFor, frameSampler, graphLookup, type Centre } from '../lib/frame';
+import { EARTH_CENTRE, centreKey, centrePositionEci, frameForRec, frameSampler, graphLookup, type Centre } from '../lib/frame';
 import {
   PATH_MAX_PHASES, makePathBuffers, nowIndex, pathStale, planPathWindow, samplePath, type PathPlan, type PathResult,
 } from '../lib/paths';
@@ -99,7 +99,7 @@ export class PathOverlay {
     centre: Centre = EARTH_CENTRE,
   ): PathStatus {
     if (orbitHandled) return this.hide();
-    centre = frameFor(centre, rec.id, rec.bodyId);
+    centre = frameForRec(centre, rec);
     const provider = graph.provider(rec.id);
     const key = rec.provider;
     const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds });

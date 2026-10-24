@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { EARTH, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
-import { SHELL_THRESHOLD_KM } from '../lib/deepspace';
+import { bodyLineAllowed } from '../lib/body-scene';
+import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import {
-  EARTH_CENTRE, centreKey, centrePositionEci, frameFor, framePathPoint, frameSampler, graphLookup, type Centre, type EntityLookup,
+  EARTH_CENTRE, centreKey, centrePositionEci, framePathPoint, frameForRec, frameSampler, graphLookup, type Centre, type EntityLookup,
   type FrameSampler,
 } from '../lib/frame';
 import { chordSagKm } from '../lib/occlusion';
@@ -105,18 +106,22 @@ export class EntityOverlay {
    * of reference: the orbit line and the trail are sampled relative to it (lib/frame.ts) and rebuilt when it changes.
    * The footprint and the ground track are Earth surface features of an Earth satellite and ignore the frame.
    */
-  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, full: boolean, centre: Centre = EARTH_CENTRE): void {
+  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, full: boolean, centre: Centre = EARTH_CENTRE, scale: DistanceScale = 'compressed'): void {
     const s = graph.stateIn(rec.id, t, 'EARTH:inertial');
     const r = s ? norm(s.r) : 0;
-    const usable = !!s && r > RE + 50 && r < SHELL_THRESHOLD_KM;
-    const earthBound = rec.bodyId === 'EARTH';
+    // a body entity (Moon, Earth, Mars) has its orbit line only (in its parent's frame, `frameForRec`): no footprint, trail or
+    // ground track, no Earth-distance window, and the heliocentric ones only in the true distance scale (lib/body-scene.ts)
+    const isBody = rec.provider?.type === 'body';
+    const usable = isBody ? !!s && bodyLineAllowed(rec, scale) : !!s && r > RE + 50 && r < SHELL_THRESHOLD_KM;
+    const earthBound = !isBody && rec.bodyId === 'EARTH';
+    if (isBody) full = false;
     this.footprint.obj.visible = usable && earthBound && (full || !!rec.render?.footprint);
     this.orbit.obj.visible = this.trail.obj.visible = this.track.obj.visible = false;
     if (!s || !usable) return;
 
     if (earthBound) this.updateFootprint(s, r);
     const period = orbitPeriodSec(graph, rec, s, t);
-    centre = frameFor(centre, rec.id, rec.bodyId);
+    centre = frameForRec(centre, rec);
     const key = centreKey(centre);
     if (period !== this.period || key !== this.centreKeyBuilt) {
       this.period = period;
