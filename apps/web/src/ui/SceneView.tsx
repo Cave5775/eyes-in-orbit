@@ -4,6 +4,7 @@ import { fmtDist, fmtPathWindow } from '../lib/format';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { relatedFor } from '../lib/related';
 import { modelDef } from '../scene/models/registry';
+import { LabelLayer, type LabelItem } from '../scene/LabelLayer';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { usePanels } from '../state/panels';
 import { clock, runtime } from '../state/runtime';
@@ -26,6 +27,7 @@ const HELP: [string, string][] = [
   ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or SURFACE switches to the globe view, and that choice is remembered until you press S again'],
   ['Esc', 'Deselect and return to the Earth view'],
   ['MODEL', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or MODEL on such a selection flies to it'],
+  ['LABELS', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a filter on, the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
   ['PANELS (top bar)', 'Show or hide the DSN panel (hidden by default), the launch board, the news ticker and the colour legend (top left of the scene); a hidden panel gives its space back to the globe and the choice is remembered'],
   ['H', 'Show / hide this help'],
 ];
@@ -101,6 +103,23 @@ export function SceneView() {
       return !v;
     });
   }, []);
+  // object labels are on unless the user turned them off (remembered per browser)
+  const [labelsOn, setLabelsOn] = useState(() => {
+    try {
+      return localStorage.getItem('eio.labels') !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const toggleLabels = useCallback(() => {
+    setLabelsOn((v) => {
+      try {
+        localStorage.setItem('eio.labels', v ? 'off' : 'on');
+      } catch { /* private window: the choice just is not remembered */ }
+      scene.current?.setLabelsEnabled(!v);
+      return !v;
+    });
+  }, []);
   const toggleScope = useCallback(() => {
     setScopeAll((v) => {
       scene.current?.setScopeMode(v ? 'auto' : 'all');
@@ -110,26 +129,19 @@ export function SceneView() {
 
   useEffect(() => {
     const store = useStore;
-    const labelEls: HTMLDivElement[] = [];
-    const showLabels = (labels: PathLabel[]) => {
-      const root = labelHost.current;
-      if (!root) return;
-      while (labelEls.length < labels.length) {
-        const el = document.createElement('div');
-        el.className = 'path-label mono';
-        root.appendChild(el);
-        labelEls.push(el);
-      }
-      labelEls.forEach((el, i) => {
+    // two layers over the canvas: the path's phase labels and the object labels (scene/LabelLayer.ts pools their nodes)
+    const pathLayer = new LabelLayer(labelHost.current!, 'path-label mono');
+    const objectLayer = new LabelLayer(labelHost.current!, 'scene-label mono');
+    const pathItems: LabelItem[] = [];
+    const showPathLabels = (labels: PathLabel[]) => {
+      for (let i = 0; i < labels.length; i++) {
         const l = labels[i];
-        if (!l) {
-          el.style.display = 'none';
-          return;
-        }
-        el.style.display = 'block';
-        el.style.transform = `translate(${Math.round(l.x + 8)}px, ${Math.round(l.y - 9)}px)`;
-        if (el.textContent !== l.text) el.textContent = l.text;
-      });
+        const item = (pathItems[i] ??= { id: `p${i}`, text: '', x: 0, y: 0 });
+        item.text = l.text;
+        item.x = l.x + 8;
+        item.y = l.y - 9;
+      }
+      pathLayer.update(pathItems, labels.length);
     };
     const ctl = new SceneController(host.current!, {
       onPick: (id) => store.getState().select(id),
@@ -161,7 +173,8 @@ export function SceneView() {
         el.style.transform = `translate(${h.x + 14}px, ${h.y + 14}px)`;
         el.textContent = `${rec.name}  ·  ${rec.kind.replace(/_/g, ' ')}`;
       },
-      onPathLabels: showLabels,
+      onPathLabels: showPathLabels,
+      onLabels: (labels, n) => objectLayer.update(labels, n),
       onFollowChange: (f) => store.getState().setFollow(f),
       onSurfaceChange: setSurface,
     });
@@ -172,6 +185,9 @@ export function SceneView() {
     try {
       ctl.setDetailEnabled(localStorage.getItem('eio.detail') !== 'off');
     } catch { /* storage blocked: detail stays on */ }
+    try {
+      ctl.setLabelsEnabled(localStorage.getItem('eio.labels') !== 'off');
+    } catch { /* storage blocked: labels stay on */ }
     ctl.setFilters(s0.filters);
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
@@ -201,6 +217,8 @@ export function SceneView() {
       unsub();
       if (runtime.onFitRequest) runtime.onFitRequest = undefined;
       ctl.dispose();
+      pathLayer.dispose();
+      objectLayer.dispose();
       scene.current = null;
     };
   }, []);
@@ -254,6 +272,9 @@ export function SceneView() {
         </button>
         <button className={detailOn ? 'btn active' : 'btn'} onClick={toggleDetail} aria-pressed={detailOn} title="Close-up detail: below about 2,600 km, finer Earth imagery (NASA Blue Marble, up to 0.6 km per pixel) is streamed through the local server and laid over the base map. Off keeps the base map only.">
           DETAIL
+        </button>
+        <button className={labelsOn ? 'btn active' : 'btn'} onClick={toggleLabels} aria-pressed={labelsOn} title="Labels: names next to the Sun, planets and moons when zoomed out, next to the selection, and next to the satellites a filter lets through (at most 48, the ones nearest the screen centre first). Off hides all of them. Remembered.">
+          LABELS
         </button>
         <button className={help ? 'btn icon active' : 'btn icon'} onClick={() => setHelp((v) => !v)} aria-pressed={help} title="Controls (H)">?</button>
       </div>

@@ -16,6 +16,7 @@ import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
 import { POPUP_MAX, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
+import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
@@ -64,6 +65,11 @@ export interface SceneCallbacks {
   onPickMany?(ids: string[], total: number, x: number, y: number, grouped?: { ids: string[]; total: number }): void;
   /** Screen positions of the selected path's phase boundaries (called each frame while there are any, once more to clear). */
   onPathLabels?(labels: PathLabel[]): void;
+  /**
+   * The object labels to show this frame (lib/labels.ts): the first `n` entries of `labels`, top-left box corners in CSS px.
+   * The array is reused between calls, so consume it synchronously. Called every frame while labels are on, and once with n = 0 when they go off.
+   */
+  onLabels?(labels: readonly PlannedLabel[], n: number): void;
   /** The scene changed follow mode by itself (FIT leaves the followed object). */
   onFollowChange?(follow: boolean): void;
   onSurfaceChange?(on: boolean): void;
@@ -195,6 +201,27 @@ export class SceneController {
   private pathOverlayId: string | null = null;
   private pathStatus: PathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
   private hadPathLabels = false;
+  // object labels (lib/labels.ts)
+  private labelsOn = true;
+  private hadLabels = false;
+  private labelsDirty = true;
+  private lastLabelScanAt = -Infinity;
+  private readonly labelPlan = new LabelPlanner();
+  private readonly labelM = new THREE.Matrix4();
+  /** entities that ask for a label (`render.label`) and are not bodies; rebuilt after the catalogue changes */
+  private labelFeatured: Set<string> | null = null;
+  /** candidates found by the throttled scan: a point of the sat cloud or the dynamic set, projected again every frame */
+  private labelCands: { sat: boolean; i: number; id: string; text: string; feat: boolean }[] = [];
+  private labelCandN = 0;
+  private labelKeys = new Float32Array(0);
+  private labelIdx = new Int32Array(0);
+  private readonly labelPick = new Int32Array(LABEL_SCAN_KEEP);
+  private readonly labelCounts = new Int32Array(BUCKETS);
+  /** per-frame inputs of `labelBody` (set by `updateLabels`) */
+  private labelW = 0;
+  private labelH = 0;
+  /** the selected object has a position this frame (`updateHighlights`) */
+  private selOk = false;
   private surfaceOn = false;
   private surfaceSrc: SurfaceSource | null = null;
   /** the user's remembered choice: false after they switched the surface view off, which stops it coming on by itself */
@@ -1044,6 +1071,8 @@ export class SceneController {
     });
     this.dyn.color.needsUpdate = this.dyn.size.needsUpdate = this.dyn.glyph.needsUpdate = true;
     this.scopeDirty = true;
+    this.labelsDirty = true;
+    this.labelFeatured = null;
   }
 
   private updatePadAppearance(): void {
@@ -1338,6 +1367,7 @@ export class SceneController {
 
     this.renderer.render(this.scene, this.rcam);
     this.updatePathLabels();
+    this.updateLabels(wall);
   }
 
   /**
@@ -1532,6 +1562,7 @@ export class SceneController {
     const sel = this.selectedId ? this.recs.get(this.selectedId) : undefined;
     const ok = !!sel && this.worldPos(sel.id, t, tmp);
     this.shellSelected = ok && this.lastCompressed;
+    this.selOk = ok;
     const c = sel ? this.palette.colors[colorKeyOf(sel)] : this.palette.accent;
     // a drawn 3D model replaces the sprite; a model larger than the ring is its own selection cue
     const replaced = !!sel && this.models.spriteHidden.has(sel.id);
@@ -1589,4 +1620,168 @@ export class SceneController {
     if (labels.length || this.hadPathLabels) cb(labels);
     this.hadPathLabels = labels.length > 0;
   }
+
+  // ------------------------------------------------------------------ object labels (lib/labels.ts decides, scene/LabelLayer.ts draws)
+
+  /** Names next to objects (the LABELS toggle). Off: nothing is projected and nothing is drawn. */
+  setLabelsEnabled(on: boolean): void {
+    this.labelsOn = on;
+    this.labelsDirty = true;
+  }
+
+  /** Ids with `render.label: true` that are not bodies (bodies have their own pass, `labelBody`). */
+  private featuredIds(): Set<string> {
+    let set = this.labelFeatured;
+    if (!set) {
+      set = this.labelFeatured = new Set();
+      for (const rec of this.recs.values()) if (rec.render?.label === true && !this.bodyRegId.has(rec.id)) set.add(rec.id);
+    }
+    return set;
+  }
+
+  /** Clip-space key of point `i` of `set` for the label scan: distance from the screen centre in NDC, or -1 when it is not drawn. */
+  private labelKey(set: PointSet, i: number, m: ArrayLike<number>): number {
+    if ((set.size.array as Float32Array)[i] <= 0 || (set.show.array as Float32Array)[i] < 0.5) return -1; // filtered out, scoped out, replaced by a model
+    const wd = set.pos.world;
+    if (wd[i * 3] === 0 && wd[i * 3 + 1] === 0 && wd[i * 3 + 2] === 0) return -1; // no position
+    const rel = set.pos.attr.array as Float32Array;
+    const x = rel[i * 3], y = rel[i * 3 + 1], z = rel[i * 3 + 2];
+    const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    if (!inView(cx, cy, cw) || this.occ(x, y, z)) return -1;
+    return Math.hypot(cx / cw, cy / cw);
+  }
+
+  private addLabelCand(sat: boolean, i: number, id: string, feat: boolean): void {
+    let c = this.labelCands[this.labelCandN];
+    if (!c) c = this.labelCands[this.labelCandN] = { sat, i, id, text: '', feat };
+    c.sat = sat;
+    c.i = i;
+    c.id = id;
+    c.feat = feat;
+    c.text = labelText(this.recs.get(id)?.name ?? id);
+    this.labelCandN++;
+  }
+
+  /**
+   * Which point objects may carry a label, ~7 times a second (positions are re-projected every frame by `updateLabels`).
+   * With a filter active: the objects it lets through that are drawn, in view and not hidden behind a body; entities with
+   * `render.label` always qualify, the others (satellites) are thinned to the `LABEL_SCAN_KEEP` nearest the screen centre
+   * per point set. Without a filter: only the `render.label` entities.
+   */
+  private scanLabelCands(wall: number, m: ArrayLike<number>): void {
+    if (!this.labelsDirty && wall - this.lastLabelScanAt < 150) return;
+    this.labelsDirty = false;
+    this.lastLabelScanAt = wall;
+    this.labelCandN = 0;
+    const feat = this.featuredIds();
+    const sel = this.selectedId;
+    if (!filtersActive(this.filters)) {
+      for (const id of feat) {
+        if (id === sel) continue;
+        const si = this.satIndex.get(id);
+        if (si !== undefined) {
+          if (this.labelKey(this.sats, si, m) >= 0) this.addLabelCand(true, si, id, true);
+          continue;
+        }
+        const di = this.dynIndex.get(id);
+        if (di !== undefined && this.labelKey(this.dyn, di, m) >= 0) this.addLabelCand(false, di, id, true);
+      }
+      return;
+    }
+    const scan = (sat: boolean, set: PointSet, ids: readonly string[], keep: Uint8Array) => {
+      const n = Math.min(ids.length, keep.length);
+      if (this.labelKeys.length < n) {
+        this.labelKeys = new Float32Array(n);
+        this.labelIdx = new Int32Array(n);
+      }
+      let found = 0;
+      for (let i = 0; i < n; i++) {
+        if (keep[i] !== 1 || ids[i] === sel) continue;
+        const key = this.labelKey(set, i, m);
+        if (key < 0) continue;
+        if (feat.has(ids[i])) this.addLabelCand(sat, i, ids[i], true);
+        else {
+          this.labelKeys[found] = key;
+          this.labelIdx[found++] = i;
+        }
+      }
+      const k = selectNearest(this.labelKeys, found, LABEL_SCAN_KEEP, 2, this.labelPick, this.labelCounts);
+      for (let j = 0; j < k; j++) {
+        const i = this.labelIdx[this.labelPick[j]];
+        this.addLabelCand(sat, i, ids[i], false);
+      }
+    };
+    scan(true, this.sats, this.propagator.ids, this.satKeep);
+    scan(false, this.dyn, this.dynIds, this.dynKeep);
+  }
+
+  /** Every frame: project the labelled objects, let the planner choose and place them, hand the result to the DOM layer. */
+  private updateLabels(wall: number): void {
+    const cb = this.cb.onLabels;
+    if (!cb) return;
+    const plan = this.labelPlan;
+    const w = this.container.clientWidth, h = this.container.clientHeight;
+    if (!this.labelsOn || w < 1 || h < 1) {
+      if (this.hadLabels) cb(plan.out, 0);
+      this.hadLabels = false;
+      return;
+    }
+    const m = this.labelM.multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
+    this.scanLabelCands(wall, m);
+    plan.begin();
+    this.labelW = w;
+    this.labelH = h;
+
+    // bodies: their own pass (not points); the name fades as the disc grows
+    this.celestial.eachBody(this.labelBody);
+
+    const sel = this.selectedId, hov = this.hoverId;
+    // the selection (drawn from the highlight set whatever it is); a selected body is a body label
+    if (sel && this.selOk && !this.bodyRegId.has(sel)) {
+      const a = this.hi.pos.attr;
+      this.projectLabel(a.getX(0), a.getY(0), a.getZ(0), sel, labelText(this.recs.get(sel)?.name ?? sel), 'selected', 14);
+    }
+    for (let n = 0; n < this.labelCandN; n++) {
+      const c = this.labelCands[n];
+      const set = c.sat ? this.sats : this.dyn;
+      if ((c.sat ? this.propagator.ids[c.i] : this.dynIds[c.i]) !== c.id) continue; // the catalogue changed since the scan
+      if ((set.size.array as Float32Array)[c.i] <= 0) continue;
+      const rel = set.pos.attr.array as Float32Array;
+      this.projectLabel(rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2], c.id, c.text, c.id === hov ? 'hover' : c.feat ? 'featured' : 'satellite', 9);
+    }
+    const n = plan.plan(w, h);
+    cb(plan.out, n);
+    this.hadLabels = n > 0;
+  }
+
+  /** Add a label for the camera-relative point (x, y, z) unless it is out of view or behind a body. */
+  private projectLabel(x: number, y: number, z: number, id: string, text: string, cls: LabelClass, dx: number): void {
+    const m = this.labelM.elements;
+    const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    if (!inView(cx, cy, cw) || this.occ(x, y, z)) return;
+    this.labelPlan.add(id, text, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, dx);
+  }
+
+  /** One body for the label pass (a bound arrow function: no closure per frame). Only bodies whose entity says `render.label`. */
+  private readonly labelBody = (entityId: string, c: readonly [number, number, number], radiusKm: number, k: number): void => {
+    const rec = this.recs.get(entityId);
+    if (rec?.render?.label !== true) return;
+    const o = this.frameInfo.origin;
+    const x = c[0] - o.x, y = c[1] - o.y, z = c[2] - o.z; // camera-relative, float64
+    const dist = Math.hypot(x, y, z), r = radiusKm * k;
+    const rpx = apparentRadiusPx(dist, r, this.camera.fov, this.labelH);
+    const opacity = bodyLabelOpacity(rpx);
+    if (opacity <= 0 || dist <= r * 1.02) return;
+    // the centre is inside the body's own occluder sphere: test a point just in front of its near surface instead
+    const s = 1 - (r * 1.02) / dist;
+    if (this.occ(x * s, y * s, z * s)) return;
+    const m = this.labelM.elements;
+    const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    if (!inView(cx, cy, cw)) return;
+    const cls: LabelClass = entityId === this.selectedId ? 'selected' : entityId === this.hoverId ? 'hover' : 'body';
+    this.labelPlan.add(entityId, rec.name, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, Math.min(rpx, 120) + 7, opacity);
+  };
 }

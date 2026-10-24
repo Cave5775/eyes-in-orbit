@@ -231,6 +231,11 @@ export class CelestialLayer {
     return [...this.drawn.values()].map((d) => ({ entityId: d.entityId, bodyId: d.bodyId, c: d.c, radiusKm: d.radiusKm, k: d.k }));
   }
 
+  /** Visit every body, Earth included, without allocating (the label pass runs every frame): entity id, display centre, true radius and shrink factor. */
+  eachBody(visit: (entityId: string, c: readonly [number, number, number], radiusKm: number, k: number) => void): void {
+    for (const d of this.drawn.values()) visit(d.entityId, d.c, d.radiusKm, d.k);
+  }
+
   /** The Earth as the layer knows it (display centre and radius), or null before the Earth entity has arrived. */
   earth(): DrawnBody | null {
     const d = this.drawn.get('EARTH');
