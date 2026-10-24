@@ -4,6 +4,7 @@ import { searchNews } from './connectors/snapi';
 import { syncLaunchEntities } from './connectors/launchlibrary';
 import { CredentialError, type Credentials } from './credentials';
 import type { Http } from './http';
+import { parseTile, type ImageryCache } from './imagery';
 import type { Hub } from './hub';
 import { filterEntities, searchEntities } from './search';
 import type { Store } from './store';
@@ -36,7 +37,7 @@ export interface CredentialsApi {
   onChanged(connectors: string[]): void;
 }
 
-export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store, creds?: CredentialsApi): void {
+export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store, creds?: CredentialsApi, imagery?: ImageryCache): void {
   app.get('/api/health', async () => ({
     serverTime: Date.now(),
     entityCount: hub.graph.size,
@@ -129,6 +130,22 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
     refresh();
     return { ok: true, launchId: launch.id, cleared: had };
   });
+
+  // ---- Earth imagery tiles for the close-up detail layer (NASA GIBS through a disk cache, OFFLINE-aware)
+  if (imagery) {
+    app.get<{ Params: { z: string; x: string; file: string } }>('/api/imagery/:z/:x/:file', async (req, reply) => {
+      const m = /^(\d{1,4})\.jpg$/.exec(req.params.file);
+      const id = m ? parseTile(req.params.z, req.params.x, m[1]) : null;
+      if (!id) return reply.code(400).send({ error: 'tile must be /api/imagery/<z 3..6>/<x>/<y>.jpg inside the grid (2^(z+1) x 2^z tiles)' });
+      try {
+        const buf = await imagery.get(id);
+        if (!buf) return reply.code(404).send({ error: 'tile not cached and OFFLINE=1' });
+        return reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=86400').send(buf);
+      } catch (err) {
+        return reply.code(502).send({ error: (err as Error).message });
+      }
+    });
+  }
 
   // ---- credentials typed into the UI: local requests only, secrets are write-only
   if (creds) {

@@ -78,6 +78,13 @@ const NOISE = /* glsl */ `
   }
   float fbm(vec3 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * vnoise(p); p *= 2.03; a *= 0.5; } return s; }`;
 
+/** 1 x 1 transparent texture the detail sampler points at until the detail layer exists. */
+const EMPTY_DETAIL = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+  t.needsUpdate = true;
+  return t;
+})();
+
 /**
  * Earth surface lit by an ECI sun vector. Body-fixed direction comes from the (z-up) geometry normal,
  * world normal from the model matrix, so the same shader works as the group rotates by GMST.
@@ -91,6 +98,10 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
       uSun: { value: sun },
       uTex: { value: texture },
       uHasTex: { value: texture ? 1 : 0 },
+      // streamed close-up imagery (scene/earth-detail.ts): premultiplied RGBA atlas, its box in the base map's uv, on/off
+      uDetail: { value: EMPTY_DETAIL },
+      uDetailBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uDetailOn: { value: 0 },
     },
     vertexShader: /* glsl */ `
       #include <common>
@@ -106,13 +117,26 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
     fragmentShader: /* glsl */ `
       #include <logdepthbuf_pars_fragment>
       uniform vec3 uSun; uniform sampler2D uTex; uniform float uHasTex;
+      uniform sampler2D uDetail; uniform vec4 uDetailBox; uniform float uDetailOn;
       varying vec3 vL; varying vec3 vN; varying vec2 vUv;
       ${NOISE}
+      const float FLATTENING = 1.0 / 298.257223563;
       void main() {
         #include <logdepthbuf_fragment>
         vec3 base;
         if (uHasTex > 0.5) {
-          base = texture2D(uTex, vUv).rgb;
+          // The mesh is a sphere squashed by the flattening, so the sphere's own v is not the geodetic latitude the
+          // equirectangular maps are drawn in (up to 0.19 degrees, 21 km, off). Longitude stays the interpolated uv.x,
+          // which is continuous across the date line (an atan here would break the mipmap choice along it).
+          vec3 n = normalize(vL);
+          float phi = atan(n.z, (1.0 - FLATTENING) * length(n.xy));
+          vec2 guv = vec2(vUv.x, phi / 3.14159265 + 0.5);
+          base = texture2D(uTex, guv).rgb;
+          // close-up detail: sampled everywhere (derivatives stay uniform), used inside the atlas box with a soft edge
+          vec2 duv = (guv - uDetailBox.xy) / (uDetailBox.zw - uDetailBox.xy);
+          vec4 det = texture2D(uDetail, clamp(duv, 0.0, 1.0));
+          float edge = smoothstep(0.0, 0.04, min(min(duv.x, 1.0 - duv.x), min(duv.y, 1.0 - duv.y))) * uDetailOn;
+          base = base * (1.0 - det.a * edge) + det.rgb * edge;
         } else {
           float h = fbm(vL * 2.4 + 3.1);
           float land = smoothstep(0.50, 0.53, h);

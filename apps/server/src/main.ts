@@ -3,6 +3,7 @@ import compress from '@fastify/compress';
 import cors from '@fastify/cors';
 import Fastify from 'fastify';
 import { loadLiveTelemetry, registerApi } from './api';
+import { ImageryCache } from './imagery';
 import { loadConfig, loadDotEnv } from './config';
 import { Scheduler, type Connector } from './connector';
 import { Credentials } from './credentials';
@@ -47,7 +48,7 @@ async function main(): Promise<void> {
   registerApi(app, hub, http, store, {
     credentials,
     onChanged: (ids) => ids.forEach((id) => void scheduler.refresh(id)),
-  });
+  }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline }));
   await registerStream(app, hub);
 
   await app.listen({ port: config.port, host: config.host });

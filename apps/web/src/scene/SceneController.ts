@@ -17,7 +17,9 @@ import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
 import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial } from './materials';
 import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
+import type { DetailView } from '../lib/earth-detail';
 import { CelestialLayer } from './celestial';
+import { EarthDetail, type DetailStats } from './earth-detail';
 import { EntityOverlay } from './overlays';
 import { PathOverlay, type PathStatus } from './PathOverlay';
 import { PropagatorClient } from './propagator-client';
@@ -65,6 +67,9 @@ export interface SceneStats {
   earth: 'texture' | 'procedural';
   /** width in pixels of the Earth map in use (0: procedural) and the GPU's maximum texture size */
   earthPx: number;
+  /** streamed close-up imagery over the base map: the tile level and how many of its tiles have arrived (null: not active) */
+  detail: DetailStats | null;
+  detailEnabled: boolean;
   maxTexturePx: number;
   shellSelected: boolean;
   /** surface-aligned camera mode */
@@ -147,6 +152,9 @@ export class SceneController {
   private earthMat: THREE.ShaderMaterial;
   private earthMode: 'texture' | 'procedural' = 'procedural';
   private earthPx = 0;
+  private detail = new EarthDetail();
+  private lastDetailAt = 0;
+  private detailDir = new THREE.Vector3();
   private stars: THREE.Points;
   private pointMat: THREE.ShaderMaterial;
   private sats: PointSet;
@@ -272,6 +280,9 @@ export class SceneController {
     const eg = new THREE.SphereGeometry(RE, 512, 256);
     eg.rotateX(Math.PI / 2);
     this.earthMat = createEarthMaterial(this.sun, null);
+    this.detail.texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    this.earthMat.uniforms.uDetail.value = this.detail.texture;
+    this.earthMat.uniforms.uDetailBox.value = this.detail.box;
     const earth = new THREE.Mesh(eg, this.earthMat);
     earth.scale.z = 1 - EARTH.flattening;
     this.earthGroup.add(earth, this.buildGraticule());
@@ -357,6 +368,38 @@ export class SceneController {
    * real geocentric positions (up to ~2.5e10 km), their paths at true scale too, and the camera may zoom out to 1e11 km.
    * Markers keep their screen size; the floating origin and the logarithmic depth buffer carry the range.
    */
+  /** Turn the streamed close-up imagery on or off (off: the base map only, no tile requests). */
+  setDetailEnabled(on: boolean): void {
+    this.detail.enabled = on;
+    this.lastDetailAt = 0;
+  }
+
+  /** A few times a second: tell the detail layer where the camera is looking and how close. */
+  private updateDetail(wall: number): void {
+    if (wall - this.lastDetailAt < 250) return;
+    this.lastDetailAt = wall;
+    this.detail.update(this.detailView());
+    this.earthMat.uniforms.uDetailOn.value = this.detail.on;
+  }
+
+  /** The surface point under the view centre (ray against the Earth sphere), its distance and the screen scale; null looking at space. */
+  private detailView(): DetailView | null {
+    const dir = this.camera.getWorldDirection(this.detailDir);
+    const c = this.camera.position;
+    const b = c.dot(dir);
+    const disc = b * b - (c.lengthSq() - RE * RE);
+    if (disc <= 0) return null;
+    const t = -b - Math.sqrt(disc);
+    if (t <= 0) return null;
+    const g = -gmstRad(clock.now());
+    const x = c.x + dir.x * t, y = c.y + dir.y * t, z = c.z + dir.z * t;
+    const geo = fixedToGeodetic([x * Math.cos(g) - y * Math.sin(g), x * Math.sin(g) + y * Math.cos(g), z], EARTH);
+    return {
+      latDeg: geo.lat / DEG, lonDeg: geo.lon / DEG, groundDistKm: t, fovDeg: this.camera.fov,
+      viewportPx: this.renderer.domElement.height, aspect: this.camera.aspect,
+    };
+  }
+
   setDistanceScale(scale: DistanceScale): void {
     if (scale === this.distScale) return;
     this.distScale = scale;
@@ -743,6 +786,8 @@ export class SceneController {
       dynCount: this.dynIds.length,
       earth: this.earthMode,
       earthPx: this.earthPx,
+      detail: this.detail.stats,
+      detailEnabled: this.detail.enabled,
       maxTexturePx: this.renderer.capabilities.maxTextureSize,
       shellSelected: this.shellSelected,
       surface: this.surfaceOn,
@@ -764,6 +809,7 @@ export class SceneController {
     this.propagator.dispose();
     this.models.dispose();
     this.celestial.dispose();
+    this.detail.dispose();
     this.overlays.forEach((o) => o.dispose());
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
@@ -1133,6 +1179,7 @@ export class SceneController {
     }
     this.rig.maxDist = refMaxDistKm(anchored && this.bodyTarget ? this.bodyTarget : 'EARTH', maxDistKm(this.distScale), this.distScale);
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
+    this.updateDetail(wall);
 
     this.prepareRender(gmst, t);
     this.updateModels(t);

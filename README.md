@@ -47,6 +47,7 @@ Monorepo (npm workspaces): `packages/core` (`@eio/core`, shared model), `apps/se
 | EARTH / MOON / SUN tabs (top bar) | Centre the view on that body and follow it. Everything is then seen from that body: the camera orbits it, and the detail panel adds the selection's range and speed relative to it. The Moon and the Sun are drawn at true size and position (Moon map from `npm run assets`, procedural grey without it). The Sun view zooms out to 600 million km. Surface view is Earth-only for now |
 | `Esc` or EARTH VIEW | Deselect and return to the Earth view (also leaves the surface view and the Moon and Sun views) |
 | DISTANCE button (HUD, bottom) | Toggle COMPRESSED (default) / TRUE SCALE placement of objects beyond 2,000,000 km |
+| DETAIL button | Close-up Earth imagery on or off (on by default, remembered in the browser). Below about 2,600 km the base map would be magnified, so a 4 x 4 window of finer tiles (NASA GIBS Blue Marble shaded relief and bathymetry, 2.4 km per pixel at level 4 down to 0.6 km at level 6) is streamed through the local server and blended over it. The HUD shows `DETAIL Z6 16/16` (level, tiles received); tiles that have not arrived show the base map. Tiles are cached in `data/imagery/` (400 MB cap, least recently used removed) and `OFFLINE=1` serves only what is cached |
 | SCOPE button | Toggle scope AUTO (only what is relevant to the camera focus) / ALL (everything the filters allow) |
 | `H`, `?` | Show or hide the in-app controls help |
 
@@ -63,7 +64,7 @@ npm run dev        # server on :8787, web on :5173
 npm test           # vitest, all workspaces
 ```
 
-Open http://localhost:5173. The Vite dev server proxies `/api` and `/stream` to `localhost:8787` (hard-coded in `apps/web/vite.config.ts`; edit it if you change `PORT`).
+Open http://localhost:5173. The Vite dev server proxies `/api` and `/stream` to `localhost:8787` (set by `EIO_SERVER`, default `localhost:8787`, in `apps/web/vite.config.ts`; start Vite with `EIO_SERVER=localhost:8799` for a server on another `PORT`).
 
 Other scripts: `npm run build` (production build of the web app into `apps/web/dist`; the server does not serve it), `npm run typecheck`, `npm run start -w @eio/server` (server without file watching).
 
@@ -109,7 +110,7 @@ Stubs report status `stub` in `/api/health` and never run. Feed background lives
 
 ## API
 
-REST under `/api` (health, entities, entity by id, search, launches, news, dsn, iss, bodies, telemetry, credentials) and a JSON WebSocket at `/stream` that pushes `entities.changed`, `launches`, `news`, `dsn`, `health` and, for subscribers of the `iss` topic, `iss.fix`, `iss.telemetry` and `iss.arrays` (`GET /api/iss` returns `{fix, telemetry, arrays}`). Routes, query parameters, message types and entity conventions are specified in [`docs/CONTRACT.md`](docs/CONTRACT.md); shared types are in `packages/core/src/{types,feeds}.ts`.
+REST under `/api` (health, entities, entity by id, search, launches, news, dsn, iss, bodies, telemetry, credentials, imagery tiles) and a JSON WebSocket at `/stream` that pushes `entities.changed`, `launches`, `news`, `dsn`, `health` and, for subscribers of the `iss` topic, `iss.fix`, `iss.telemetry` and `iss.arrays` (`GET /api/iss` returns `{fix, telemetry, arrays}`). Routes, query parameters, message types and entity conventions are specified in [`docs/CONTRACT.md`](docs/CONTRACT.md); shared types are in `packages/core/src/{types,feeds}.ts`.
 
 ### API keys and logins in the UI
 
@@ -212,7 +213,7 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Testing
 
-`npm test` runs Vitest (450 tests in 37 files, no network; includes the ascent model, the telemetry ingest, the chart helpers, floating-origin and scope maths, LVLH attitude and model LOD, the ISS joint maths against recorded ISSLIVE data, and the ISSLIVE item table and parser). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). `apps/server/test/fixtures/iss-live-recorded.json` holds three snapshots (two minutes apart) of real ISSLIVE values (SARJ, BGA, attitude quaternion, state vector) from 2026-10-22. The three.js scene itself, including the 3D models, is checked by hand in a browser. `npm run typecheck` checks all three packages.
+`npm test` runs Vitest (478 tests in 39 files, no network; includes the ascent model, the telemetry ingest, the chart helpers, floating-origin and scope maths, LVLH attitude and model LOD, the ISS joint maths against recorded ISSLIVE data, and the ISSLIVE item table and parser). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). `apps/server/test/fixtures/iss-live-recorded.json` holds three snapshots (two minutes apart) of real ISSLIVE values (SARJ, BGA, attitude quaternion, state vector) from 2026-10-22. The three.js scene itself, including the 3D models, is checked by hand in a browser. `npm run typecheck` checks all three packages.
 
 ## Project layout
 

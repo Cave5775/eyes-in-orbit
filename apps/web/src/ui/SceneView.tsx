@@ -69,6 +69,23 @@ export function SceneView() {
       return !v;
     });
   }, []);
+  // streamed close-up imagery is on unless the user turned it off (remembered per browser)
+  const [detailOn, setDetailOn] = useState(() => {
+    try {
+      return localStorage.getItem('eio.detail') !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const toggleDetail = useCallback(() => {
+    setDetailOn((v) => {
+      try {
+        localStorage.setItem('eio.detail', v ? 'off' : 'on');
+      } catch { /* private window: the choice just is not remembered */ }
+      scene.current?.setDetailEnabled(!v);
+      return !v;
+    });
+  }, []);
   const toggleScope = useCallback(() => {
     setScopeAll((v) => {
       scene.current?.setScopeMode(v ? 'auto' : 'all');
@@ -121,6 +138,9 @@ export function SceneView() {
     runtime.onFitRequest = (ids) => ctl.fitEntities(ids);
     if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime, clock };
     const s0 = store.getState();
+    try {
+      ctl.setDetailEnabled(localStorage.getItem('eio.detail') !== 'off');
+    } catch { /* storage blocked: detail stays on */ }
     ctl.setFilters(s0.filters);
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
@@ -197,6 +217,9 @@ export function SceneView() {
         <button className={scopeAll ? 'btn active' : 'btn'} onClick={toggleScope} aria-pressed={scopeAll} title="Scope: AUTO draws only what is relevant to the camera focus (nearby objects, the selection and what is related to it, everything a filter lets through); ALL draws everything the filters allow">
           SCOPE {scopeAll ? 'ALL' : 'AUTO'}
         </button>
+        <button className={detailOn ? 'btn active' : 'btn'} onClick={toggleDetail} aria-pressed={detailOn} title="Close-up detail: below about 2,600 km, finer Earth imagery (NASA Blue Marble, up to 0.6 km per pixel) is streamed through the local server and laid over the base map. Off keeps the base map only.">
+          DETAIL
+        </button>
         <button className={help ? 'btn icon active' : 'btn icon'} onClick={() => setHelp((v) => !v)} aria-pressed={help} title="Controls (H)">?</button>
       </div>
       {help && (
@@ -217,6 +240,11 @@ export function SceneView() {
           <>
             <span>CAM {fmtDist(stats.distKm)}{stats.ref !== 'EARTH' ? ` FROM ${REF_LABEL[stats.ref].toUpperCase()}` : ''}</span>
             <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>            <span title={`Earth map width in pixels (GPU texture limit ${stats.maxTexturePx}). Run npm run assets and reload the page for the high-resolution map.`}>EARTH {stats.earth === 'texture' ? `TEXTURE ${stats.earthPx}` : 'PROCEDURAL'}</span>
+            {stats.detail && (
+              <span className="accent" title="Streamed close-up imagery over the base map: tile level (0.6 km per pixel at 6) and tiles received of the 4 x 4 window. Missing tiles show the base map.">
+                DETAIL Z{stats.detail.z} {stats.detail.ready}/{stats.detail.total}
+              </span>
+            )}
             <span>{Math.round(stats.fps)} FPS</span>
             <span style={{ minWidth: '24ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">
               RENDERED {stats.scope.rendered.toLocaleString('en-US')} / {stats.scope.total.toLocaleString('en-US')}
