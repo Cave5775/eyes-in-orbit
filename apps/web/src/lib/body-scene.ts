@@ -23,18 +23,22 @@ export interface DrawnBody {
   k: number;
 }
 
-type LineRec = Pick<EntityRecord, 'id' | 'bodyId' | 'provider' | 'render' | 'attrs'>;
+type LineRec = Pick<EntityRecord, 'id' | 'bodyId' | 'provider' | 'render' | 'attrs' | 'parentId'>;
 
 /**
- * Can the orbit line of this body entity be drawn in this distance scale? It needs `render.orbitLine` (not the Sun). A body
- * on the Sun's orbit (Earth, Mars) only in the true scale: the shell compression flattens heliocentric orbits (everything
- * beyond 2e6 km is pushed onto a thin shell), so the line would be a meaningless blob there. The Moon's line is the same in
- * both scales (it is inside the shell threshold).
+ * Can the orbit line of this body entity be drawn in this distance scale? It needs `render.orbitLine` (not the Sun). The
+ * Moon's line is the same in both scales (it is inside the shell threshold). A body on the Sun's orbit (Earth, Mars) in the
+ * true scale as it is. In the compressed scale the shell flattens everything beyond 2e6 km onto a thin shell, so a
+ * heliocentric line is only drawn where it can be made consistent with the displayed Sun: the Earth's, by scaling the sampled
+ * circle about the Earth with the Sun's display factor `k` (`refDisplay('SUN').k`, see `EntityOverlay.buildOrbit`), which
+ * centres it on the displayed Sun and sends it through the displayed Earth. Mars is not on that circle (its displayed
+ * position is the shell projection of its own, different, distance from the Earth, not a scaled copy of the orbit about
+ * the Earth), so it stays true-scale only.
  */
 export function bodyLineAllowed(rec: Pick<EntityRecord, 'bodyId' | 'provider' | 'render'>, scale: DistanceScale): boolean {
   if (rec.provider?.type !== 'body' || !rec.render?.orbitLine) return false;
   const heliocentric = rec.bodyId === 'SUN' && rec.provider.bodyId !== 'SUN';
-  return scale === 'true' || !heliocentric;
+  return scale === 'true' || !heliocentric || rec.provider.bodyId === 'EARTH';
 }
 
 export interface BodyLineInput {
@@ -48,9 +52,11 @@ export interface BodyLineInput {
 }
 
 /**
- * Body entities whose orbit line is drawn: the selected one, the one the camera is centred on and the one that is the frame
- * centre (a body's own orbit is drawn in its parent's frame whatever the frame is, so these are the lines the user is looking
- * at), each only where `bodyLineAllowed`. Other bodies stay unlined to keep the default view unchanged.
+ * Body entities whose orbit line is drawn: the selected one (relative to what it orbits, whatever the frame or the lock is),
+ * the direct children of the selected one (`parentId`: the Earth gives the Moon, the Sun the Earth and Mars; no
+ * grandchildren), the one the camera is centred on and the one that is the frame centre (a body's own orbit is drawn in its
+ * parent's frame whatever the frame is, so these are the lines the user is looking at), each only where `bodyLineAllowed`.
+ * Other bodies stay unlined to keep the default view unchanged.
  */
 export function bodyLineIds(recs: Iterable<LineRec>, input: BodyLineInput): string[] {
   const out: string[] = [];
@@ -59,6 +65,7 @@ export function bodyLineIds(recs: Iterable<LineRec>, input: BodyLineInput): stri
     const reg = orbitableBodyId(rec);
     const wanted =
       rec.id === input.selectedId ||
+      (input.selectedId !== null && rec.parentId === input.selectedId) ||
       (input.focusBodyId !== null && reg === input.focusBodyId) ||
       (input.frame.kind === 'body' && reg === input.frame.id && !isEarthCentre(input.frame)) || // the default frame draws nothing
       (input.frame.kind === 'entity' && rec.id === input.frame.id);
