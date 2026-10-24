@@ -3,6 +3,7 @@ import type { V3 } from './camera';
 
 /**
  * Analytic Earth occlusion, shared by the picker, the label layer and the point shader (which has the same maths in GLSL).
+ * The displayed Moon and Sun are added as plain spheres (`OccluderSphere`, `sphereOccludes`), tested the same way.
  *
  * The Earth is the ellipsoid (a, a, b = a (1 - f)); scaling z by 1 / (1 - f) maps it to a sphere of radius `a`, so a ray
  * test against a sphere is exact for it. The test sphere is shrunk by a small margin so a marker lying ON the surface
@@ -51,22 +52,86 @@ export function chordSagKm(chordKm: number, radiusKm: number = EARTH.radiusKm): 
 }
 
 /**
- * `earthOccludes` for many points from one camera: the camera terms are computed once and no arrays are allocated per
- * point (the scope pass tests every catalogue object a few times a second).
+ * A sphere that hides what is behind it: the Moon or the Sun as displayed (`c` = centre in display space, the same frame
+ * as the camera `origin`; `r` = displayed radius, already scaled by the distance-scale factor k).
  */
-export function makeOccluder(origin: V3, marginKm = OCCLUSION_MARGIN_KM): (rx: number, ry: number, rz: number) => boolean {
+export interface OccluderSphere {
+  c: V3;
+  r: number;
+}
+
+/**
+ * A sphere seen from the camera, in the form the point shader receives: `(x, y, z)` is the centre RELATIVE to the camera
+ * (subtracted in float64 here, so the Sun at 1.5e8 km and the Moon 3,000 km away are both exact to float32 rounding of
+ * the result), `r` the shrunk radius and `c2 = |centre|^2 - r^2` (computed in float64: > 0 when the camera is outside).
+ */
+export interface SphereView {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  c2: number;
+}
+
+/** Margin for a sphere: the Earth's absolute margin, but never more than 1 % of the radius (a tiny compressed Sun). */
+const sphereMargin = (r: number, marginKm: number): number => Math.min(marginKm, r * 0.01);
+
+export function sphereView(origin: V3, s: OccluderSphere, marginKm = OCCLUSION_MARGIN_KM): SphereView {
+  const x = s.c[0] - origin[0], y = s.c[1] - origin[1], z = s.c[2] - origin[2];
+  const r = s.r - sphereMargin(s.r, marginKm);
+  return { x, y, z, r, c2: x * x + y * y + z * z - r * r };
+}
+
+/**
+ * True when the sphere `v` (camera-relative centre, see `sphereView`) lies between the camera and the point `rel`
+ * (camera-relative). Only a point whose segment to the camera crosses the sphere is hidden: a point on the camera side
+ * of the near surface, beside the sphere, or looking away from it is not. A point inside the sphere is hidden.
+ *
+ * Written the way the shader is, to stay accurate in float32 for huge distances: the miss distance is the length of
+ * `cross(u, centre)` (no `|centre|^2 - t^2` cancellation) and the near hit is `c2 / (b + sqrt((r - p)(r + p)))`.
+ */
+export function sphereOccludes(v: SphereView, rx: number, ry: number, rz: number): boolean {
+  if (v.c2 <= 0) return false; // camera inside the sphere: nothing sensible to hide
+  const L = Math.hypot(rx, ry, rz);
+  if (L === 0) return false;
+  const ux = rx / L, uy = ry / L, uz = rz / L;
+  const b = ux * v.x + uy * v.y + uz * v.z;
+  if (b <= 0) return false; // looking away from the centre
+  const cx = uy * v.z - uz * v.y, cy = uz * v.x - ux * v.z, cz = ux * v.y - uy * v.x;
+  const p = Math.hypot(cx, cy, cz);
+  if (p >= v.r) return false; // the ray misses the sphere
+  return v.c2 / (b + Math.sqrt((v.r - p) * (v.r + p))) < L;
+}
+
+/**
+ * `earthOccludes` (plus the Moon and Sun spheres, when given) for many points from one camera: the camera terms are
+ * computed once and no arrays are allocated per point (the scope pass tests every catalogue object a few times a second).
+ * The Earth part is unchanged; `spheres` only add to what is hidden.
+ */
+export function makeOccluder(
+  origin: V3,
+  marginKm = OCCLUSION_MARGIN_KM,
+  spheres: readonly OccluderSphere[] = [],
+): (rx: number, ry: number, rz: number) => boolean {
   const c2 = occlusionC2(origin, marginKm);
   const ox = origin[0], oy = origin[1], oz = origin[2] * ELLIPSOID_K;
-  if (c2 <= 0) return () => false;
+  const views = spheres.map((s) => sphereView(origin, s, marginKm)).filter((v) => v.c2 > 0);
+  const earth = c2 > 0;
+  if (!earth && views.length === 0) return () => false;
   return (rx, ry, rz) => {
-    const dz = rz * ELLIPSOID_K;
-    const L = Math.hypot(rx, ry, dz);
-    if (L === 0) return false;
-    const b = (ox * rx + oy * ry + oz * dz) / L;
-    if (b >= 0) return false;
-    const disc = b * b - c2;
-    if (disc <= 0) return false;
-    return c2 / (-b + Math.sqrt(disc)) < L;
+    if (earth) {
+      const dz = rz * ELLIPSOID_K;
+      const L = Math.hypot(rx, ry, dz);
+      if (L !== 0) {
+        const b = (ox * rx + oy * ry + oz * dz) / L;
+        if (b < 0) {
+          const disc = b * b - c2;
+          if (disc > 0 && c2 / (-b + Math.sqrt(disc)) < L) return true;
+        }
+      }
+    }
+    for (let i = 0; i < views.length; i++) if (sphereOccludes(views[i], rx, ry, rz)) return true;
+    return false;
   };
 }
 

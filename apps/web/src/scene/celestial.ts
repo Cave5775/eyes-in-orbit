@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { MOON, SUN, inertialToFixedMatrix, transpose } from '@eio/core';
 import type { DistanceScale } from '../lib/deepspace';
+import type { OccluderSphere } from '../lib/occlusion';
 import { refDisplay } from '../lib/ref-body';
 import { createMoonMaterial } from './materials';
 
@@ -17,6 +18,11 @@ export class CelestialLayer {
   private readonly glow: THREE.Sprite;
   private readonly rot = new THREE.Matrix4();
   private disposed = false;
+  /** displayed Moon and Sun, for the point shader's and the pickers' occlusion test; radius 0 until the first update */
+  private readonly spheres: OccluderSphere[] = [
+    { c: [0, 0, 0], r: 0 },
+    { c: [0, 0, 0], r: 0 },
+  ];
   /** 'texture' once /textures/moon.jpg has loaded */
   mode: 'texture' | 'procedural' = 'procedural';
 
@@ -83,6 +89,16 @@ export class CelestialLayer {
     this.sun.scale.setScalar(s.k);
     this.glow.position.copy(this.sun.position);
     this.glow.scale.setScalar(SUN.radiusKm * 9 * s.k);
+
+    this.spheres[0].c = m.r;
+    this.spheres[0].r = MOON.radiusKm * m.k;
+    this.spheres[1].c = s.r;
+    this.spheres[1].r = SUN.radiusKm * s.k;
+  }
+
+  /** The Moon and the Sun as displayed at the last `update` (display-space centre, displayed radius): [moon, sun]. */
+  occluders(): readonly OccluderSphere[] {
+    return this.spheres;
   }
 
   dispose(): void {

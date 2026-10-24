@@ -3,9 +3,19 @@ import * as THREE from 'three';
 /**
  * Uniforms the point shader needs for the analytic Earth occlusion test (see `lib/occlusion.ts`, same maths):
  * the camera in Earth-scaled space, `|o'|^2 - R'^2` computed in float64 on the CPU, and the ellipsoid z scale.
+ * Plus the displayed Moon (`uSph0`) and Sun (`uSph1`) as spheres: xyz = centre relative to the camera (float64 on the
+ * CPU), w = radius; `uSphC2` = `|centre|^2 - r^2` per sphere (<= 0 disables it: camera inside, or not placed yet).
  */
 export function occlusionUniforms(): Record<string, THREE.IUniform> {
-  return { uOriginS: { value: new THREE.Vector3() }, uC2: { value: 0 }, uOccK: { value: 1 }, uOcc: { value: 1 } };
+  return {
+    uOriginS: { value: new THREE.Vector3() },
+    uC2: { value: 0 },
+    uOccK: { value: 1 },
+    uOcc: { value: 1 },
+    uSph0: { value: new THREE.Vector4() },
+    uSph1: { value: new THREE.Vector4() },
+    uSphC2: { value: new THREE.Vector2() },
+  };
 }
 
 /**
@@ -31,6 +41,9 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
       uniform float uC2;
       uniform float uOccK;
       uniform float uOcc;
+      uniform vec4 uSph0;
+      uniform vec4 uSph1;
+      uniform vec2 uSphC2;
       varying vec3 vColor;
       varying float vGlyph;
       bool earthHides(vec3 rel) {
@@ -44,13 +57,27 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         if (disc <= 0.0) return false;
         return uC2 / (-b + sqrt(disc)) < L;
       }
+      // Moon / Sun: sphere s (xyz camera-relative centre, w radius) with c2 = |centre|^2 - r^2 from the CPU. The miss
+      // distance is |cross(u, centre)| (no |centre|^2 - t^2 cancellation: the Sun is 1.5e8 km away, its radius 7e5) and the
+      // near hit is c2 / (b + sqrt((r - p)(r + p))). Same maths as sphereOccludes in lib/occlusion.ts.
+      bool sphereHides(vec3 rel, vec4 s, float c2) {
+        if (uOcc < 0.5 || c2 <= 0.0) return false;
+        float L = length(rel);
+        if (L <= 0.0) return false;
+        vec3 u = rel / L;
+        float b = dot(u, s.xyz);
+        if (b <= 0.0) return false;
+        float p = length(cross(u, s.xyz));
+        if (p >= s.w) return false;
+        return c2 / (b + sqrt((s.w - p) * (s.w + p))) < L;
+      }
       void main() {
         vColor = aColor;
         vGlyph = aGlyph;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = aSize * uPx;
         // size 0 means hidden: a zero point size is clamped up to 1 px on some GPUs/ANGLE, so also clip the vertex away
-        if (aSize <= 0.0 || aShow < 0.5 || earthHides(position)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        if (aSize <= 0.0 || aShow < 0.5 || earthHides(position) || sphereHides(position, uSph0, uSphC2.x) || sphereHides(position, uSph1, uSphC2.y)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
       varying vec3 vColor;

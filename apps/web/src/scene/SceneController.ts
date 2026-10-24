@@ -8,7 +8,7 @@ import { refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } f
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, panGround, settleDistance, surfaceFrame, surfaceLift, viewAnglesFor, type V3 } from '../lib/camera';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
-import { ELLIPSOID_K, makeOccluder, occlusionC2 } from '../lib/occlusion';
+import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
@@ -1223,7 +1223,15 @@ export class SceneController {
     u.uOriginS.value.set(f.origin.x, f.origin.y, f.origin.z * ELLIPSOID_K);
     u.uC2.value = occlusionC2(f.originV3);
     u.uOccK.value = ELLIPSOID_K;
-    this.occ = makeOccluder(f.originV3);
+    // the displayed Moon and Sun hide what is behind them like the Earth does (shader uniforms, same maths as `this.occ`)
+    const bodies = this.celestial.occluders();
+    const sph = [u.uSph0.value, u.uSph1.value];
+    for (let i = 0; i < 2; i++) {
+      const sv = sphereView(f.originV3, bodies[i]);
+      sph[i].set(sv.x, sv.y, sv.z, sv.r);
+      u.uSphC2.value.setComponent(i, sv.c2);
+    }
+    this.occ = makeOccluder(f.originV3, undefined, bodies);
 
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);
@@ -1312,7 +1320,7 @@ export class SceneController {
     const radius = scopeRadius(this.rig.dist);
     const sel = this.selectedId, hov = this.hoverId;
     const f = this.frameInfo;
-    const occluded = makeOccluder(f.originV3);
+    const occluded = this.occ; // built by prepareRender this frame: the Earth, the Moon and the Sun
     const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
     let total = 0, rendered = 0;
     const tmp = this.tmp2;
