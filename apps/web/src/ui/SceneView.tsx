@@ -216,7 +216,7 @@ export function SceneView() {
         {stats && (
           <>
             <span>CAM {fmtDist(stats.distKm)}{stats.ref !== 'EARTH' ? ` FROM ${REF_LABEL[stats.ref].toUpperCase()}` : ''}</span>
-            <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>            <span>EARTH {stats.earth === 'texture' ? 'TEXTURE' : 'PROCEDURAL'}</span>
+            <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>            <span title={`Earth map width in pixels (GPU texture limit ${stats.maxTexturePx}). Run npm run assets and reload the page for the high-resolution map.`}>EARTH {stats.earth === 'texture' ? `TEXTURE ${stats.earthPx}` : 'PROCEDURAL'}</span>
             <span>{Math.round(stats.fps)} FPS</span>
             <span style={{ minWidth: '24ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">
               RENDERED {stats.scope.rendered.toLocaleString('en-US')} / {stats.scope.total.toLocaleString('en-US')}
