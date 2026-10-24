@@ -177,12 +177,17 @@ export function mockSatellites(nowMs: number, count = 2000, seed = 7): EntityRec
     const base = { norad, epochMs: nowMs - pick(0, 7) * DAY, raan: pick(0, 360), argp: pick(0, 360), ma: pick(0, 360) };
     const name = `${GENERIC_NAMES[Math.floor(rnd() * GENERIC_NAMES.length)]} ${Math.floor(pick(1, 999))}`;
     let omm: Omm;
+    let nav = false;
     if (roll < 0.55) omm = makeOmm({ ...base, name, meanMotion: meanMotionForAlt(pick(400, 1300)), ecc: pick(0.0001, 0.02), incl: pick(20, 100) });
     else if (roll < 0.75) omm = makeOmm({ ...base, name, meanMotion: meanMotionForAlt(pick(500, 800)), ecc: pick(0.0001, 0.002), incl: pick(97, 98.8) });
-    else if (roll < 0.85) omm = makeOmm({ ...base, name: `GPS BIIR-${Math.floor(pick(1, 40))}`, meanMotion: 2.0057, ecc: pick(0.001, 0.02), incl: pick(54.5, 56.5) });
+    else if (roll < 0.85) {
+      // GPS-like MEO satellites form the navigation group (CelesTrak `gps-ops`)
+      nav = true;
+      omm = makeOmm({ ...base, name: `GPS BIIR-${Math.floor(pick(1, 40))}`, meanMotion: 2.0057, ecc: pick(0.001, 0.02), incl: pick(54.5, 56.5) });
+    }
     else if (roll < 0.95) omm = makeOmm({ ...base, name: `GEO COMSAT ${Math.floor(pick(1, 200))}`, meanMotion: 1.0027, ecc: pick(0.0001, 0.001), incl: pick(0.02, 0.12) });
     else omm = makeOmm({ ...base, name: `MOLNIYA ${Math.floor(pick(1, 60))}`, meanMotion: 2.0058, ecc: pick(0.65, 0.74), incl: 63.4 });
-    out.push(satRecord(omm, 'satellite', 'active', 'satellite', nowMs));
+    out.push(nav ? satRecord(omm, 'satellite', 'gps-ops', 'navigation', nowMs) : satRecord(omm, 'satellite', 'active', 'satellite', nowMs));
     norad++;
   }
   return out;

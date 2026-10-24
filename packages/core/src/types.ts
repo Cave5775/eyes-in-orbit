@@ -125,7 +125,7 @@ export interface EntityEvent {
 export interface RenderHint {
   glyph?: 'dot' | 'diamond' | 'ring' | 'triangle' | 'square';
   /** semantic colour key resolved by the client theme */
-  colorKey?: 'station' | 'satellite' | 'starlink' | 'probe' | 'vehicle' | 'ground' | 'debris' | 'rover' | 'aircraft' | 'body';
+  colorKey?: 'station' | 'satellite' | 'starlink' | 'probe' | 'vehicle' | 'ground' | 'debris' | 'rover' | 'aircraft' | 'body' | 'navigation';
   orbitLine?: boolean;
   trailSeconds?: number;
   footprint?: boolean;

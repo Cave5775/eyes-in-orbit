@@ -12,14 +12,31 @@ import type { NewEntity } from '../hub';
  */
 export const DEBRIS_GROUPS = ['cosmos-2251-debris', 'iridium-33-debris', 'fengyun-1c-debris'] as const;
 export type DebrisGroup = (typeof DEBRIS_GROUPS)[number];
-export type SatGroup = 'stations' | 'starlink' | 'active' | DebrisGroup;
+/**
+ * Navigation (GNSS) constellations: GPS, GLONASS, Galileo and BeiDou, in medium Earth orbit (about 19,100 to 23,200 km
+ * altitude, 12 to 14 h periods; BeiDou also has GEO and inclined-GEO members). GROUP names from CelesTrak's current data
+ * page (https://celestrak.org/NORAD/elements/): `gps-ops` (there is no `gps` group), `glo-ops`, `galileo`, `beidou`.
+ * CelesTrak also has one combined `gnss` group, not used because the four constellations are shown as separate chips.
+ */
+export const NAV_GROUPS = ['gps-ops', 'glo-ops', 'galileo', 'beidou'] as const;
+export type NavGroup = (typeof NAV_GROUPS)[number];
+/** Amateur-radio satellites (CelesTrak `amateur`, a small group of about 100 objects). Same colour as other satellites. */
+export const AMATEUR_GROUP = 'amateur';
+export type SatGroup = 'stations' | 'starlink' | 'active' | DebrisGroup | NavGroup | typeof AMATEUR_GROUP;
 
 const isDebrisGroup = (g: SatGroup): g is DebrisGroup => (DEBRIS_GROUPS as readonly string[]).includes(g);
+const isNavGroup = (g: SatGroup): g is NavGroup => (NAV_GROUPS as readonly string[]).includes(g);
 
-/** Dedupe priority: a NORAD id seen in several groups keeps the most specific one (debris clouds beat `active`). */
-const GROUP_PRIORITY: SatGroup[] = ['stations', 'starlink', ...DEBRIS_GROUPS, 'active'];
-/** Download order: the big, important groups first so a debris failure never delays them. */
-const FETCH_ORDER: SatGroup[] = ['stations', 'starlink', 'active', ...DEBRIS_GROUPS];
+/**
+ * Dedupe priority: a NORAD id seen in several groups keeps the most specific one (debris clouds, then navigation and
+ * amateur, beat `active`; the catch-all `active` is last).
+ */
+const GROUP_PRIORITY: SatGroup[] = ['stations', 'starlink', ...DEBRIS_GROUPS, ...NAV_GROUPS, AMATEUR_GROUP, 'active'];
+/**
+ * Download order: the big, important groups first so a failure of a later group never delays them. Every group added
+ * here is one more download (more exposure to the CelesTrak 403 rate limit, each with its own backoff gate).
+ */
+const FETCH_ORDER: SatGroup[] = ['stations', 'starlink', 'active', ...DEBRIS_GROUPS, ...NAV_GROUPS, AMATEUR_GROUP];
 const TTL_MS = 3 * 3600_000;
 const ISS_NORAD = 25544;
 const STATION_NAME = /^(ISS|CSS)\b|^(POISK|NAUKA|ZARYA|ZVEZDA|TIANGONG|TIANHE|WENTIAN|MENGTIAN)\b/i;
@@ -79,7 +96,9 @@ export function satelliteEntity(omm: Omm, sourceGroup: SatGroup): NewEntity {
     aliases,
     group,
     provider: { type: 'sgp4', omm },
-    render: { colorKey: kind === 'station' ? 'station' : kind === 'debris' ? 'debris' : group === 'starlink' ? 'starlink' : 'satellite' },
+    render: {
+      colorKey: kind === 'station' ? 'station' : kind === 'debris' ? 'debris' : group === 'starlink' ? 'starlink' : isNavGroup(group) ? 'navigation' : 'satellite',
+    },
   };
   if (norad === ISS_NORAD) {
     aliases.common = 'ISS';
@@ -89,7 +108,7 @@ export function satelliteEntity(omm: Omm, sourceGroup: SatGroup): NewEntity {
   return rec;
 }
 
-/** Merge fetched groups, deduping by NORAD id (stations > starlink > debris clouds > active). */
+/** Merge fetched groups, deduping by NORAD id (stations > starlink > debris clouds > navigation > amateur > active). */
 export function normalizeCelestrak(groups: Partial<Record<SatGroup, Omm[]>>): NewEntity[] {
   const byNorad = new Map<number, NewEntity>();
   for (const group of GROUP_PRIORITY) {

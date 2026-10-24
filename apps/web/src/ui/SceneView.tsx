@@ -12,7 +12,7 @@ import { FrameBar } from './FrameBar';
 import { PickPopup, type PickItem } from './PickPopup';
 
 const LEGEND: [string, string][] = [
-  ['station', 'Station'], ['satellite', 'Satellite'], ['starlink', 'Starlink'], ['debris', 'Debris'],
+  ['station', 'Station'], ['satellite', 'Satellite'], ['starlink', 'Starlink'], ['navigation', 'Navigation'], ['debris', 'Debris'],
   ['probe', 'Probe'], ['vehicle', 'Launch'], ['ground', 'Ground'],
 ];
 

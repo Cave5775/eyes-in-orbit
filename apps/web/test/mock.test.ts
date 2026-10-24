@@ -27,7 +27,11 @@ describe('mock catalog', () => {
     expect(iss.links?.streams?.length).toBeGreaterThan(0);
     const kinds = new Set(sats.map((s) => s.kind));
     expect([...kinds].sort()).toEqual(['debris', 'satellite', 'station']);
-    expect(new Set(sats.map((s) => s.group))).toEqual(new Set(['stations', 'active', 'starlink', 'cosmos-2251-debris', 'iridium-33-debris', 'fengyun-1c-debris']));
+    expect(new Set(sats.map((s) => s.group))).toEqual(new Set(['stations', 'active', 'starlink', 'gps-ops', 'cosmos-2251-debris', 'iridium-33-debris', 'fengyun-1c-debris']));
+    // the GPS-like MEO satellites are the navigation group with its own colour key
+    const gps = sats.filter((s) => s.group === 'gps-ops');
+    expect(gps.length).toBeGreaterThan(0);
+    expect(gps.every((s) => s.kind === 'satellite' && s.render?.colorKey === 'navigation')).toBe(true);
     for (const s of sats) {
       expect(s.provider?.type).toBe('sgp4');
       expect(s.aliases.norad).toBe(s.id.slice(4));

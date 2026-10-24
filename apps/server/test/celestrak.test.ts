@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { launchIdFromCospar } from '@eio/core';
 import { backoffKey, readBackoff } from '../src/backoff';
-import { DEBRIS_GROUPS, celestrak, loadGroupFile, normalizeCelestrak, parseOmmJson, satKind } from '../src/connectors/celestrak';
+import { AMATEUR_GROUP, DEBRIS_GROUPS, NAV_GROUPS, celestrak, loadGroupFile, normalizeCelestrak, parseOmmJson, satKind } from '../src/connectors/celestrak';
 import { Store } from '../src/store';
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
@@ -127,6 +127,70 @@ describe('celestrak debris groups', () => {
   });
 });
 
+describe('celestrak navigation and amateur groups', () => {
+  const nav = () => ({
+    'gps-ops': parseOmmJson(fixture('celestrak-gps-ops.json')),
+    galileo: parseOmmJson(fixture('celestrak-galileo.json')),
+  });
+  const amateur = () => parseOmmJson(fixture('celestrak-amateur.json'));
+
+  it('lists the CelesTrak GROUP names', () => {
+    expect([...NAV_GROUPS]).toEqual(['gps-ops', 'glo-ops', 'galileo', 'beidou']);
+    expect(AMATEUR_GROUP).toBe('amateur');
+  });
+
+  it('tags navigation satellites with their group and the navigation colour (kind stays satellite)', () => {
+    const byId = Object.fromEntries(normalizeCelestrak({ ...groups(), ...nav() }).map((e) => [e.id, e]));
+    expect(byId['sat-27663']).toMatchObject({
+      name: 'GPS BIIR-8  (PRN 16)', kind: 'satellite', group: 'gps-ops', aliases: { norad: '27663', cospar: '2003-005A' },
+      provider: { type: 'sgp4' }, render: { colorKey: 'navigation' },
+    });
+    expect(byId['sat-37846']).toMatchObject({ kind: 'satellite', group: 'galileo', render: { colorKey: 'navigation' } });
+    // existing groups are unaffected
+    expect(byId['sat-33591'].render).toEqual({ colorKey: 'satellite' });
+    expect(byId['sat-44714'].render).toEqual({ colorKey: 'starlink' });
+  });
+
+  it('keeps amateur satellites in the plain satellite colour but in their own group', () => {
+    const e = normalizeCelestrak({ amateur: amateur() })[0];
+    expect(e).toMatchObject({ id: 'sat-43017', kind: 'satellite', group: 'amateur', render: { colorKey: 'satellite' } });
+  });
+
+  it('classifies a satellite listed in both `active` and a navigation group as navigation', () => {
+    const g = groups();
+    const gps = nav()['gps-ops'];
+    const inActive = { ...gps[0] }; // 27663 also in `active`
+    const entities = normalizeCelestrak({ ...g, ...nav(), active: [...g.active, inActive] });
+    const ids = entities.map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(entities.find((e) => e.id === 'sat-27663')).toMatchObject({ group: 'gps-ops', render: { colorKey: 'navigation' } });
+    // when the navigation group could not be fetched the satellite stays a plain `active` one
+    expect(normalizeCelestrak({ ...g, active: [...g.active, inActive] }).find((e) => e.id === 'sat-27663')).toMatchObject({
+      group: 'active', render: { colorKey: 'satellite' },
+    });
+  });
+
+  it('keeps stations, Starlink and debris clouds ahead of navigation and amateur groups', () => {
+    const g = groups();
+    const iss = { ...g.stations[0] };
+    const sl = { ...g.starlink[0] };
+    const cloud = debrisGroups()['cosmos-2251-debris'][1];
+    const entities = normalizeCelestrak({
+      ...g, ...debrisGroups(), 'gps-ops': [iss, sl, { ...cloud }], amateur: [{ ...iss }, { ...cloud }],
+    });
+    expect(entities.find((e) => e.id === 'sat-25544')!.group).toBe('stations');
+    expect(entities.find((e) => e.id === 'sat-44714')!.group).toBe('starlink');
+    expect(entities.find((e) => e.id === 'sat-33791')).toMatchObject({ group: 'cosmos-2251-debris', render: { colorKey: 'debris' } });
+  });
+
+  it('prefers navigation over amateur', () => {
+    const omm = { ...amateur()[0] };
+    const entities = normalizeCelestrak({ amateur: [omm], galileo: [omm] });
+    expect(entities).toHaveLength(1);
+    expect(entities[0]).toMatchObject({ group: 'galileo', render: { colorKey: 'navigation' } });
+  });
+});
+
 describe('celestrak connector run', () => {
   const body = (group: string): string => {
     if (group === 'stations') return fixture('celestrak-stations.json');
@@ -134,6 +198,10 @@ describe('celestrak connector run', () => {
     if (group === 'active') return fixture('celestrak-active.json');
     if (group === 'cosmos-2251-debris') return fixture('celestrak-cosmos-2251-debris.json');
     if (group === 'iridium-33-debris') return fixture('celestrak-iridium-33-debris.json');
+    if (group === 'gps-ops' || group === 'galileo' || group === 'amateur') return fixture(`celestrak-${group}.json`);
+    // distinct objects for the other two navigation groups, derived from the Galileo fixture
+    if (group === 'glo-ops') return JSON.stringify(parseOmmJson(fixture('celestrak-galileo.json')).map((o) => ({ ...o, OBJECT_NAME: 'COSMOS 2545 (GLONASS-K2)', NORAD_CAT_ID: 45358 })));
+    if (group === 'beidou') return JSON.stringify(parseOmmJson(fixture('celestrak-galileo.json')).map((o) => ({ ...o, OBJECT_NAME: 'BEIDOU-3 M1', NORAD_CAT_ID: 43001 })));
     throw new Error('HTTP 403');
   };
   function fakeCtx() {
@@ -163,7 +231,11 @@ describe('celestrak connector run', () => {
     expect(ctx.calls.map((c) => c.key)).toEqual([
       'celestrak:stations', 'celestrak:starlink', 'celestrak:active',
       'celestrak:cosmos-2251-debris', 'celestrak:iridium-33-debris', 'celestrak:fengyun-1c-debris',
+      'celestrak:gps-ops', 'celestrak:glo-ops', 'celestrak:galileo', 'celestrak:beidou', 'celestrak:amateur',
     ]);
+    expect(ctx.calls.find((c) => c.key === 'celestrak:gps-ops')!.url).toBe(
+      'https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=json',
+    );
     expect(ctx.calls.find((c) => c.key === 'celestrak:iridium-33-debris')!.url).toBe(
       'https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium-33-debris&FORMAT=json',
     );
@@ -212,6 +284,21 @@ describe('celestrak connector run', () => {
     await celestrak.run!(ctx as never);
     expect(ctx.upserted.some((e) => e.id === 'sat-44714' && e.group === 'starlink')).toBe(true);
     expect(ctx.health.note).toMatch(/starlink: HTTP 403.*using data file/);
+  });
+
+  it('falls back to data/celestrak/<group>.json for a navigation group and keeps its colour', async () => {
+    const ctx = fakeCtx();
+    ctx.cachedFetch = (async (key: string) => {
+      if (key === 'celestrak:gps-ops') throw new Error('HTTP 403 for https://celestrak.org/x');
+      return { value: parseOmmJson(body(key.replace('celestrak:', ''))), fromCache: false, stale: false };
+    }) as never;
+    mkdirSync(join(ctx.config.dataDir, 'celestrak'));
+    writeFileSync(join(ctx.config.dataDir, 'celestrak', 'gps-ops.json'), fixture('celestrak-gps-ops.json'));
+    const upserted: { id: string; group?: string; render?: { colorKey?: string } }[] = [];
+    ctx.hub.upsert = ((...r: typeof upserted) => (upserted.push(...r), r.length)) as never;
+    await celestrak.run!(ctx as never);
+    expect(upserted.find((e) => e.id === 'sat-27663')).toMatchObject({ group: 'gps-ops', render: { colorKey: 'navigation' } });
+    expect(ctx.health.note).toMatch(/gps-ops: HTTP 403.*using data file/);
   });
 
   it('clears the gate once a download works again', async () => {
