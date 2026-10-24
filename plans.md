@@ -1,7 +1,9 @@
 # UI/UX
 - [ ] Add a feature to timeskip to a launch or skip to specific points of a launch by clicking the trajectory
-- [ ] When zoomed out, dynamically show labels for planets and moons. Also show labels for satallites (when filtered) Add a toggle to show these labels
-- [ ] When a click triggers the selection popup, order the objects primarily by highest in the object hierarchy, then by most recent created. Following this logic, only display the highest celestial object in the hierarchy when zoomed out (eg. the satallites overlapping the Earth are just aggregated into an icon to select the Earth itself) if this ends up being too janky, we can just increase the size of celestial bodies' hitbox when zoomed out and hide small objects
+- [x] When zoomed out, dynamically show labels for planets and moons. Also show labels for satallites (when filtered) Add a toggle to show these labels
+  - Done in code (`lib/labels.ts`, `scene/LabelLayer.ts`, LABELS button, `eio.labels`), checked in the mock mode only. Cap 48, body fade 50 to 220 px; entities with `render.label` (ISS, probes, launch vehicles, DSN) are also named in the default view.
+- [x] When a click triggers the selection popup, order the objects primarily by highest in the object hierarchy, then by most recent created. Following this logic, only display the highest celestial object in the hierarchy when zoomed out (eg. the satallites overlapping the Earth are just aggregated into an icon to select the Earth itself) if this ends up being too janky, we can just increase the size of celestial bodies' hitbox when zoomed out and hide small objects
+  - Done in code, mock mode only: popup ordered by hierarchy rank then recency; a body with a disc radius of 40 px or less groups the objects under it behind a "+ N objects" row. The bigger-hitbox fallback was not needed. Threshold 40 px is a guess.
 
 # Wanted features
 - [x] Higher resolution Earth texture
