@@ -57,10 +57,16 @@ export class PathOverlay {
   /** how far the frame centre has moved since the buffers were filled, km (world space) */
   private shift: Vec3 = [0, 0, 0];
   private readonly tmp = new THREE.Vector3();
+  private readonly colors: { past: THREE.Color; pastHot: THREE.Color; future: THREE.Color; futureHot: THREE.Color };
+  private hot = false;
 
   constructor(private world: THREE.Object3D, pointMaterial: THREE.Material, color: THREE.Color) {
-    this.past = makeLine(this.line.attr, color.clone().multiplyScalar(0.5), 0.6);
-    this.future = makeLine(this.line.attr, color.clone().lerp(new THREE.Color(1, 1, 1), 0.4), 1);
+    this.colors = {
+      past: color.clone().multiplyScalar(0.5), pastHot: color.clone().lerp(new THREE.Color(1, 1, 1), 0.2),
+      future: color.clone().lerp(new THREE.Color(1, 1, 1), 0.4), futureHot: new THREE.Color(1, 1, 1),
+    };
+    this.past = makeLine(this.line.attr, this.colors.past.clone(), 0.6);
+    this.future = makeLine(this.line.attr, this.colors.future.clone(), 1);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', this.tickPos.attr);
     const col = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES * 3), 3);
@@ -159,6 +165,28 @@ export class PathOverlay {
         visit(p[0], p[1], p[2]);
       } else visit(x + this.shift[0], y + this.shift[1], z + this.shift[2]);
     }
+  }
+
+  /**
+   * The drawn path as last uploaded, for hit-testing (lib/path-pick.ts): camera-relative xyz (the exact buffer the GPU draws,
+   * so it already carries the spin / frame shift that `worldPoints` applies) and the ascending sample times, ms. Valid after
+   * `uploadFrame`. Null unless a planned flight is drawn (a launch ascent or booster return: its times are real and fixed),
+   * so the paths of probes, trails and other windows around "now" are not clickable.
+   */
+  pickSamples(): { rel: Float32Array; times: Float64Array; count: number } | null {
+    const res = this.res;
+    if (!res || !res.plan.anchored || res.count < 2 || !(this.past.visible || this.future.visible)) return null;
+    return { rel: this.line.attr.array as Float32Array, times: this.buf.times, count: res.count };
+  }
+
+  /** Brighten the whole line while the cursor is on it. */
+  setHighlight(on: boolean): void {
+    if (on === this.hot) return;
+    this.hot = on;
+    const c = this.colors;
+    (this.past.material as THREE.LineBasicMaterial).color.copy(on ? c.pastHot : c.past);
+    (this.past.material as THREE.LineBasicMaterial).opacity = on ? 1 : 0.6;
+    (this.future.material as THREE.LineBasicMaterial).color.copy(on ? c.futureHot : c.future);
   }
 
   /** Phase labels with world positions (float64), for the HTML label layer. */

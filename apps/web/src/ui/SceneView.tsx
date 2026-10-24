@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { sourceLabel } from '../lib/arrays';
 import { fmtDist, fmtPathWindow } from '../lib/format';
 import { colorKeyOf, kindLabel } from '../lib/entity';
+import { launchOfPathEntity, liftoffMsOf, pathTipText } from '../lib/launch-seek';
 import { relatedFor } from '../lib/related';
 import { modelDef } from '../scene/models/registry';
 import { LabelLayer, type LabelItem } from '../scene/LabelLayer';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { usePanels } from '../state/panels';
 import { clock, runtime } from '../state/runtime';
+import { jumpToSimTime } from '../state/seek';
 import { useStore } from '../state/store';
 import { FrameBar } from './FrameBar';
 import { PickPopup, type PickItem } from './PickPopup';
@@ -22,6 +24,7 @@ const HELP: [string, string][] = [
   ['Right / Shift drag', 'Pan (surface view: lets go of the followed object and slides along the ground at its height)'],
   ['Wheel / pinch', 'Zoom: step scales with height above the surface'],
   ['Click', 'Select an object; hover for its name. Where several overlap a list opens (highest in the hierarchy first, then newest): wheel or arrows choose, click or Enter selects, Esc closes. Zoomed out, objects over a small distant body (Earth under about 80 px wide) are grouped into it: the body is listed with a "+ N objects" row that expands the list'],
+  ['Click a launch path', 'With a launch (or its booster) selected, clicking its drawn trajectory jumps the simulation clock to the moment at that point of the flight (T+ shown while hovering), at the current rate. Objects, the choice list and the Earth always take the click first'],
   ['F', 'Fit the selection and its related objects'],
   ['Shift+F', 'Fit everything visible (respects filters)'],
   ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or SURFACE switches to the globe view, and that choice is remembered until you press S again'],
@@ -40,6 +43,9 @@ function isTyping(e: KeyboardEvent): boolean {
 export function SceneView() {
   const host = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
+  /** tooltip and snap dot of the trajectory under the cursor (separate from `tip`, which names objects) */
+  const pathTip = useRef<HTMLDivElement>(null);
+  const pathDot = useRef<HTMLDivElement>(null);
   const labelHost = useRef<HTMLDivElement>(null);
   const scene = useRef<SceneController | null>(null);
   const [stats, setStats] = useState<SceneStats | null>(null);
@@ -173,6 +179,22 @@ export function SceneView() {
         el.style.transform = `translate(${h.x + 14}px, ${h.y + 14}px)`;
         el.textContent = `${rec.name}  ·  ${rec.kind.replace(/_/g, ' ')}`;
       },
+      onPathHover: (h) => {
+        const el = pathTip.current, dot = pathDot.current;
+        if (!el || !dot) return;
+        if (!h) {
+          el.style.display = dot.style.display = 'none';
+          return;
+        }
+        const s = store.getState();
+        const rec = s.entities.get(h.id);
+        const launch = launchOfPathEntity(s.launches, h.id, rec?.parentId);
+        el.style.display = dot.style.display = 'block';
+        el.style.transform = `translate(${h.x + 14}px, ${h.y + 14}px)`;
+        dot.style.transform = `translate(${h.sx - 4}px, ${h.sy - 4}px)`;
+        el.textContent = pathTipText(h.tMs, launch ? liftoffMsOf(launch) : null);
+      },
+      onPathSeek: (h) => jumpToSimTime(h.tMs),
       onPathLabels: showPathLabels,
       onLabels: (labels, n) => objectLayer.update(labels, n),
       onFollowChange: (f) => store.getState().setFollow(f),
@@ -248,6 +270,8 @@ export function SceneView() {
       <div ref={host} className="scene-host" />
       <div ref={labelHost} className="path-labels" />
       <div ref={tip} className="scene-tip" />
+      <div ref={pathTip} className="scene-tip" />
+      <div ref={pathDot} className="path-dot" />
       {pick && <PickPopup items={pick.items} more={pick.more} hidden={pick.hidden} hiddenMore={pick.hiddenMore} x={pick.x} y={pick.y} onSelect={choosePick} onClose={closePick} onHighlight={highlightPick} />}
       <div className="scene-top">
       <div className="scene-actions">

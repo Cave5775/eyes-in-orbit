@@ -236,6 +236,10 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
   background: rgba(10, 15, 21, 0.92); border: 1px solid var(--line-2); border-radius: 3px; padding: 3px 8px; font-family: var(--mono); font-size: 11px;
 }
 .scene-actions { position: absolute; top: 10px; left: 10px; display: flex; flex-wrap: wrap; gap: 6px; z-index: 4; max-width: calc(100% - 20px); }
+.path-dot {
+  position: absolute; left: 0; top: 0; display: none; pointer-events: none; z-index: 5; width: 8px; height: 8px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 2px rgba(10, 15, 21, 0.9), 0 0 6px 2px var(--accent);
+}
 .path-labels { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
 .path-label {
   position: absolute; left: 0; top: 0; display: none; white-space: nowrap; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;

@@ -27,6 +27,7 @@ import { CelestialLayer } from './celestial';
 import { EarthDetail, type DetailStats } from './earth-detail';
 import { EntityOverlay } from './overlays';
 import { PathOverlay, type PathStatus } from './PathOverlay';
+import { nearestOnPath, type PathHit } from '../lib/path-pick';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
 import { ModelLayer, type ModelFrame } from './models/ModelLayer';
@@ -63,6 +64,14 @@ export interface SceneCallbacks {
    * single body. onPick is not called for that click.
    */
   onPickMany?(ids: string[], total: number, x: number, y: number, grouped?: { ids: string[]; total: number }): void;
+  /**
+   * The cursor is on the selected launch's drawn trajectory (a planned flight with real sample times) and nothing above it
+   * in the pick order is: `tMs` is the sim time of the nearest point of the line, `x`/`y` the cursor and `sx`/`sy` that point,
+   * CSS px inside the scene container. Called while it holds (the cursor moves), once with null when it ends.
+   */
+  onPathHover?(h: { id: string; tMs: number; x: number; y: number; sx: number; sy: number } | null): void;
+  /** A click landed on that trajectory (and on no object, popup or body above it): the caller seeks the clock to `tMs`. */
+  onPathSeek?(h: { id: string; tMs: number }): void;
   /** Screen positions of the selected path's phase boundaries (called each frame while there are any, once more to clear). */
   onPathLabels?(labels: PathLabel[]): void;
   /**
@@ -199,6 +208,8 @@ export class SceneController {
   private fullOverlays = new Set<string>();
   private pathOverlay: PathOverlay | null = null;
   private pathOverlayId: string | null = null;
+  /** the trajectory under the cursor (hover highlight, cursor, tooltip); null when none */
+  private pathHover: (PathHit & { id: string }) | null = null;
   private pathStatus: PathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
   private hadPathLabels = false;
   // object labels (lib/labels.ts)
@@ -1127,6 +1138,7 @@ export class SceneController {
       this.pathOverlay?.dispose();
       this.pathOverlay = null;
       this.pathOverlayId = pathId;
+      this.setPathHover(null);
       this.pathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
       if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
     }
@@ -1250,7 +1262,10 @@ export class SceneController {
     };
     const onMove = (e: PointerEvent) => {
       this.mouse = e.buttons ? null : rel(e);
-      if (e.buttons) this.setHover(null);
+      if (e.buttons) {
+        this.setHover(null);
+        this.setPathHover(null);
+      }
     };
     const onDown = (e: PointerEvent) => {
       this.down = { ...rel(e), t: performance.now() };
@@ -1263,6 +1278,17 @@ export class SceneController {
       if (Math.hypot(p.x - d.x, p.y - d.y) > 4 || performance.now() - d.t > 600) return;
       // one candidate selects it; several (or a body that groups far objects) open the choice popup
       const { ids, total, grouped } = this.pickAll(p.x, p.y, POPUP_MAX, true);
+      // the trajectory is the lowest priority: below every object and the popup, and below the objects a far body groups. Over
+      // a body alone (zoomed in, the Earth's disc covers the view) it still wins, or a path over the globe could not be clicked
+      if (grouped.ids.length === 0 && ids.every((id) => this.bodyRegId.has(id))) {
+        const hit = this.pathHitAt(p.x, p.y);
+        if (hit && this.cb.onPathSeek) {
+          this.setHover(null);
+          this.setPathHover(null);
+          this.cb.onPathSeek({ id: hit.id, tMs: hit.tMs });
+          return;
+        }
+      }
       const group = grouped.ids.length > 0 && this.cb.onPickMany;
       if (!group && (ids.length === 1 || (ids.length > 1 && !this.cb.onPickMany))) this.cb.onPick(ids[0]);
       else if (ids.length > 1 || group) {
@@ -1273,6 +1299,7 @@ export class SceneController {
     const onLeave = () => {
       this.mouse = null;
       this.setHover(null);
+      this.setPathHover(null);
     };
     dom.addEventListener('pointermove', onMove);
     dom.addEventListener('pointerdown', onDown);
@@ -1284,6 +1311,33 @@ export class SceneController {
       dom.removeEventListener('pointerup', onUp);
       dom.removeEventListener('pointerleave', onLeave);
     });
+  }
+
+  /**
+   * The selected launch path under a screen point, or null: nearest point of the drawn polyline within PATH_HIT_PX
+   * (lib/path-pick.ts, in screen space, so it is right in any frame and view), not hidden behind a body.
+   */
+  private pathHitAt(px: number, py: number): (PathHit & { id: string }) | null {
+    const po = this.pathOverlay, id = this.pathOverlayId;
+    if (!po || !id || !this.pathStatus.active || !this.cb.onPathSeek) return null;
+    const s = po.pickSamples();
+    if (!s) return null;
+    const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
+    const hit = nearestOnPath({
+      rel: s.rel, times: s.times, count: s.count, m, w: this.container.clientWidth, h: this.container.clientHeight, px, py,
+      occluded: (x, y, z) => this.occludedRel(x, y, z),
+    });
+    return hit && { ...hit, id };
+  }
+
+  /** Hover state of the trajectory: highlight, pointer cursor and the callback (tooltip); called with null to clear. */
+  private setPathHover(hit: (PathHit & { id: string }) | null, x = 0, y = 0): void {
+    const was = this.pathHover;
+    this.pathHover = hit;
+    this.pathOverlay?.setHighlight(!!hit);
+    if (hit || was) this.renderer.domElement.style.cursor = hit || this.hoverId ? 'pointer' : '';
+    if (hit) this.cb.onPathHover?.({ id: hit.id, tMs: hit.tMs, x, y, sx: hit.sx, sy: hit.sy });
+    else if (was) this.cb.onPathHover?.(null);
   }
 
   private setHover(id: string | null, x = 0, y = 0): void {
@@ -1362,7 +1416,12 @@ export class SceneController {
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
       this.lastPickAt = wall;
       const id = this.pick(this.mouse.x, this.mouse.y);
-      if (id || this.hoverId) this.setHover(id, this.mouse.x, this.mouse.y);
+      // the trajectory under the cursor wins over a body (the Earth's disc covers the view) but never over an object
+      const onPath = !this.previewId && (!id || this.bodyRegId.has(id)) ? this.pathHitAt(this.mouse.x, this.mouse.y) : null;
+      if (onPath) {
+        if (this.hoverId) this.setHover(null);
+      } else if (id || this.hoverId) this.setHover(id, this.mouse.x, this.mouse.y);
+      this.setPathHover(onPath, this.mouse.x, this.mouse.y);
     }
 
     this.renderer.render(this.scene, this.rcam);
