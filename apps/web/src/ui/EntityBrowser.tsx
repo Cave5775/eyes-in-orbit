@@ -1,10 +1,11 @@
-import { defaultBodies } from '@eio/core';
+import { bodyEntityId, defaultBodies } from '@eio/core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
+import { BODY_KINDS, GROUP_CHIP_CAP, KIND_CHIP_CAP, capChips } from '../lib/browser-ui';
 import { buildTreeRows, type TreeBody } from '../lib/entity-tree';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { browseOrder, buildLaunchGroups, facetCounts, filtersActive, matchesFilters, rankEntities, type SearchHit } from '../lib/filters';
-import { bodyCentre, isOrbitableBody, sameCentre } from '../lib/frame';
+import { bodyCentre, sameCentre } from '../lib/frame';
 import { useStore } from '../state/store';
 import { LaunchFilter } from './LaunchFilter';
 import { VirtualList } from './VirtualList';
@@ -69,6 +70,15 @@ export function EntityBrowser() {
   }, [query, setSearchResults]);
 
   const facets = useMemo(() => facetCounts(entities.values()), [entities]);
+  // the chip strips show the most common kinds and groups; the body kinds stay visible, switched-on chips too, and "more"
+  // opens every one of them in a scrollable strip
+  const [moreChips, setMoreChips] = useState(false);
+  const kindChips = useMemo(
+    () => capChips(facets.kinds, KIND_CHIP_CAP, { expanded: moreChips, pinned: BODY_KINDS, active: filters.kinds }),
+    [facets, moreChips, filters.kinds]);
+  const groupChips = useMemo(
+    () => capChips(facets.groups, GROUP_CHIP_CAP, { expanded: moreChips, active: filters.groups }),
+    [facets, moreChips, filters.groups]);
   const launchGroups = useMemo(() => buildLaunchGroups(entities.values()), [entities]);
 
   const rows: SearchHit[] = useMemo(() => {
@@ -82,17 +92,25 @@ export function EntityBrowser() {
   const filtering = !!query || filtersActive(filters);
   const treeRows = useMemo(() => {
     if (mode !== 'tree') return [];
+    // a body that has an entity in the catalog carries it, so the node can select it even when a filter hides its row
+    const bodies = TREE_BODIES.map((b) => {
+      const entityId = bodyEntityId(b.id);
+      return entities.has(entityId) ? { ...b, entityId } : b;
+    });
+    const recOf = (r: { id: string }) => entities.get(r.id);
     return buildTreeRows(rows, {
-      bodies: TREE_BODIES, frame, frameBodyId: frame.kind === 'entity' ? entities.get(frame.id)?.bodyId : undefined,
-      openAll: filtering, overrides, kindName: kindLabel, bodyOf: (r) => entities.get(r.id)?.bodyId,
+      bodies, frame, frameBodyId: frame.kind === 'entity' ? entities.get(frame.id)?.bodyId : undefined,
+      openAll: filtering, overrides, kindName: kindLabel, bodyOf: (r) => recOf(r)?.bodyId,
+      standsForBody: (r) => { const p = recOf(r)?.provider; return p?.type === 'body' ? p.bodyId : undefined; },
     });
   }, [mode, rows, entities, frame, filtering, overrides]);
 
-  const chooseBody = (bodyId: string, key: string, open: boolean) => {
-    if (isOrbitableBody(bodyId)) {
-      setOpen(key, true);
-      setFrame(bodyCentre(bodyId), { fly: true });
-    } else setOpen(key, !open); // no display for it (Mars): just fold
+  // a body node: the camera flies to the body and the frame becomes it (as the old node click did); its entity is selected
+  // too, so the detail panel shows the body. The frame is set first because a body fly clears the selection.
+  const chooseBody = (bodyId: string, key: string, entityId?: string) => {
+    setOpen(key, true);
+    setFrame(bodyCentre(bodyId), { fly: true });
+    if (entityId && useStore.getState().entities.has(entityId)) select(entityId);
   };
 
   const entityRow = (id: string, name: string, kind: string, depth: number, key: string) => {
@@ -102,7 +120,7 @@ export function EntityBrowser() {
       <button
         key={key} className={id === selectedId ? 'row sel' : 'row'} style={{ height: ROW_H, paddingLeft: mode === 'tree' ? 10 + depth * INDENT_PX : undefined }}
         onClick={() => select(id)}>
-        <i className="swatch" style={{ background: `var(--c-${rec ? colorKeyOf(rec) : 'satellite'})` }} />
+        <i className="swatch" style={{ background: `var(--c-${rec ? colorKeyOf(rec) : 'satellite'}, var(--c-satellite))` }} />
         <span className="row-name">{name}</span>
         {isFrame && <span className="row-frame" title="The frame of reference is centred on this object">FRAME</span>}
         <span className="row-kind">{kindLabel(kind)}</span>
@@ -126,16 +144,15 @@ export function EntityBrowser() {
         </button>
       );
     }
-    const orbitable = isOrbitableBody(r.bodyId);
-    const active = sameCentre(frame, bodyCentre(r.bodyId));
+    const active = sameCentre(frame, bodyCentre(r.bodyId)) || (!!r.entityId && r.entityId === selectedId);
     return (
       <div key={r.key} className={active ? 'row tree-body sel' : 'row tree-body'} style={{ height: ROW_H, paddingLeft: pad }}>
         <button className="tree-chev" aria-expanded={r.open} aria-label={`${r.open ? 'Collapse' : 'Expand'} ${r.name}`} onClick={() => setOpen(r.key, !r.open)}>
           {r.open ? '▾' : '▸'}
         </button>
         <button
-          className="tree-body-name" onClick={() => chooseBody(r.bodyId, r.key, r.open)}
-          title={orbitable ? `Set the frame of reference to the ${r.name} and fly there` : `${r.name} has no display yet: it cannot be the frame of reference`}>
+          className="tree-body-name" onClick={() => chooseBody(r.bodyId, r.key, r.entityId)}
+          title={`Select the ${r.name}, make it the frame of reference and fly there`}>
           {r.name.toUpperCase()}
         </button>
         <span className="tree-count mono">{r.count.toLocaleString('en-US')}</span>
@@ -160,19 +177,25 @@ export function EntityBrowser() {
         />
       </div>
       <div className="facets">
-        <div className="chips">
-          {facets.kinds.slice(0, 10).map(([k, n]) => (
+        <div className={moreChips ? 'chips chips-scroll' : 'chips'}>
+          {kindChips.shown.map(([k, n]) => (
             <button key={k} className={filters.kinds.has(k) ? 'chip on' : 'chip'} onClick={() => toggleKind(k)}>
               {kindLabel(k)} <small>{n.toLocaleString('en-US')}</small>
             </button>
           ))}
         </div>
-        <div className="chips">
-          {facets.groups.slice(0, 8).map(([g, n]) => (
+        <div className={moreChips ? 'chips chips-scroll' : 'chips'}>
+          {moreChips && <button className="chip more" onClick={() => setMoreChips(false)} title="Show the most common kinds and groups only">fewer</button>}
+          {groupChips.shown.map(([g, n]) => (
             <button key={g} className={filters.groups.has(g) ? 'chip on alt' : 'chip alt'} onClick={() => toggleGroup(g)}>
               {g} <small>{n.toLocaleString('en-US')}</small>
             </button>
           ))}
+          {(groupChips.hidden > 0 || kindChips.hidden > 0) && (
+            <button className="chip more" onClick={() => setMoreChips(true)} title="Show every kind and group">
+              +{groupChips.hidden + kindChips.hidden} more
+            </button>
+          )}
           {filtersActive(filters) && <button className="chip clear" onClick={clearFilters}>CLEAR</button>}
         </div>
         <LaunchFilter groups={launchGroups} />

@@ -508,3 +508,9 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 .tree-count { flex: none; color: var(--dim); font-size: 10px; }
 .row-frame { flex: none; color: var(--warn); font-size: 9px; letter-spacing: 0.08em; border: 1px solid rgba(224, 164, 58, 0.5); border-radius: 2px; padding: 0 3px; }
 /* ==== end FRAME-UI ==== */
+
+/* ==== WP5 (bodies as entities): filter chip strips with every kind / group reachable ==== */
+.chips.chips-scroll { max-height: 76px; overflow-y: auto; }
+.chip.more { color: var(--accent); border-style: dashed; cursor: pointer; }
+.chip.more:hover { border-color: var(--accent); }
+/* ==== end WP5 ==== */

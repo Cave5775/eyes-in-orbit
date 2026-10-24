@@ -1,4 +1,5 @@
-import type { EntityRecord } from '@eio/core';
+import { isBodyEntity, type EntityRecord } from '@eio/core';
+import { BODY_ATTR_KEYS, bodyFacts } from '../../lib/browser-ui';
 import { isIss } from '../../lib/entity';
 import {
   fmtAgo, fmtAttr, fmtBitrate, fmtDeg, fmtDist, fmtElementAge, fmtKm, fmtLat, fmtLightTime, fmtLon, fmtPercent, fmtPeriod, fmtShortUtc,
@@ -31,7 +32,9 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
   const code = rec.aliases.dsn;
   const link = code ? dsn?.links.find((l) => l.spacecraft.includes(code)) : undefined;
   const showIss = isIss(rec);
-  const attrs = Object.entries(rec.attrs ?? {}).filter(([, v]) => v !== null && v !== '');
+  const facts = isBodyEntity(rec) ? bodyFacts(rec) : [];
+  // a body entity's radius / gm / period / approx have their own BODY section
+  const attrs = Object.entries(rec.attrs ?? {}).filter(([k, v]) => v !== null && v !== '' && !(facts.length > 0 && BODY_ATTR_KEYS.includes(k)));
   // the SARJ / BGA / attitude items are summarised in the ARRAYS section; the table keeps the rest of the raw feed
   const tableRows = iss.telemetry.filter((p) => !/^(S000000[345]|[PS][46]00000[78]|USLAB0000(1[89]|2[01]))$/.test(p.id));
 
@@ -52,12 +55,21 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
           {tel.refRangeKm !== undefined && <Field label={`Range from ${frame.label}`} value={fmtDist(tel.refRangeKm)} mono />}
           {tel.refSpeedKmS !== undefined && <Field label={`Speed rel. ${frame.label}`} value={fmtSpeedKmS(tel.refSpeedKmS)} mono />}
           <Field label="Speed" value={tel.speedKmS !== undefined ? fmtSpeedKmS(tel.speedKmS) : undefined} mono />
-          <Field label="Period" value={tel.periodSec ? fmtPeriod(tel.periodSec) : undefined} mono />
+          {facts.length === 0 && <Field label="Period" value={tel.periodSec ? fmtPeriod(tel.periodSec) : undefined} mono />}
           <Field label="Phase" value={tel.phase?.replace(/_/g, ' ')} />
           <Field label="Confidence" value={conf?.text} mono tone={conf?.tone} />
           <Field label="Element age" value={tel.elementAgeDays !== undefined ? fmtElementAge(tel.elementAgeDays) : undefined} mono />
           {tel.shell && <Field label="Display" value="Compressed deep-space shell (distance not to scale)" tone="warn" />}
         </dl>
+      )}
+
+      {facts.length > 0 && (
+        <>
+          <div className="section-title">BODY</div>
+          <dl className="kv">
+            {facts.map((f) => <Field key={f.label} label={f.label} value={f.value} mono />)}
+          </dl>
+        </>
       )}
 
       {showIss && (

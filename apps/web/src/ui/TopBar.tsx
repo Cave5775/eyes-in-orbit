@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { activeBodyTab, bodyTabs } from '../lib/browser-ui';
 import { fmtUtc } from '../lib/format';
-import { bodyCentre, sameCentre } from '../lib/frame';
+import { bodyCentre } from '../lib/frame';
 import {
   digitsOnly, offsetFields, offsetMs, parseOffsetFields, parseOffsetText, simTimeAt, type OffsetFields,
 } from '../lib/time-offset';
@@ -11,9 +12,6 @@ import { CredentialsPanel } from './CredentialsPanel';
 import { HealthIndicator } from './HealthIndicator';
 import { useSimNow } from './hooks';
 import { PanelsMenu } from './PanelsMenu';
-
-/** Views the app can centre on; Mars has no ephemeris or map yet. */
-const BODIES: [string, string | null][] = [['Earth', 'EARTH'], ['Moon', 'MOON'], ['Sun', 'SUN'], ['Mars', null]];
 
 type FieldKey = 'days' | 'hours' | 'minutes' | 'seconds';
 const FIELDS: { key: FieldKey; label: string; ph: string; max: number }[] = [
@@ -30,6 +28,10 @@ export function TopBar() {
   const snap = useStore((s) => s.clock);
   const frame = useStore((s) => s.frame);
   const setFrame = useStore((s) => s.setFrame);
+  // the body tabs are generated from the body entities (Sun, Earth, Mars, Moon by hierarchy rank)
+  const entities = useStore((s) => s.entities);
+  const tabs = useMemo(() => bodyTabs(entities.values()), [entities]);
+  const activeBody = activeBodyTab(tabs, frame);
   const now = useSimNow(200); // also re-renders the offset fields about 5 times a second
   const [pref, setPref] = useState<RatePref>({ speed: 1, reverse: false });
   const [edit, setEditState] = useState<Edit | null>(null);
@@ -107,15 +109,17 @@ export function TopBar() {
       </div>
 
       <div className="bodies" role="tablist" aria-label="Body">
-        {BODIES.map(([name, id]) => (
-          <button
-            key={name} role="tab" aria-selected={!!id && sameCentre(frame, bodyCentre(id))} disabled={!id}
-            className={id && sameCentre(frame, bodyCentre(id)) ? 'btn active' : 'btn'}
-            onClick={() => id && setFrame(bodyCentre(id), { fly: true })}
-            title={id ? `Set the frame of reference to the ${name}: the view centres on it, and orbit lines, trails, paths and readouts are relative to it` : `${name} view: not available yet`}>
-            {name.toUpperCase()}
-          </button>
-        ))}
+        {tabs.map((t) => {
+          const on = t.bodyId === activeBody;
+          return (
+            <button
+              key={t.bodyId} role="tab" aria-selected={on} className={on ? 'btn active' : 'btn'}
+              onClick={() => setFrame(bodyCentre(t.bodyId), { fly: true })}
+              title={`Set the frame of reference to the ${t.name}: the view centres on it, and orbit lines, trails, paths and readouts are relative to it`}>
+              {t.name.toUpperCase()}
+            </button>
+          );
+        })}
       </div>
 
       <div className="clock">

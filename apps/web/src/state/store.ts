@@ -12,6 +12,7 @@ import {
   EARTH_CENTRE, bodyCentre, frameChainLabel, centreLabel, frameCrumbs, isEarthCentre, isOrbitableBody, sameCentre,
   type Centre, type Crumb,
 } from '../lib/frame';
+import { frameOnSelect, loadFrame, resolveFrame, saveFrame } from '../lib/frame-store';
 import { clock, runtime } from './runtime';
 
 export type ConnState = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'mock';
@@ -99,6 +100,22 @@ interface State {
 }
 
 let nonce = 0;
+/** the remembered frame is restored once, when the first full catalog arrives */
+let frameRestorePending = true;
+/** Test hook: restore the remembered frame again at the next full catalog load. */
+export const armFrameRestore = (): void => { frameRestorePending = true; };
+
+/**
+ * Put the remembered frame (`localStorage['eio.frame']`) back: unlocked, flying there when it is not the Earth. A frame the
+ * user already changed before the catalog arrived wins; an unknown or stale one (a removed entity) is replaced by the Earth.
+ */
+function restoreFrame(): void {
+  const s = useStore.getState();
+  if (!sameCentre(s.frame, EARTH_CENTRE)) return;
+  const target = resolveFrame(loadFrame(), (id) => s.entities.get(id));
+  saveFrame(target); // a stale value is overwritten
+  if (!isEarthCentre(target)) s.setFrame(target, { fly: true });
+}
 
 export const useStore = create<State>((set, get) => ({
   entities: new Map(),
@@ -124,16 +141,25 @@ export const useStore = create<State>((set, get) => ({
     const next = replace ? new Map<string, EntityRecord>() : new Map(get().entities);
     for (const r of records) next.set(r.id, r);
     set({ entities: next });
+    // the first full catalog is the moment to restore the remembered frame (its entity or body must exist)
+    if (replace && frameRestorePending && next.size > 0) {
+      frameRestorePending = false;
+      restoreFrame();
+    }
   },
   openFloat: (url, title) => set((s) => ({ floats: openFloatWindow(s.floats, url, title, viewportNow()) })),
   closeFloat: (url) => set((s) => ({ floats: closeFloatWindow(s.floats, url) })),
   focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url) })),
   setFloatRect: (url, rect) => set((s) => ({ floats: setFloatRect(s.floats, url, rect, viewportNow()) })),
   select(id) {
-    // selecting never changes the frame, except: not locked and the object is an orbitable body (a body node of the tree)
-    const body = id && !get().frameLocked && isOrbitableBody(id) ? bodyCentre(id) : null;
-    if (id && !get().entities.has(id)) {
-      if (body) get().setFrame(body, { fly: true }); // a body is not an entity: the frame change flies the camera there
+    // selecting never changes the frame, except: not locked and the object is a body (a body entity such as `body-moon`,
+    // or a bare registry id from older callers): then the frame becomes that body, like the body tabs
+    const rec = id ? get().entities.get(id) : undefined;
+    const body = id && !get().frameLocked
+      ? rec ? frameOnSelect(rec, false) : isOrbitableBody(id) ? bodyCentre(id) : null
+      : null;
+    if (id && !rec) {
+      if (body) get().setFrame(body, { fly: true }); // a bare body id is not an entity: the frame change flies the camera there
       return;
     }
     set({
@@ -220,4 +246,5 @@ export function useFrameInfo(): FrameInfo {
 clock.subscribe((snap) => useStore.setState({ clock: snap }));
 useStore.subscribe((s, p) => {
   if (s.floats !== p.floats) saveFloats(s.floats);
+  if (s.frame !== p.frame) saveFrame(s.frame); // the lock is not remembered, only the centre
 });

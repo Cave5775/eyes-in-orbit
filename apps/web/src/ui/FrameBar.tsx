@@ -29,7 +29,7 @@ export function FrameBar() {
               <button
                 className={i === last ? 'frame-crumb cur' : 'frame-crumb'} disabled={!usable} aria-current={i === last ? 'location' : undefined}
                 onClick={() => setFrame(c.centre, { fly: true })}
-                title={usable ? `Make ${c.label} the frame of reference and fly there` : `${c.label} has no display yet: it cannot be the frame of reference`}>
+                title={usable ? `Make ${c.label} the frame of reference and fly there` : `${c.label} is not in the catalog: it cannot be the frame of reference`}>
                 {c.label.toUpperCase()}
               </button>
             </li>
