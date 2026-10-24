@@ -35,6 +35,8 @@ const MIN = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
 export interface PathPlan {
   t0: number;
   t1: number;
+  /** a whole planned trajectory, fixed in time: it does not slide with the clock, so it is never rebuilt for that */
+  anchored?: boolean;
 }
 
 export interface PathHints {
@@ -67,9 +69,30 @@ function clip(t0: number, t1: number, range?: [number, number]): PathPlan | null
 }
 
 /**
+ * The planned flight of a composite made only of geodetic holds and sampled trajectories (a launch ascent or a booster
+ * return between its pad and its landing point): the run of abutting sampled segments nearest to `nowMs` (the one in
+ * progress, else the next to fly, else the last flown). Null for any other composite, and for a flight too long to be
+ * drawn on the rotating ground (see FIXED_FRAME_MAX_WINDOW_MS).
+ */
+function plannedFlight(spec: ProviderSpec, nowMs: number): PathPlan | null {
+  const segs = compositePhases(spec);
+  if (!segs.length || !segs.every((s) => s.spec.type === 'geodetic' || s.spec.type === 'sampled')) return null;
+  const runs: [number, number][] = [];
+  for (const s of segs) {
+    if (s.spec.type !== 'sampled') continue;
+    const last = runs[runs.length - 1];
+    if (last && s.fromMs - last[1] <= 1000) last[1] = Math.max(last[1], s.toMs);
+    else runs.push([s.fromMs, s.toMs]);
+  }
+  const run = runs.find((r) => nowMs >= r[0] && nowMs <= r[1]) ?? runs.find((r) => r[0] > nowMs) ?? runs[runs.length - 1];
+  return run && run[1] - run[0] <= FIXED_FRAME_MAX_WINDOW_MS ? { t0: run[0], t1: run[1] } : null;
+}
+
+/**
  * Time window to draw for a provider, or null when no path applies (SGP4 has its orbit line, geodetic points do not move).
  *  - sampled, long (>= 6 h, e.g. Horizons ephemerides): the whole valid range within -1 d .. +2 d;
- *  - sampled, short (landing arcs, trajectory samples) and composite (booster, launch ascent): -max(trail, 5 min) .. +10 min;
+ *  - composite of pad holds and sampled flight (launch ascent, booster return): the whole planned flight, whenever it is;
+ *  - sampled, short (landing arcs, trajectory samples) and other composites: -max(trail, 5 min) .. +10 min;
  *  - relative (drone near a rover): -max(trail, 3 min) .. +3 min;
  *  - keplerian: -1/4 .. +1 period.
  */
@@ -82,8 +105,15 @@ export function planPathWindow(spec: ProviderSpec | undefined, nowMs: number, hi
       if (range && range[1] - range[0] >= 6 * HOUR) return clip(nowMs - DAY, nowMs + 2 * DAY, range);
       return clip(nowMs - Math.max(trail, 5 * MIN), nowMs + 10 * MIN, range);
     }
-    case 'composite':
+    case 'composite': {
+      // a window around now would hold only the standing pad for the days before liftoff
+      const flight = plannedFlight(spec, nowMs);
+      if (flight) {
+        const c = clip(flight.t0, flight.t1, range);
+        return c && { ...c, anchored: true };
+      }
       return clip(nowMs - Math.max(trail, 5 * MIN), nowMs + 10 * MIN, range);
+    }
     case 'relative':
       return clip(nowMs - Math.max(trail, 3 * MIN), nowMs + 3 * MIN, range);
     case 'keplerian': {
@@ -104,7 +134,7 @@ export function planPathWindow(spec: ProviderSpec | undefined, nowMs: number, hi
 
 /** True when the plan should be rebuilt: the window has slid by more than a tenth of its length. */
 export function pathStale(builtAtMs: number, nowMs: number, plan: PathPlan | null): boolean {
-  if (!plan) return false;
+  if (!plan || plan.anchored) return false;
   return Math.abs(nowMs - builtAtMs) > Math.max(1000, (plan.t1 - plan.t0) * 0.1);
 }
 

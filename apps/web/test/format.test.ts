@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  fmtAttr, fmtBitrate, fmtDays, fmtDeg, fmtDist, fmtKm, fmtLat, fmtLightTime, fmtLon, fmtNum, fmtPercent, fmtPeriod,
+  fmtAttr, fmtBitrate, fmtPathWindow, fmtDays, fmtDeg, fmtDist, fmtKm, fmtLat, fmtLightTime, fmtLon, fmtNum, fmtPercent, fmtPeriod,
   fmtSpeedKmS, fmtSpeedKmh, fmtTelemetryValue, roundLongFloats,
 } from '../src/lib/format';
 
@@ -122,5 +122,13 @@ describe('fmtTelemetryValue', () => {
     expect(fmtTelemetryValue('14.70')).toBe('14.70');
     expect(fmtTelemetryValue(' 6600 ')).toBe('6600');
     expect(fmtTelemetryValue('NOMINAL')).toBe('NOMINAL');
+  });
+});
+
+describe('fmtPathWindow', () => {
+  it('shows past and future around now, and a planned or finished path by when it is', () => {
+    expect(fmtPathWindow(-300_000, 600_000)).toBe('-5m 00s / +10m 00s');
+    expect(fmtPathWindow(2 * 86_400_000, 2 * 86_400_000 + 600_000)).toBe('starts in 2d 0h, lasts 10m 00s');
+    expect(fmtPathWindow(-14_400_000, -10_800_000)).toBe('ended 3h 00m ago');
   });
 });

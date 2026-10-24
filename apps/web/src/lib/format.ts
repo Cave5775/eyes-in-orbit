@@ -86,6 +86,13 @@ export function fmtDuration(sec: number | undefined): string {
   return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 }
 
+/** HUD text for the drawn path window (ms relative to now): around now, still to come (a planned launch) or already flown. */
+export function fmtPathWindow(pastMs: number, futureMs: number): string {
+  if (pastMs > 0) return `starts in ${fmtDuration(pastMs / 1000)}, lasts ${fmtDuration((futureMs - pastMs) / 1000)}`;
+  if (futureMs < 0) return `ended ${fmtDuration(-futureMs / 1000)} ago`;
+  return `-${fmtDuration(-pastMs / 1000)} / +${fmtDuration(futureMs / 1000)}`;
+}
+
 export function fmtAgo(ms: number | undefined, nowMs = Date.now()): string {
   return ms == null ? DASH : `${fmtDuration((nowMs - ms) / 1000)} ago`;
 }

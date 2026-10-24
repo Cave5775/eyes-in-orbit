@@ -1,11 +1,14 @@
 import * as THREE from 'three';
-import { MOON, SUN, inertialToFixedMatrix, moonPositionEci, sunPositionEci, transpose } from '@eio/core';
+import { MOON, SUN, inertialToFixedMatrix, transpose } from '@eio/core';
+import type { DistanceScale } from '../lib/deepspace';
+import { refDisplay } from '../lib/ref-body';
 import { createMoonMaterial } from './materials';
 
 /**
- * The Moon and the Sun at true size and position. Like the Earth they are placed camera-relative (float64 position
- * minus the floating origin, which is the camera in Earth-inertial coordinates), so a camera 3,000 km from the Moon or
- * 1.5e8 km from the Earth sees them without float32 jitter. Neither is pickable.
+ * The Moon and the Sun at true size, at their true positions or (compressed distance scale) on the deep-space shell.
+ * Like the Earth they are placed camera-relative (float64 position minus the floating origin, which is the camera in
+ * display coordinates), so a camera 3,000 km from the Moon or 1.5e8 km from the Earth sees them without float32 jitter.
+ * Neither is pickable.
  */
 export class CelestialLayer {
   private readonly moon: THREE.Mesh;
@@ -61,18 +64,25 @@ export class CelestialLayer {
     );
   }
 
-  /** Place both bodies for sim time `t`; `origin` is the camera in Earth-inertial coordinates (the floating origin). */
-  update(t: number, origin: THREE.Vector3): void {
-    const m = moonPositionEci(t);
-    this.moon.position.set(m[0] - origin.x, m[1] - origin.y, m[2] - origin.z);
+  /**
+   * Place both bodies for sim time `t`; `origin` is the camera in display space (the floating origin). Positions follow
+   * the distance scale like any entity: in compressed mode the Sun is drawn on the deep-space shell and shrunk by the
+   * same factor (same direction, same angular size); the Moon is inside the shell threshold and stays put.
+   */
+  update(t: number, origin: THREE.Vector3, scale: DistanceScale): void {
+    const m = refDisplay('MOON', t, scale);
+    this.moon.position.set(m.r[0] - origin.x, m.r[1] - origin.y, m.r[2] - origin.z);
+    this.moon.scale.setScalar(m.k);
     // body-fixed to inertial is the transpose of the IAU inertial-to-fixed matrix
     const R = transpose(inertialToFixedMatrix(MOON, t));
     this.rot.set(R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0, 0, 0, 0, 1);
     this.moon.quaternion.setFromRotationMatrix(this.rot);
 
-    const s = sunPositionEci(t);
-    this.sun.position.set(s[0] - origin.x, s[1] - origin.y, s[2] - origin.z);
+    const s = refDisplay('SUN', t, scale);
+    this.sun.position.set(s.r[0] - origin.x, s.r[1] - origin.y, s.r[2] - origin.z);
+    this.sun.scale.setScalar(s.k);
     this.glow.position.copy(this.sun.position);
+    this.glow.scale.setScalar(SUN.radiusKm * 9 * s.k);
   }
 
   dispose(): void {

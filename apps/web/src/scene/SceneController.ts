@@ -4,7 +4,7 @@ import {
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
-import { refMaxDistKm, refMinDistKm, refPositionEci, refViewDistKm, type RefBody } from '../lib/ref-body';
+import { refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, panGround, settleDistance, surfaceFrame, surfaceLift, viewAnglesFor, type V3 } from '../lib/camera';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
@@ -359,7 +359,9 @@ export class SceneController {
     this.rig.maxDist = maxDistKm(scale);
     this.scopeDirty = true;
     // whatever the camera was framing out there has moved: follow it with a fresh view, or fall back to the Earth
-    if (this.follow && this.followFn?.(this.anchor, clock.now())) {
+    if (this.bodyTarget && refDisplay(this.bodyTarget, clock.now(), 'compressed').k !== 1) {
+      this.focusBody(this.bodyTarget); // the Sun moved between its shell and its true place (and changed size with it)
+    } else if (this.follow && this.followFn?.(this.anchor, clock.now())) {
       if (this.anchor.length() > SHELL_THRESHOLD_KM * 0.5) this.rig.flyTo(viewFor(this.anchor));
     } else if (!this.follow && this.freeTarget.length() > SHELL_THRESHOLD_KM * 0.5) {
       this.freeTarget.set(0, 0, 0);
@@ -484,14 +486,14 @@ export class SceneController {
     this.focusLatLon = null;
     this.bodyTarget = body;
     this.followFn = (out, t) => {
-      const p = refPositionEci(body, t);
+      const p = refDisplay(body, t, this.distScale).r;
       out.set(p[0], p[1], p[2]);
       return true;
     };
     this.follow = true;
     this.cb.onFollowChange?.(true);
     const sun = sunDirectionEci(clock.now());
-    this.rig.flyTo({ dist: refViewDistKm(body), az: Math.atan2(sun[1], sun[0]) + 0.5, el: 0.35 });
+    this.rig.flyTo({ dist: refViewDistKm(body, refDisplay(body, clock.now(), this.distScale).k), az: Math.atan2(sun[1], sun[0]) + 0.5, el: 0.35 });
   }
 
   // ------------------------------------------------------------------ camera modes and fit
@@ -1107,10 +1109,10 @@ export class SceneController {
       if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget, t);
       // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
       const modelMin = anchored ? this.models.defOf(this.followId)?.minViewKm : undefined;
-      const bodyMin = anchored && this.bodyTarget ? refMinDistKm(this.bodyTarget) : undefined;
+      const bodyMin = anchored && this.bodyTarget ? refMinDistKm(this.bodyTarget, refDisplay(this.bodyTarget, t, this.distScale).k) : undefined;
       this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? bodyMin ?? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
     }
-    this.rig.maxDist = refMaxDistKm(anchored && this.bodyTarget ? this.bodyTarget : 'EARTH', maxDistKm(this.distScale));
+    this.rig.maxDist = refMaxDistKm(anchored && this.bodyTarget ? this.bodyTarget : 'EARTH', maxDistKm(this.distScale), this.distScale);
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
 
     this.prepareRender(gmst, t);
@@ -1149,7 +1151,7 @@ export class SceneController {
 
     this.earthGroup.position.copy(f.origin).negate();
     this.atmo.position.copy(f.origin).negate();
-    this.celestial.update(t, f.origin);
+    this.celestial.update(t, f.origin, this.distScale);
 
     const u = this.pointMat.uniforms;
     u.uOriginS.value.set(f.origin.x, f.origin.y, f.origin.z * ELLIPSOID_K);

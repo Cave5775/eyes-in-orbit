@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { sourceLabel } from '../lib/arrays';
-import { fmtDist, fmtDuration } from '../lib/format';
+import { fmtDist, fmtPathWindow } from '../lib/format';
 import { REF_LABEL } from '../lib/ref-body';
 import { relatedFor } from '../lib/related';
 import { modelDef } from '../scene/models/registry';
@@ -229,7 +229,7 @@ export function SceneView() {
               </span>
             )}
             {path && (
-              <span>PATH -{fmtDuration(-path.pastMs / 1000)} / +{fmtDuration(path.futureMs / 1000)}</span>
+              <span>PATH {fmtPathWindow(path.pastMs, path.futureMs)}</span>
             )}
             {(stats.shellSelected || path?.compressed) && (
               <span className="warn">DISTANCE NOT TO SCALE: {stats.shellSelected ? (path?.compressed ? 'SELECTION AND PATH' : 'SELECTION') : 'PATH'} ON COMPRESSED SHELL</span>

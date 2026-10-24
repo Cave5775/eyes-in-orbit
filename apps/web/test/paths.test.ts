@@ -8,7 +8,7 @@ import {
   FIXED_FRAME_MAX_WINDOW_MS, GROUND_LIFT_KM, PATH_BUFFER_CAPACITY, PATH_MAX_POINTS, displayPosition, liftNearSurface, makePathBuffers,
   nowIndex, pathStale, planPathWindow, sampleTimes, samplePath,
 } from '../src/lib/paths';
-import { mockGroundAndProbes } from '../src/mock/generators';
+import { mockGroundAndProbes, mockLaunches } from '../src/mock/generators';
 
 const NOW = Date.UTC(2026, 5, 1, 12, 0, 0);
 const MIN = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
@@ -245,5 +245,81 @@ describe('display position', () => {
     expect(liftNearSurface([RE + 400, 0, 0])).toEqual([RE + 400, 0, 0]);
     expect(displayPosition([3e6, 0, 0]).compressed).toBe(true);
     expect(displayPosition([RE + 400, 0, 0]).compressed).toBe(false);
+  });
+});
+
+describe('planned launch trajectories', () => {
+  const { entities } = mockLaunches(NOW);
+  const vehicle = entities.find((e) => e.id === 'launch-mock-m02')!;
+  const booster = entities.find((e) => e.id === 'launch-mock-m02-booster')!;
+  const graph = graphOf(entities);
+  const net = NOW + 12 * MIN;
+  const lastSampled = (spec: ProviderSpec) =>
+    Math.max(...(spec as { segments: CompositeSegment[] }).segments.filter((s) => s.spec.type === 'sampled').map((s) => s.toMs));
+
+  it('covers the whole modeled flight, whatever the clock says', () => {
+    for (const rec of [vehicle, booster]) {
+      const end = lastSampled(rec.provider!);
+      for (const now of [net - 5 * DAY, net - 10 * MIN, net + 2 * MIN, end + 3 * HOUR]) {
+        const p = planPathWindow(rec.provider, now, { validRange: graph.provider(rec.id)?.validRange })!;
+        expect(p.t0, `${rec.id} from`).toBe(net);
+        expect(p.t1, `${rec.id} to`).toBe(end);
+        expect(p.anchored).toBe(true);
+      }
+    }
+    // up to the booster landing, not only the first minutes
+    expect(lastSampled(booster.provider!) - net).toBeGreaterThan(5 * MIN);
+  });
+
+  it('draws the ascent in the body-fixed frame days before liftoff, from the pad to the end of the ascent', () => {
+    const plan = planPathWindow(vehicle.provider, net - 3 * DAY, { validRange: graph.provider(vehicle.id)?.validRange })!;
+    const buf = makePathBuffers();
+    const res = samplePath(graph, vehicle.id, plan, vehicle.provider, buf);
+    expect(res.frame).toBe('fixed');
+    expect(res.moving).toBe(true);
+    expect(res.count).toBeGreaterThan(100);
+    expect(res.phases.length).toBeGreaterThan(0);
+    const alt = (i: number) => Math.hypot(buf.pos[i * 3], buf.pos[i * 3 + 1], buf.pos[i * 3 + 2]) - RE;
+    expect(alt(0)).toBeLessThan(25); // liftoff from the pad
+    expect(alt(res.count - 1)).toBeGreaterThan(100); // up to the end of the modeled ascent
+    // the marker is on the pad, i.e. at the first point of the line, and no "past" part is drawn yet
+    expect(nowIndex(buf.times, res.count, net - 3 * DAY)).toBe(-1);
+  });
+
+  it('is not rebuilt as the clock moves, and the booster path ends at its landing point', () => {
+    const plan = planPathWindow(booster.provider, net, {})!;
+    expect(pathStale(net, net + 20 * MIN, plan)).toBe(false);
+    const buf = makePathBuffers();
+    const res = samplePath(graph, booster.id, plan, booster.provider, buf);
+    const p = (i: number): Vec3 => [buf.pos[i * 3], buf.pos[i * 3 + 1], buf.pos[i * 3 + 2]];
+    const a = p(0), b = p(res.count - 1);
+    expect(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])).toBeGreaterThan(50); // landed downrange of the pad
+    expect(Math.hypot(...b) - RE).toBeLessThan(5);
+  });
+
+  it('leaves other composites, satellites and probes on the window around now', () => {
+    const { rec } = demoBooster(NOW - 60_000); // has a relative landing arc: not a pure sampled flight
+    const c = planPathWindow(rec.provider, NOW)!;
+    expect(c.anchored).toBeUndefined();
+    expect(c.t0).toBe(NOW - 60_000);
+    // pad-only composite (no flight): a plain window, nothing anchored
+    const pad: ProviderSpec = { type: 'geodetic', bodyId: 'EARTH', latDeg: 0, lonDeg: 0, altKm: 0 };
+    const onlyPad: ProviderSpec = { type: 'composite', segments: [{ fromMs: NOW - DAY, toMs: NOW + DAY, phase: 'pad', spec: pad }] };
+    expect(planPathWindow(onlyPad, NOW)!.anchored).toBeUndefined();
+    // a flight longer than the fixed-frame limit keeps the sliding window
+    const longArc: Sample[] = [[NOW, 7000, 0, 0], [NOW + 2 * HOUR, 0, 7000, 0]];
+    const longFlight: ProviderSpec = { type: 'composite', segments: [{ fromMs: NOW, toMs: NOW + 2 * HOUR, phase: 'x', spec: { type: 'sampled', frame: 'EARTH:inertial', samples: longArc } }] };
+    expect(planPathWindow(longFlight, NOW + 30 * MIN)!.anchored).toBeUndefined();
+  });
+
+  it('picks the flight in progress, else the next one, else the last one', () => {
+    const arc = (t: number): CompositeSegment => ({
+      fromMs: t, toMs: t + 10 * MIN, phase: 'f',
+      spec: { type: 'sampled', frame: 'EARTH:fixed', samples: [[t, 7000, 0, 0], [t + 10 * MIN, 7000, 100, 0]] },
+    });
+    const two: ProviderSpec = { type: 'composite', segments: [arc(NOW), arc(NOW + HOUR)] };
+    expect(planPathWindow(two, NOW + 2 * MIN)!.t0).toBe(NOW);
+    expect(planPathWindow(two, NOW + 20 * MIN)!.t0).toBe(NOW + HOUR);
+    expect(planPathWindow(two, NOW + 3 * HOUR)!.t0).toBe(NOW + HOUR);
   });
 });
