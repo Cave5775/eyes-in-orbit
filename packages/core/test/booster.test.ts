@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BOOSTER_SHAPE, CompositeProvider, DEG, EARTH, boosterLandingPoint, horizontalBleed, modelFalcon9Ascent, modeledBoosterSegments,
-  providerFromSpec, stateToGeodetic, type ModeledAscent,
+  BOOSTER_SHAPE, CompositeProvider, DEG, EARTH, FALCON9_BOOSTER, airDensity, boosterLandingPoint, modelBoosterReturn, modelFalcon9Ascent,
+  modeledBoosterSegments, providerFromSpec, stateToGeodetic, terminalVelocityKmS, type BoosterPhysics, type ModeledAscent,
 } from '../src';
 
 const CAPE = { padLatDeg: 28.5618, padLonDeg: -80.5772 };
@@ -81,15 +81,62 @@ describe('booster return', () => {
     expect(m.events.find((e) => e.name === 'LANDING_BURN')!.altKm).toBeCloseTo((Math.abs(BOOSTER_SHAPE.landingBurnVzKmS) * 25) / 2, 1);
   });
 
-  it('horizontalBleed runs from 1 down to the residual', () => {
-    const r = BOOSTER_SHAPE.residualHorizontal;
-    expect(horizontalBleed(0, r)).toBeCloseTo(1, 9);
-    expect(horizontalBleed(1, r)).toBeCloseTo(r, 9);
-    let prev = 1;
-    for (let u = 0.05; u <= 1; u += 0.05) {
-      const h = horizontalBleed(u, r);
-      expect(h).toBeLessThanOrEqual(prev + 1e-12);
-      prev = h;
+  it('derives the horizontal bleed from drag and entry-burn thrust: a few percent of the held speed is left at the landing burn', () => {
+    for (const m of [rtls(), ship(), west()]) {
+      expect(track(m).residualHorizontal).toBeGreaterThan(0.02);
+      expect(track(m).residualHorizontal).toBeLessThan(0.15);
+    }
+  });
+});
+
+describe('booster descent physics', () => {
+  const start = { sepSec: 153, downrangeKm: 83, altKm: 71, vxKmS: 2.2, vzKmS: 0.9 };
+  const times = { boostbackSec: 165, entrySec: 365, landingBurnSec: 440, landingSec: 465 };
+  const residual = (physics: BoosterPhysics, recovery: 'rtls' | 'droneship' = 'rtls') =>
+    modelBoosterReturn(start, { recovery, physics, ...times }).residualHorizontal;
+
+  it('has the standard atmosphere right at the table points and falls off smoothly between them', () => {
+    expect(airDensity(0)).toBeCloseTo(1.225, 6);
+    expect(airDensity(10)).toBeCloseTo(0.4135, 6);
+    expect(airDensity(100)).toBeCloseTo(5.604e-7, 12);
+    expect(airDensity(-5)).toBe(airDensity(0));
+    const mid = airDensity(7.5);
+    expect(mid).toBeLessThan(airDensity(5));
+    expect(mid).toBeGreaterThan(airDensity(10));
+    expect(mid).toBeCloseTo(Math.sqrt(0.7364 * 0.4135), 3); // log-linear: the geometric mean at the midpoint
+    let prev = Infinity;
+    for (let z = 0; z <= 140; z += 2.5) {
+      const d = airDensity(z);
+      expect(d).toBeLessThan(prev);
+      prev = d;
+    }
+  });
+
+  it('puts the terminal velocity at the landing-burn altitude near the assumed landing-burn entry speed', () => {
+    const vt = terminalVelocityKmS((Math.abs(BOOSTER_SHAPE.landingBurnVzKmS) * 25) / 2, FALCON9_BOOSTER);
+    expect(vt).toBeGreaterThan(0.15);
+    expect(vt).toBeLessThan(0.35);
+    expect(Math.abs(vt - Math.abs(BOOSTER_SHAPE.landingBurnVzKmS)) / Math.abs(BOOSTER_SHAPE.landingBurnVzKmS)).toBeLessThan(0.5);
+  });
+
+  it('bleeds more speed with more drag, less with a heavier stage, and less without the entry burn', () => {
+    const base = residual(FALCON9_BOOSTER);
+    expect(base).toBeGreaterThan(0);
+    expect(base).toBeLessThan(1);
+    expect(residual({ ...FALCON9_BOOSTER, cd: FALCON9_BOOSTER.cd * 3 })).toBeLessThan(base);
+    expect(residual({ ...FALCON9_BOOSTER, areaM2: FALCON9_BOOSTER.areaM2 * 3 })).toBeLessThan(base);
+    expect(residual({ ...FALCON9_BOOSTER, massKg: FALCON9_BOOSTER.massKg * 3 })).toBeGreaterThan(base);
+    expect(residual({ ...FALCON9_BOOSTER, entryThrustN: 1 })).toBeGreaterThan(base);
+    expect(residual({ ...FALCON9_BOOSTER, entryBurnSec: 40 })).toBeLessThan(base);
+  });
+
+  it('still lands on the target whatever the physics says', () => {
+    for (const physics of [FALCON9_BOOSTER, { ...FALCON9_BOOSTER, cd: 0.4 }, { ...FALCON9_BOOSTER, massKg: 90_000, entryThrustN: 5e5 }]) {
+      for (const recovery of ['rtls', 'droneship'] as const) {
+        const t = modelBoosterReturn(start, { recovery, physics, ...times, boostbackSec: recovery === 'rtls' ? 165 : undefined, landingDownrangeKm: recovery === 'rtls' ? 8 : 600 });
+        expect(t.rows.at(-1)!.downrangeKm).toBeCloseTo(recovery === 'rtls' ? 8 : 600, 1);
+        expect(Number.isFinite(t.vxHoldKmS)).toBe(true);
+      }
     }
   });
 });

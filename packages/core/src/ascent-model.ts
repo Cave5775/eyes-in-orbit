@@ -1,7 +1,7 @@
 import { DEG } from './math';
 import { EARTH } from './bodies';
 import { destinationPoint, profileToFixedSamples, reconstructDownrange } from './ascent';
-import { modelBoosterReturn, type BoosterTrack } from './booster';
+import { FALCON9_BOOSTER, modelBoosterReturn, type BoosterPhysics, type BoosterTrack } from './booster';
 import type { Launch } from './feeds';
 import type { CompositeSegment, EntityEvent, Sample } from './types';
 
@@ -305,6 +305,8 @@ export interface VehicleProfile {
   exclude?: RegExp;
   /** the LL2 landing plan decides between droneship, RTLS and expended; otherwise the first stage is expended */
   recoverable: boolean;
+  /** mass, drag area and entry-burn thrust of the first stage; needed for the booster return when `recoverable` */
+  booster?: BoosterPhysics;
   /** nominal timeline; `orbit` is `starlink` only for Falcon 9 Starlink missions */
   timeline(orbit: 'starlink' | 'generic'): Falcon9Timeline;
   /** first entry of `ModeledAscent.assumptions` */
@@ -313,7 +315,7 @@ export interface VehicleProfile {
 
 export const VEHICLES = {
   falcon9: {
-    id: 'falcon-9', name: 'Falcon 9', match: /falcon\s*9/i, exclude: /heavy/i, recoverable: true,
+    id: 'falcon-9', name: 'Falcon 9', match: /falcon\s*9/i, exclude: /heavy/i, recoverable: true, booster: FALCON9_BOOSTER,
     timeline: (orbit) => defaultTimeline(orbit),
     assumption: 'Typical Falcon 9 / Starlink webcast figures, not a specific flight.',
   },
@@ -438,12 +440,12 @@ export function modelAscent(vehicle: VehicleProfile, opts: Falcon9AscentOptions)
 
   // booster return from the separation state; its events now lie on this track
   let boosterTrack: BoosterTrack | null = null;
-  if (recovery !== 'none') {
+  if (recovery !== 'none' && vehicle.booster) {
     const a = sampleAscentRows(rows, sepSec)!;
     const vz = (sampleAscentRows(rows, sepSec + 1)!.altKm - sampleAscentRows(rows, sepSec - 1)!.altKm) / 2;
     boosterTrack = modelBoosterReturn(
       { sepSec, downrangeKm: a.downrangeKm, altKm: a.altKm, vxKmS: Math.sqrt(Math.max(0, a.speedKmS ** 2 - vz ** 2)), vzKmS: vz },
-      { recovery, boostbackSec: booster.boostback, entrySec: booster.entry, landingBurnSec: booster.landingBurn, landingSec: booster.landing },
+      { recovery, physics: vehicle.booster, boostbackSec: booster.boostback, entrySec: booster.entry, landingBurnSec: booster.landingBurn, landingSec: booster.landing },
     );
     for (const e of events) {
       if (e.track !== 'booster') continue;
