@@ -1,6 +1,6 @@
 import {
   DEG, EARTH, LL2_STATUS, Sgp4Provider, ascentEntityEvents, convert, deriveMissionState, enuBasis, geodeticToFixed,
-  modeledAscentForLaunch, modeledAscentSegments, stateToGeodetic, sunDirectionEci,
+  modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
 } from '@eio/core';
@@ -256,6 +256,21 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
       },
       updatedAt: nowMs,
     });
+    // the recovered first stage as its own entity, like the server's `launch-<id>-booster`
+    const boosterSegments = modeled ? modeledBoosterSegments(net, { latDeg: pad.latitude, lonDeg: pad.longitude }, modeled) : null;
+    if (modeled?.booster && boosterSegments) {
+      entities.push({
+        id: `${entityId}-booster`, name: `${d.name} (booster)`, kind: 'stage', bodyId: 'EARTH', parentId: entityId, aliases: {}, group: 'launch',
+        provider: { type: 'composite', segments: boosterSegments },
+        events: ascentEntityEvents(modeled.events.filter((e) => e.track === 'booster'), net),
+        render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 120, label: true, model: 'rocket-stage' },
+        attrs: {
+          launch: d.name, recovery: modeled.recovery, landingDownrangeKm: Math.round(modeled.booster.landingDownrangeKm),
+          trajectorySource: 'modeled', trajectoryNote: 'MODELED booster return path through the event times, not measured',
+        },
+        updatedAt: nowMs,
+      });
+    }
   }
   launches.sort((a, b) => Date.parse(a.net) - Date.parse(b.net));
   return { launches, entities };

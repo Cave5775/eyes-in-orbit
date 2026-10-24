@@ -144,7 +144,7 @@ Rules (see the format comment at the top of `apps/server/src/trajectory.ts`):
 
 ## Ascent telemetry
 
-Launch entities of **Falcon 9** launches (not Falcon Heavy) get an ascent path and an event timeline even though no open ascent telemetry exists (reference doc, section 2). Three sources, in order of precedence, reported as `attrs.trajectorySource`:
+Launch entities of **Falcon 9** launches (not Falcon Heavy) and **Electron** launches get an ascent path and an event timeline even though no open ascent telemetry exists (reference doc, section 2). Three sources, in order of precedence, reported as `attrs.trajectorySource`:
 
 | `trajectorySource` | What it is | Measured? |
 |---|---|---|
@@ -153,6 +153,21 @@ Launch entities of **Falcon 9** launches (not Falcon Heavy) get an ascent path a
 | `modeled` | the parametric nominal ascent in `packages/core/src/ascent-model.ts` | **no, a model** |
 
 **Modeled ascent.** Built from typical Falcon 9 / Starlink webcast figures: max-Q at about T+1:10 (12 km, 0.42 km/s), MECO at about T+2:30 (68 km, 2.3 km/s Earth-relative), stage separation 3 s and second-stage ignition 8 s after MECO, fairing at T+3:30, SECO-1 at about T+8:30 (165 km, about 7.6 km/s), booster entry burn, landing burn and touchdown (droneship about T+8:20, RTLS about T+7:45; the recovery plan comes from LL2 `launcher_stage[0].landing`). The launch azimuth follows from the target inclination and pad latitude (`sin Az = cos i / cos lat`, southward branch for Vandenberg, corrected for the Earth's rotation); the inclination comes from the launch description, a per-Starlink-group table (group 15 is the 70 degree shell) or a per-orbit and per-site default, and the used value is shown in the Launch tab. Downrange is integrated from speed and altitude rate with `reconstructDownrange`. After SECO the state is held for 10 minutes (a placeholder; the real orbit rises towards apogee), then the entity returns to the pad marker. Real flights differ by tens of seconds and a few percent. Everything in the UI is labelled MODELED until real rows arrive.
+
+**Vehicles.** `VEHICLES` in `packages/core/src/ascent-model.ts` lists the vehicle profiles; `vehicleProfileFor` picks one from the LL2 vehicle and launch name. Falcon 9 is the reference (and the only one with a booster return); Electron uses the same ascent shape with its own rough timeline (MECO about T+2:30 at 78 km, SECO about T+8:55 into 190 x 520 km, figures from public webcast timelines and unverified, flagged as such in the Launch tab's assumptions). Vehicles that are not listed (Falcon Heavy, Ariane 6, Atlas V, Vulcan, Starship, Long March, ...) stay at the pad: their ascents (side boosters, long core burns, Starship's suborbital arc) look nothing like this shape and a profile would be misleading. To add a vehicle with a Falcon-9-like two-stage ascent, add a `VehicleProfile` (name regex, `recoverable`, `timeline`, assumption text) to `VEHICLES` and `VEHICLE_LIST`; the model, the chart, the events and the entity pick it up.
+
+**Where launch trajectories can come from** (what each source gives and what the app does with it):
+
+| Source | What it provides | Status here |
+|---|---|---|
+| Measured webcast overlays (SpaceX, Rocket Lab and others show T+, altitude, speed) | the only real ascent telemetry | typed or scripted into `POST /api/telemetry/:launchId`; reading the webcast automatically (OCR) is a stub |
+| Flight Club (flightclub.io) simulations | community-simulated profiles for many vehicles, no stable public API | export by hand into `data/trajectories/` (see Trajectory files) |
+| Launch Library 2 | pad, window, target orbit, recovery plan; no trajectories | used for the pad, azimuth, inclination and booster plan |
+| Operator press kits and mission pages | typical event times (MECO, fairing, SECO) | the numbers behind the vehicle profiles; entered by hand |
+| Space-Track / CelesTrak | the payload's real orbit once it is catalogued, hours after launch | used for the satellites, not for the ascent |
+| FAA and NGA hazard areas (NOTAMs) | keep-out areas along the ground track | not implemented (the polygon parser is on hold) |
+
+**Ingest.** A recovered first stage also gets its own entity, `launch-<id>-booster` (kind `stage`, `parentId` the launch, the rocket-stage model), and a `booster` track in `GET /api/telemetry/:launchId` (`modeled.booster`). It shares the vehicle's ascent up to stage separation and then follows a kinematic reconstruction in the launch plane (`packages/core/src/booster.ts`): a ballistic coast (apogee about 125 km), a boostback burn (RTLS) or a short trim (droneship) that sets the horizontal speed, a coast to the entry burn, a cubic descent to the landing-burn start (0.3 km/s, 3.75 km) and a constant-deceleration landing burn. The held horizontal speed is solved so the touchdown lands on the target: 8 km from the pad for RTLS and 600 km for a droneship, both along the launch azimuth (LL2 gives only the landing location's abbreviation, not coordinates, so the droneship's real position is not used). The booster events (`BOOSTBACK`, `ENTRY_BURN`, `LANDING_BURN`, `LANDING`) now carry an altitude and speed from this track. Shape constants live in `BOOSTER_SHAPE`; nothing about the path is measured. There is no booster entity when a trajectory file supplies the vehicle path.
 
 **Ingest.** Send measured rows (for example from a webcast OCR script or typed by hand):
 
@@ -197,7 +212,7 @@ connectors -> Hub (EntityGraph + launches/news/dsn/iss state) -> REST + WebSocke
 
 ## Testing
 
-`npm test` runs Vitest (433 tests in 36 files, no network; includes the ascent model, the telemetry ingest, the chart helpers, floating-origin and scope maths, LVLH attitude and model LOD, the ISS joint maths against recorded ISSLIVE data, and the ISSLIVE item table and parser). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). `apps/server/test/fixtures/iss-live-recorded.json` holds three snapshots (two minutes apart) of real ISSLIVE values (SARJ, BGA, attitude quaternion, state vector) from 2026-10-22. The three.js scene itself, including the 3D models, is checked by hand in a browser. `npm run typecheck` checks all three packages.
+`npm test` runs Vitest (450 tests in 37 files, no network; includes the ascent model, the telemetry ingest, the chart helpers, floating-origin and scope maths, LVLH attitude and model LOD, the ISS joint maths against recorded ISSLIVE data, and the ISSLIVE item table and parser). Server tests use recorded fixtures in `apps/server/test/fixtures/` (CelesTrak incl. debris groups, Horizons, LL2, SNAPI, DSN). Coverage: core model and ascent (`packages/core/test`), connector parsers, cache behaviour, scheduler backoff and API routes (`apps/server/test`), filters and launch groups, deep-space compression, camera maths (zoom, fit, local frames), path sampling and related-object lookup, YouTube URL handling, the mock API, value formatting and panel layout logic (`apps/web/test`). `apps/server/test/fixtures/iss-live-recorded.json` holds three snapshots (two minutes apart) of real ISSLIVE values (SARJ, BGA, attitude quaternion, state vector) from 2026-10-22. The three.js scene itself, including the 3D models, is checked by hand in a browser. `npm run typecheck` checks all three packages.
 
 ## Project layout
 

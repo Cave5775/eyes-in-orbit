@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { CompositeProvider, providerFromSpec, stateToGeodetic, DEG, LL2_STATUS, type Launch } from '@eio/core';
 import { describe, expect, it } from 'vitest';
-import { launchEntity, normalizeLaunch, normalizeStreams, streamKind, syncLaunchEntities } from '../src/connectors/launchlibrary';
+import { boosterEntity, launchEntity, normalizeLaunch, normalizeStreams, streamKind, syncLaunchEntities } from '../src/connectors/launchlibrary';
 import { Hub } from '../src/hub';
 import { parseTrajectory } from '../src/trajectory';
 
@@ -127,6 +127,44 @@ describe('launch entity provider', () => {
     expect(g.alt).toBeGreaterThan(60);
     expect(g.alt).toBeLessThan(80);
     expect(g.lat / DEG).toBeLessThan(34.632); // southbound from Vandenberg
+  });
+
+  it('adds the first stage as its own entity: ascent to separation, modeled return, then landed', () => {
+    const b = boosterEntity(launch())!;
+    expect(b).toMatchObject({
+      id: `${launch().entityId}-booster`, kind: 'stage', bodyId: 'EARTH', parentId: launch().entityId,
+      attrs: { recovery: 'droneship', trajectorySource: 'modeled', landingDownrangeKm: 600 },
+      render: { model: 'rocket-stage' },
+    });
+    expect(b.events!.map((e) => e.name)).toEqual(['ENTRY_BURN', 'LANDING_BURN', 'LANDING']);
+    const p = providerFromSpec(b.provider!) as CompositeProvider;
+    expect(p.segmentAt(NET - 5000)!.phase).toBe('pad');
+    expect(p.segmentAt(NET + 60_000)!.phase).toBe('stage 1 ascent');
+    expect(p.segmentAt(NET + 300_000)!.phase).toBe('coast');
+    expect(p.segmentAt(NET + 450_000)!.phase).toBe('entry burn');
+    expect(p.segmentAt(NET + 700_000)!.phase).toBe('landed');
+    // it separates from the vehicle path (the upper stage keeps climbing, the booster comes back down)
+    const veh = providerFromSpec(launchEntity(launch()).provider!) as CompositeProvider;
+    const alt = (prov: CompositeProvider, t: number) => stateToGeodetic(prov.stateAt(NET + t * 1000)!, NET + t * 1000, 'EARTH').alt;
+    expect(Math.abs(alt(p, 100) - alt(veh, 100))).toBeLessThan(0.01); // shared ascent
+    expect(alt(veh, 400)).toBeGreaterThan(150);
+    expect(alt(p, 400)).toBeLessThan(80);
+    expect(alt(p, 700)).toBeLessThan(0.05);
+  });
+
+  it('has no booster entity when the first stage is expended, the vehicle is not modeled, or a trajectory file replaces the ascent', () => {
+    expect(boosterEntity({ ...launch(), landing: { attempt: false } })).toBeNull();
+    expect(boosterEntity({ ...launch(), vehicle: 'Ariane 64', name: 'Ariane 6 | CSO-4' })).toBeNull();
+    expect(boosterEntity(launch(), trajectory)).toBeNull();
+    expect(boosterEntity({ ...launch(), pad: undefined })).toBeNull();
+  });
+
+  it('syncLaunchEntities publishes the booster next to its launch', () => {
+    const hub = new Hub();
+    hub.setLaunches([launch()]);
+    syncLaunchEntities(hub, NET - 7200_000);
+    expect(hub.graph.get(launch().entityId)).toBeTruthy();
+    expect(hub.graph.get(`${launch().entityId}-booster`)).toMatchObject({ kind: 'stage', parentId: launch().entityId });
   });
 
   it('reads the booster recovery plan from LL2', () => {

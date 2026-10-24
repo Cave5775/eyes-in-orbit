@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CompositeProvider, DEG, EARTH, defaultInclination, groundAzimuthDeg, inclinationForAzimuthDeg, inertialAzimuthDeg,
   modelFalcon9Ascent, modeledAscentForLaunch, modeledAscentSegments, pchip, providerFromSpec, sampleAscentRows,
-  secoSpeedKmS, stateToGeodetic, ascentEntityEvents, ascentPhaseAt, defaultBranch,
+  secoSpeedKmS, stateToGeodetic, ascentEntityEvents, ascentPhaseAt, defaultBranch, modelAscent, vehicleProfileFor, VEHICLES,
   type Launch,
 } from '../src';
 
@@ -243,5 +243,59 @@ describe('launch mapping', () => {
   it('reads the booster recovery plan', () => {
     expect(modeledAscentForLaunch(launch({ landing: { attempt: true, location: 'LZ-4', type: 'RTLS' } }))!.recovery).toBe('rtls');
     expect(modeledAscentForLaunch(launch({ landing: { attempt: false } }))!.recovery).toBe('none');
+  });
+});
+
+describe('vehicle profiles', () => {
+  const MAHIA = { name: 'Rocket Lab LC-1A', latitude: -39.2615, longitude: 177.8648 };
+  const launch = (over: Partial<Launch> = {}): Launch => ({
+    id: 'e1', name: 'Electron | Rideshare', status: { id: 1, name: 'Go', abbrev: 'Go' }, net: '2026-11-01T01:00:00Z',
+    vehicle: 'Electron', mission: { name: 'Rideshare', orbit: 'Sun-Synchronous Orbit' },
+    pad: MAHIA, streams: [], phase: 'SCHEDULED', hold: false, entityId: 'launch-e1', ...over,
+  });
+
+  it('selects a profile from the LL2 vehicle and launch name', () => {
+    expect(vehicleProfileFor({ vehicle: 'Falcon 9 Block 5', name: 'Falcon 9 Block 5 | Crew-14' })).toBe(VEHICLES.falcon9);
+    expect(vehicleProfileFor({ vehicle: 'Electron', name: 'Electron | Rideshare' })).toBe(VEHICLES.electron);
+    expect(vehicleProfileFor({ vehicle: undefined, name: 'Electron | The Owl Spreads Its Wings' })).toBe(VEHICLES.electron);
+    // look-alikes and vehicles with no profile are left at the pad
+    expect(vehicleProfileFor({ vehicle: 'Falcon Heavy', name: 'Falcon Heavy | USSF-52' })).toBeNull();
+    expect(vehicleProfileFor({ vehicle: 'Neutron', name: 'Neutron | Maiden Flight' })).toBeNull();
+    expect(vehicleProfileFor({ vehicle: 'Ariane 64', name: 'Ariane 6 | CSO-4' })).toBeNull();
+  });
+
+  it('models an Electron rideshare to a sun-synchronous orbit: expended first stage, its own timeline', () => {
+    const m = modeledAscentForLaunch(launch())!;
+    expect(m.vehicle).toBe('Electron');
+    expect(m.recovery).toBe('none');
+    expect(m.booster).toBeNull();
+    expect(m.events.some((e) => e.track === 'booster')).toBe(false);
+    expect(m.inclinationDeg).toBeCloseTo(97.4, 1);
+    expect(m.inclinationSource).toBe('orbit');
+    expect(m.timeline).toMatchObject({ mecoSec: 150, secoSec: 535, secoAltKm: 190, apogeeKm: 520 });
+    expect(m.events.find((e) => e.name === 'MECO')!.tSec).toBe(150);
+    expect(m.events.find((e) => e.name === 'SECO')!.tSec).toBe(535);
+    expect(m.assumptions[0]).toMatch(/Electron/);
+    expect(m.assumptions[0]).toMatch(/unverified/);
+    // altitude and speed never go backwards through the burn, and SECO is at the profile's altitude
+    const burn = m.rows.filter((r) => r.tSec <= 535);
+    for (let i = 1; i < burn.length; i++) {
+      expect(burn[i].altKm).toBeGreaterThanOrEqual(burn[i - 1].altKm - 0.5);
+    }
+    expect(sampleAscentRows(m.rows, 535)!.altKm).toBeCloseTo(190, 0);
+    expect(sampleAscentRows(m.rows, 535)!.speedKmS).toBeGreaterThan(6.5);
+    expect(sampleAscentRows(m.rows, 535)!.speedKmS).toBeLessThan(8);
+  });
+
+  it('ignores an LL2 landing plan for a vehicle whose booster is not modeled', () => {
+    expect(modeledAscentForLaunch(launch({ landing: { attempt: true, location: 'OCISLY', type: 'ASDS' } }))!.recovery).toBe('none');
+  });
+
+  it('keeps Falcon 9 output identical through the profile path', () => {
+    const a = modelFalcon9Ascent({ ...CAPE, inclinationDeg: 51.6, recovery: 'rtls' });
+    const b = modelAscent(VEHICLES.falcon9, { ...CAPE, inclinationDeg: 51.6, recovery: 'rtls' });
+    expect(b).toBe(a); // same memo entry
+    expect(a.vehicle).toBe('Falcon 9');
+    expect(a.assumptions[0]).toMatch(/Falcon 9/);
   });
 });

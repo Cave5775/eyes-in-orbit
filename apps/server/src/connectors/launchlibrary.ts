@@ -1,4 +1,6 @@
-import { deriveMissionState, type Launch, type LiveAscent, type StreamLink } from '@eio/core';
+import {
+  ascentEntityEvents, boosterLandingPoint, deriveMissionState, modeledBoosterSegments, type Launch, type LiveAscent, type StreamLink,
+} from '@eio/core';
 import type { Connector } from '../connector';
 import type { Hub, NewEntity } from '../hub';
 import { planAscent } from '../telemetry';
@@ -130,6 +132,45 @@ export function launchEntity(launch: Launch, trajectory?: Trajectory, live?: Liv
   };
 }
 
+/**
+ * `launch-<id>-booster`: the first stage as its own entity (pad, ascent to stage separation, then the modeled return and
+ * landing). Only for recovered Falcon 9 boosters with a modeled ascent; a trajectory file replaces the vehicle path and
+ * with it the separation state the return is built from, so there is no booster entity then.
+ */
+export function boosterEntity(launch: Launch, trajectory?: Trajectory, live?: LiveAscent): NewEntity | null {
+  const plan = planAscent(launch, trajectory, live);
+  const m = plan.modeled;
+  const netMs = Date.parse(launch.net);
+  if (!launch.pad || !m?.booster || plan.source === 'file' || !Number.isFinite(netMs)) return null;
+  const pad = { latDeg: launch.pad.latitude, lonDeg: launch.pad.longitude };
+  const segments = modeledBoosterSegments(netMs, pad, m);
+  const land = boosterLandingPoint(pad, m);
+  if (!segments || !land) return null;
+  return {
+    id: `${launch.entityId}-booster`,
+    name: `${launch.name} (booster)`,
+    kind: 'stage',
+    bodyId: 'EARTH',
+    parentId: launch.entityId,
+    aliases: {},
+    group: 'launches',
+    provider: { type: 'composite', segments },
+    events: ascentEntityEvents(m.events.filter((e) => e.track === 'booster'), netMs),
+    render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 120, label: true, model: 'rocket-stage' },
+    attrs: {
+      provider: launch.provider ?? null,
+      launch: launch.name,
+      recovery: m.recovery,
+      landingSite: launch.landing?.location ?? null,
+      landingDownrangeKm: Math.round(m.booster.landingDownrangeKm),
+      landingLatDeg: Math.round(land.latDeg * 1e4) / 1e4,
+      landingLonDeg: Math.round(land.lonDeg * 1e4) / 1e4,
+      trajectorySource: 'modeled',
+      trajectoryNote: 'MODELED booster return path through the event times, not measured',
+    },
+  };
+}
+
 /** Re-derive every launch's phase from the FSM and refresh the `launch-*` entities. */
 export function syncLaunchEntities(hub: Hub, nowMs = Date.now()): void {
   let phaseChanged = false;
@@ -140,7 +181,10 @@ export function syncLaunchEntities(hub: Hub, nowMs = Date.now()): void {
     return { ...l, phase: state.phase, hold: state.hold };
   });
   if (phaseChanged) hub.setLaunches(launches);
-  hub.upsert(...(phaseChanged ? launches : hub.launches).map((l) => launchEntity(l, matchTrajectory(hub.trajectories, l), hub.liveTelemetry.get(l.id))));
+  hub.upsert(...(phaseChanged ? launches : hub.launches).flatMap((l) => {
+    const trajectory = matchTrajectory(hub.trajectories, l), live = hub.liveTelemetry.get(l.id);
+    return [launchEntity(l, trajectory, live), boosterEntity(l, trajectory, live)].filter((e): e is NewEntity => e !== null);
+  }));
 }
 
 let phaseTimer: NodeJS.Timeout | undefined;

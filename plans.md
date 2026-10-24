@@ -17,9 +17,11 @@
   - Delivered: Moon and Sun at true size and position (low-precision almanac series in core, `Body.ephemeris` hook, ecliptic-to-equatorial fix for heliocentric orbits), EARTH / MOON / SUN tabs centre and follow the body, readouts relative to it. Orbit lines are translated rather than re-sampled in the new frame, Mars is still disabled, surface view is Earth-only, and the views were only checked in a headless browser
 - [x] Higher resolution Earth texture
   - Code done: the scene prefers `earth-hires.jpg` (NASA Blue Marble 5400 x 2700) and falls back to the 2k map. Run `npm run assets` to download it and check it looks right; NASA licence terms not verified
-- [ ] Booster trajectory for Falcon 9 and similar
+- [x] Booster trajectory for Falcon 9 and similar
+  - Delivered for recovered Falcon 9 boosters: a modeled return path (coast, boostback or trim, entry burn, landing burn, touchdown on the landing zone or 600 km downrange) as its own `launch-<id>-booster` entity, built from the event times; not measured, droneship position is a typical distance and "similar" vehicles (Falcon Heavy side boosters, New Glenn, Neutron) are not modeled yet. The horizontal-speed decay curve is left for you to tune (`horizontalBleed`, marked `TODO(human)`)
 - [ ] Trajectories for rockets other than Falcon 9
-  - what other sources are there for launch trajectories?
+  - Started: modeled ascents now go through a `VehicleProfile` registry (`VEHICLES`); Electron is the first non-Falcon profile with rough, unverified timeline figures. Vehicles with very different ascents (Falcon Heavy, Ariane 6, Atlas V, Vulcan, Starship) are deliberately not modeled; each needs its own profile with figures you trust
+  - [x] what other sources are there for launch trajectories? Answered in the README table "Where launch trajectories can come from"
 - [ ] trajectory data OCR using the existing livestream embedding?
 
 # Feature issues
