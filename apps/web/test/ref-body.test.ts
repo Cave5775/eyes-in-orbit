@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EARTH, EntityGraph, moonPositionEci, norm, type Vec3 } from '@eio/core';
+import { bodyCentre } from '../src/lib/frame';
 import { computeTelemetry } from '../src/lib/telemetry';
 import { mockSatellites } from '../src/mock/generators';
 import {
@@ -55,7 +56,7 @@ describe('readouts relative to the reference body', () => {
   g.upsert(iss);
 
   it('adds range and speed relative to the Moon through the core frame hop', () => {
-    const tel = computeTelemetry(g, iss, NOW, 'MOON')!;
+    const tel = computeTelemetry(g, iss, NOW, bodyCentre('MOON'))!;
     const earthState = g.stateIn(iss.id, NOW, 'EARTH:inertial')!;
     const moonState = g.stateIn(iss.id, NOW, 'MOON:inertial')!;
     // position: Earth-relative minus the Moon's position; velocity: minus the Moon's velocity (about 1 km/s)
@@ -73,7 +74,7 @@ describe('readouts relative to the reference body', () => {
     const earth = computeTelemetry(g, iss, NOW)!;
     expect(earth.refRangeKm).toBeUndefined();
     expect(earth.refSpeedKmS).toBeUndefined();
-    const sun = computeTelemetry(g, iss, NOW, 'SUN')!;
+    const sun = computeTelemetry(g, iss, NOW, bodyCentre('SUN'))!;
     expect(sun.refRangeKm).toBeGreaterThan(1.45e8);
     expect(sun.refRangeKm).toBeLessThan(1.55e8);
     expect(sun.refSpeedKmS).toBeGreaterThan(25); // the Earth's 29.8 km/s dominates

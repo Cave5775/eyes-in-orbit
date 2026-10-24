@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import type { EntityGraph, EntityRecord } from '@eio/core';
+import type { EntityGraph, EntityRecord, Vec3 } from '@eio/core';
 import type { DistanceScale } from '../lib/deepspace';
 import { fixedToInertial, type Spin } from '../lib/floating-origin';
+import { EARTH_CENTRE, centreKey, centrePositionEci, frameFor, frameSampler, graphLookup, type Centre } from '../lib/frame';
 import {
   PATH_MAX_PHASES, makePathBuffers, nowIndex, pathStale, planPathWindow, samplePath, type PathPlan, type PathResult,
 } from '../lib/paths';
@@ -52,6 +53,9 @@ export class PathOverlay {
   private builtAt = -Infinity;
   private builtWall = -Infinity;
   private builtScale: DistanceScale | null = null;
+  private builtCentre = '';
+  /** how far the frame centre has moved since the buffers were filled, km (world space) */
+  private shift: Vec3 = [0, 0, 0];
   private readonly tmp = new THREE.Vector3();
 
   constructor(private world: THREE.Object3D, pointMaterial: THREE.Material, color: THREE.Color) {
@@ -86,18 +90,28 @@ export class PathOverlay {
     (this.future.material as THREE.Material).dispose();
   }
 
-  /** Update for sim time `t`. `orbitHandled`: the entity already has the closed-orbit line/trail, so no path. */
-  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, orbitHandled: boolean, scale: DistanceScale = 'compressed'): PathStatus {
+  /**
+   * Update for sim time `t`. `orbitHandled`: the entity already has the closed-orbit line/trail, so no path. `centre`:
+   * the frame of reference; the path is sampled relative to it (see lib/frame.ts) and rebuilt when it changes.
+   */
+  update(
+    graph: EntityGraph, rec: EntityRecord, t: number, wall: number, orbitHandled: boolean, scale: DistanceScale = 'compressed',
+    centre: Centre = EARTH_CENTRE,
+  ): PathStatus {
     if (orbitHandled) return this.hide();
+    centre = frameFor(centre, rec.id, rec.bodyId);
     const provider = graph.provider(rec.id);
     const key = rec.provider;
     const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds });
     if (!plan) return this.hide();
 
-    if (key !== this.recKey || scale !== this.builtScale || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
-      this.res = samplePath(graph, rec.id, plan, rec.provider, this.buf, scale);
+    const cKey = centreKey(centre);
+    if (key !== this.recKey || scale !== this.builtScale || cKey !== this.builtCentre || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
+      const lookup = graphLookup(graph);
+      this.res = samplePath(graph, rec.id, plan, rec.provider, this.buf, scale, frameSampler(centre, t, lookup));
       this.recKey = key;
       this.builtScale = scale;
+      this.builtCentre = cKey;
       this.builtAt = t;
       this.builtWall = wall;
       this.line.fixed = this.tickPos.fixed = this.res.frame === 'fixed';
@@ -106,6 +120,14 @@ export class PathOverlay {
     }
     const res = this.res;
     if (!res || res.count < 2 || !res.moving) return this.hide();
+    // the centre has moved since the path was built: shift the whole path with it (a translation, no rebuild)
+    this.shift = [0, 0, 0];
+    if (res.centreRef) {
+      const c = centrePositionEci(centre, t, graphLookup(graph));
+      if (!c) return this.hide();
+      this.shift = [c[0] - res.centreRef[0], c[1] - res.centreRef[1], c[2] - res.centreRef[2]];
+    }
+    this.line.shift = this.tickPos.shift = this.shift;
 
     const k = nowIndex(this.buf.times, res.count, t);
     this.past.visible = k >= 1;
@@ -135,7 +157,7 @@ export class PathOverlay {
       if (fixed) {
         fixedToInertial([x, y, z], spin, p);
         visit(p[0], p[1], p[2]);
-      } else visit(x, y, z);
+      } else visit(x + this.shift[0], y + this.shift[1], z + this.shift[2]);
     }
   }
 
@@ -147,6 +169,7 @@ export class PathOverlay {
       const o = p.index * 3;
       const v = this.tmp.set(this.buf.pos[o], this.buf.pos[o + 1], this.buf.pos[o + 2]);
       if (res.frame === 'fixed') this.tmp.set(spin.cos * v.x - spin.sin * v.y, spin.sin * v.x + spin.cos * v.y, v.z);
+      else this.tmp.set(v.x + this.shift[0], v.y + this.shift[1], v.z + this.shift[2]);
       return { text: p.name, x: this.tmp.x, y: this.tmp.y, z: this.tmp.z };
     });
   }

@@ -1,6 +1,10 @@
 import * as THREE from 'three';
-import { EARTH, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector } from '@eio/core';
+import { EARTH, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
 import { SHELL_THRESHOLD_KM } from '../lib/deepspace';
+import {
+  EARTH_CENTRE, centreKey, centrePositionEci, frameFor, framePathPoint, frameSampler, graphLookup, type Centre, type EntityLookup,
+  type FrameSampler,
+} from '../lib/frame';
 import { chordSagKm } from '../lib/occlusion';
 import { orbitPeriodSec } from '../lib/orbit';
 import { RelPositions, type RenderFrame } from './relative';
@@ -13,6 +17,14 @@ const FOOTPRINT_POINTS = 96;
 /** Lines above the ground stay this far off it (the mesh is inscribed in the ellipsoid, so it never pokes above). */
 const SURFACE_LIFT_KM = 0.5;
 const DEFAULT_TRAIL_SEC = 900;
+
+const ZERO3: readonly [number, number, number] = [0, 0, 0];
+
+/** How far the centre has moved since `ref` (its position when a line was built around it), km; zero when it has no position. */
+function centreShift(centre: Centre, t: number, lookup: EntityLookup, ref: Vec3): [number, number, number] {
+  const c = centrePositionEci(centre, t, lookup);
+  return c ? [c[0] - ref[0], c[1] - ref[1], c[2] - ref[2]] : [0, 0, 0];
+}
 
 interface Line {
   obj: THREE.Line;
@@ -52,6 +64,9 @@ export class EntityOverlay {
   private orbitWall = -Infinity;
   private trackWall = -Infinity;
   private period: number | null = null;
+  /** frame centre (key) the orbit line was built for, and where that centre was then (Earth-inertial, km) */
+  private centreKeyBuilt = '';
+  private orbitRef: Vec3 | null = null;
 
   constructor(world: THREE.Object3D, private color: THREE.Color) {
     this.orbit = makeLine(THREE.Line, ORBIT_POINTS + 1, color, 0.55, false);
@@ -85,33 +100,45 @@ export class EntityOverlay {
     for (const l of [this.orbit, this.trail, this.footprint, this.track]) if (l.obj.visible) l.pos.upload(f, l.n);
   }
 
-  /** `full` adds trail and ground track (selected entity); otherwise orbit line and footprint only. */
-  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, full: boolean): void {
+  /**
+   * `full` adds trail and ground track (selected entity); otherwise orbit line and footprint only. `centre` is the frame
+   * of reference: the orbit line and the trail are sampled relative to it (lib/frame.ts) and rebuilt when it changes.
+   * The footprint and the ground track are Earth surface features of an Earth satellite and ignore the frame.
+   */
+  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, full: boolean, centre: Centre = EARTH_CENTRE): void {
     const s = graph.stateIn(rec.id, t, 'EARTH:inertial');
     const r = s ? norm(s.r) : 0;
     const usable = !!s && r > RE + 50 && r < SHELL_THRESHOLD_KM;
-    this.footprint.obj.visible = usable && (full || !!rec.render?.footprint);
+    const earthBound = rec.bodyId === 'EARTH';
+    this.footprint.obj.visible = usable && earthBound && (full || !!rec.render?.footprint);
     this.orbit.obj.visible = this.trail.obj.visible = this.track.obj.visible = false;
     if (!s || !usable) return;
 
-    this.updateFootprint(s, r);
-    const period = orbitPeriodSec(graph, rec, s);
-    if (period !== this.period) {
+    if (earthBound) this.updateFootprint(s, r);
+    const period = orbitPeriodSec(graph, rec, s, t);
+    centre = frameFor(centre, rec.id, rec.bodyId);
+    const key = centreKey(centre);
+    if (period !== this.period || key !== this.centreKeyBuilt) {
       this.period = period;
-      this.orbitT = this.trackT = -Infinity;
+      this.centreKeyBuilt = key;
+      this.orbitT = this.trackT = this.orbitWall = -Infinity;
     }
     if (!period) return;
 
+    const lookup = graphLookup(graph);
     // the orbit is a closed loop through the entity, so it stays valid until the entity has moved a fraction of a revolution
     if (Math.abs(t - this.orbitT) > (period * 1000) / 40 && wall - this.orbitWall > 200) {
-      this.buildOrbit(graph, rec, t, period);
+      this.buildOrbit(graph, rec, t, period, frameSampler(centre, t, lookup));
       this.orbitT = t;
       this.orbitWall = wall;
     }
-    this.orbit.obj.visible = true;
+    // built around the centre as it was then: follow it
+    this.orbit.pos.shift = this.orbitRef ? centreShift(centre, t, lookup, this.orbitRef) : ZERO3;
+    this.orbit.obj.visible = this.orbit.n > 1;
 
     if (!full) return;
-    this.updateTrail(graph, rec, t);
+    this.updateTrail(graph, rec, t, frameSampler(centre, t, lookup));
+    if (!earthBound) return;
     if (Math.abs(t - this.trackT) > (period * 1000) / 80 || wall - this.trackWall > 3000) {
       this.buildTrack(graph, rec, t, period);
       this.trackT = t;
@@ -138,27 +165,46 @@ export class EntityOverlay {
     }
   }
 
-  private buildOrbit(graph: EntityGraph, rec: EntityRecord, t: number, periodSec: number): void {
+  /** One revolution from `t`, each sample relative to the frame centre at its own time, drawn around the centre at `t`. */
+  private buildOrbit(graph: EntityGraph, rec: EntityRecord, t: number, periodSec: number, inFrame?: FrameSampler): void {
     const pos = this.orbit.pos;
+    this.orbitRef = inFrame?.ref ?? null;
     let n = 0;
-    for (let i = 0; i <= ORBIT_POINTS; i++) {
-      const s = graph.stateIn(rec.id, t + (i / ORBIT_POINTS) * periodSec * 1000, 'EARTH:inertial');
-      if (s) pos.setXYZ(n++, s.r[0], s.r[1], s.r[2]);
+    if (!inFrame || inFrame.ref) {
+      for (let i = 0; i <= ORBIT_POINTS; i++) {
+        const ts = t + (i / ORBIT_POINTS) * periodSec * 1000;
+        const s = graph.stateIn(rec.id, ts, 'EARTH:inertial');
+        if (!s) continue;
+        let p = s.r;
+        if (inFrame) {
+          const c = inFrame.centreAt(ts);
+          if (!c) continue;
+          p = framePathPoint(p, c, inFrame.ref!);
+        }
+        pos.setXYZ(n++, p[0], p[1], p[2]);
+      }
     }
     this.orbit.n = n;
     this.orbit.obj.geometry.setDrawRange(0, n);
   }
 
-  private updateTrail(graph: EntityGraph, rec: EntityRecord, t: number): void {
+  private updateTrail(graph: EntityGraph, rec: EntityRecord, t: number, inFrame?: FrameSampler): void {
     const span = (rec.render?.trailSeconds ?? DEFAULT_TRAIL_SEC) * 1000;
     const pos = this.trail.pos, col = this.trail.color!;
     let n = 0;
-    for (let i = 0; i < TRAIL_POINTS; i++) {
+    for (let i = 0; i < TRAIL_POINTS && (!inFrame || inFrame.ref); i++) {
       const f = i / (TRAIL_POINTS - 1);
-      const s = graph.stateIn(rec.id, t - span * (1 - f), 'EARTH:inertial');
+      const ts = t - span * (1 - f);
+      const s = graph.stateIn(rec.id, ts, 'EARTH:inertial');
       if (!s) continue;
+      let p = s.r;
+      if (inFrame) {
+        const c = inFrame.centreAt(ts);
+        if (!c) continue;
+        p = framePathPoint(p, c, inFrame.ref!);
+      }
       const k = f * f;
-      pos.setXYZ(n, s.r[0], s.r[1], s.r[2]);
+      pos.setXYZ(n, p[0], p[1], p[2]);
       col.setXYZ(n++, this.color.r * k, this.color.g * k, this.color.b * k);
     }
     col.needsUpdate = true;

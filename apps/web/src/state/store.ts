@@ -7,7 +7,11 @@ import {
   closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, viewportNow,
   type FloatWindow,
 } from '../lib/floating';
-import type { RefBody } from '../lib/ref-body';
+import { useMemo } from 'react';
+import {
+  EARTH_CENTRE, bodyCentre, frameChainLabel, centreLabel, frameCrumbs, isEarthCentre, isOrbitableBody, sameCentre,
+  type Centre, type Crumb,
+} from '../lib/frame';
 import { clock, runtime } from './runtime';
 
 export type ConnState = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'mock';
@@ -15,8 +19,11 @@ export type ConnState = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'mo
 /** One-shot camera request; `nonce` makes repeated requests for the same target distinct. */
 export interface FocusRequest {
   id?: string;
-  /** centre the view on a body ('EARTH' is the default home view) */
-  body?: RefBody;
+  /**
+   * centre the view on a frame centre: a body (the Earth is the default home view) or an entity (the camera pivots on
+   * it, like following it). Set by `setFrame(..., { fly: true })`.
+   */
+  centre?: Centre;
   lat?: number;
   lon?: number;
   nonce: number;
@@ -33,8 +40,13 @@ interface State {
   entities: Map<string, EntityRecord>;
   selectedId: string | null;
   follow: boolean;
-  /** body the view is centred on and readouts are measured from */
-  refBody: RefBody;
+  /**
+   * Frame of reference (docs/frames.md): the centre that paths, trails, orbit lines and readouts are relative to.
+   * A body or an entity; the Earth by default.
+   */
+  frame: Centre;
+  /** locked: selecting objects never changes the frame (only `setFrame` / `resetView` do) */
+  frameLocked: boolean;
   focus: FocusRequest | null;
   query: string;
   searchResults: SearchHit[] | null;
@@ -60,9 +72,15 @@ interface State {
   setFloatRect(url: string, rect: { x: number; y: number; w: number }): void;
   select(id: string | null): void;
   focusLaunch(launch: Launch): void;
+  /** Camera home view, frame back to the Earth and unlocked. */
   resetView(): void;
-  /** Centre the view on a body (and measure readouts from it). Deselects. */
-  setRefBody(body: RefBody): void;
+  /**
+   * Set the frame of reference. `lock`: also set the lock (omitted: unchanged). `fly`: also fly the camera to the
+   * centre and follow it (a body centre deselects, as the body tabs always did; an entity centre keeps the selection).
+   * An explicit call always applies, locked or not.
+   */
+  setFrame(centre: Centre, opts?: { lock?: boolean; fly?: boolean }): void;
+  setFrameLocked(locked: boolean): void;
   setFollow(follow: boolean): void;
   setQuery(q: string): void;
   setSearchResults(r: SearchHit[] | null): void;
@@ -86,7 +104,8 @@ export const useStore = create<State>((set, get) => ({
   entities: new Map(),
   selectedId: null,
   follow: true,
-  refBody: 'EARTH',
+  frame: EARTH_CENTRE,
+  frameLocked: false,
   focus: null,
   query: '',
   searchResults: null,
@@ -111,19 +130,37 @@ export const useStore = create<State>((set, get) => ({
   focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url) })),
   setFloatRect: (url, rect) => set((s) => ({ floats: setFloatRect(s.floats, url, rect, viewportNow()) })),
   select(id) {
-    if (id && !get().entities.has(id)) return;
-    set({ selectedId: id, follow: id !== null, focus: id ? { id, nonce: ++nonce } : get().focus });
+    // selecting never changes the frame, except: not locked and the object is an orbitable body (a body node of the tree)
+    const body = id && !get().frameLocked && isOrbitableBody(id) ? bodyCentre(id) : null;
+    if (id && !get().entities.has(id)) {
+      if (body) get().setFrame(body, { fly: true }); // a body is not an entity: the frame change flies the camera there
+      return;
+    }
+    set({
+      selectedId: id, follow: id !== null, focus: id ? { id, nonce: ++nonce } : get().focus,
+      ...(body && !sameCentre(get().frame, body) ? { frame: body } : {}),
+    });
   },
   focusLaunch(launch) {
     if (get().entities.has(launch.entityId)) get().select(launch.entityId);
     else if (launch.pad) set({ focus: { lat: launch.pad.latitude, lon: launch.pad.longitude, nonce: ++nonce }, follow: true });
   },
   resetView() {
-    set({ selectedId: null, follow: false, refBody: 'EARTH', focus: { nonce: ++nonce } });
+    set({ selectedId: null, follow: false, frame: EARTH_CENTRE, frameLocked: false, focus: { nonce: ++nonce } });
   },
-  setRefBody(body) {
-    if (body === 'EARTH') get().resetView();
-    else set({ selectedId: null, follow: true, refBody: body, focus: { body, nonce: ++nonce } });
+  setFrame(centre, opts = {}) {
+    const next: Partial<State> = {};
+    if (!sameCentre(get().frame, centre)) next.frame = centre;
+    if (opts.lock !== undefined && opts.lock !== get().frameLocked) next.frameLocked = opts.lock;
+    if (opts.fly) {
+      if (isEarthCentre(centre)) Object.assign(next, { selectedId: null, follow: false, focus: { nonce: ++nonce } });
+      else if (centre.kind === 'body') Object.assign(next, { selectedId: null, follow: true, focus: { centre, nonce: ++nonce } });
+      else if (get().entities.has(centre.id)) Object.assign(next, { follow: true, focus: { centre, nonce: ++nonce } });
+    }
+    set(next);
+  },
+  setFrameLocked(locked) {
+    if (locked !== get().frameLocked) set({ frameLocked: locked });
   },
   setFollow: (follow) => set({ follow }),
   setQuery: (query) => set({ query }),
@@ -143,6 +180,42 @@ export const useStore = create<State>((set, get) => ({
   setHealth: (health, serverTime) => set((s) => ({ health, serverTime: serverTime ?? s.serverTime })),
   setConn: (conn) => set({ conn }),
 }));
+
+export type StoreState = State;
+
+/** Selectors for the frame of reference (the phase 2 UI reads these). */
+export const selectFrame = (s: StoreState): Centre => s.frame;
+export const selectFrameLocked = (s: StoreState): boolean => s.frameLocked;
+
+export interface FrameInfo {
+  centre: Centre;
+  locked: boolean;
+  /** the Earth: the default, nothing changes relative to the pre-frame behaviour */
+  isDefault: boolean;
+  /** short label: `Moon`, or the entity's name */
+  label: string;
+  /** breadcrumb, root first: `SUN > EARTH > MOON`, with an entity last for an entity centre; each crumb carries its centre */
+  crumbs: Crumb[];
+  /** the crumbs joined with ` > ` */
+  chain: string;
+}
+
+/** Derived description of the current frame for display (breadcrumb, HUD, readout labels). */
+export function frameInfoOf(s: Pick<StoreState, 'frame' | 'frameLocked' | 'entities'>): FrameInfo {
+  const rec = (id: string) => s.entities.get(id);
+  return {
+    centre: s.frame, locked: s.frameLocked, isDefault: isEarthCentre(s.frame), label: centreLabel(s.frame, rec),
+    crumbs: frameCrumbs(s.frame, rec), chain: frameChainLabel(s.frame, rec),
+  };
+}
+
+/** React hook: the current frame, its lock and labels. Re-renders when the frame, the lock or the entity table changes. */
+export function useFrameInfo(): FrameInfo {
+  const frame = useStore(selectFrame);
+  const frameLocked = useStore(selectFrameLocked);
+  const entities = useStore((s) => s.entities);
+  return useMemo(() => frameInfoOf({ frame, frameLocked, entities }), [frame, frameLocked, entities]);
+}
 
 clock.subscribe((snap) => useStore.setState({ clock: snap }));
 useStore.subscribe((s, p) => {

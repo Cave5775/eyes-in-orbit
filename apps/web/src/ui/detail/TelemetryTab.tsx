@@ -5,9 +5,8 @@ import {
   fmtSpeedKmS, fmtSpeedKmh, fmtTelemetryValue, humanize,
 } from '../../lib/format';
 import { computeTelemetry } from '../../lib/telemetry';
-import { REF_LABEL } from '../../lib/ref-body';
 import { ensureInGraph, graph } from '../../state/runtime';
-import { useStore } from '../../state/store';
+import { useFrameInfo, useStore } from '../../state/store';
 import { useSimNow, useWallNow } from '../hooks';
 import { Field } from './Field';
 import { IssArraysSection } from './IssArraysSection';
@@ -22,9 +21,11 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
   const wall = useWallNow(1000);
   const iss = useStore((s) => s.iss);
   const dsn = useStore((s) => s.dsn);
-  const refBody = useStore((s) => s.refBody);
+  const frame = useFrameInfo();
+  const centreRec = useStore((s) => (s.frame.kind === 'entity' ? s.entities.get(s.frame.id) : undefined));
   ensureInGraph(rec);
-  const tel = computeTelemetry(graph, rec, now, refBody);
+  if (centreRec) ensureInGraph(centreRec); // an entity centre is looked up in the graph
+  const tel = computeTelemetry(graph, rec, now, frame.centre);
   const range = tel ? undefined : graph.provider(rec.id)?.validRange;
   const conf = confidenceLabel(tel?.confidence);
   const code = rec.aliases.dsn;
@@ -48,8 +49,8 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
           {tel.lonDeg !== undefined && <Field label="Longitude" value={fmtLon(tel.lonDeg)} mono />}
           {tel.altKm !== undefined && <Field label="Altitude" value={fmtKm(tel.altKm)} mono />}
           <Field label="Geocentric range" value={fmtDist(tel.rangeKm)} mono />
-          {tel.refRangeKm !== undefined && <Field label={`Range from ${REF_LABEL[refBody]}`} value={fmtDist(tel.refRangeKm)} mono />}
-          {tel.refSpeedKmS !== undefined && <Field label={`Speed rel. ${REF_LABEL[refBody]}`} value={fmtSpeedKmS(tel.refSpeedKmS)} mono />}
+          {tel.refRangeKm !== undefined && <Field label={`Range from ${frame.label}`} value={fmtDist(tel.refRangeKm)} mono />}
+          {tel.refSpeedKmS !== undefined && <Field label={`Speed rel. ${frame.label}`} value={fmtSpeedKmS(tel.refSpeedKmS)} mono />}
           <Field label="Speed" value={tel.speedKmS !== undefined ? fmtSpeedKmS(tel.speedKmS) : undefined} mono />
           <Field label="Period" value={tel.periodSec ? fmtPeriod(tel.periodSec) : undefined} mono />
           <Field label="Phase" value={tel.phase?.replace(/_/g, ' ')} />

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { sourceLabel } from '../lib/arrays';
 import { fmtDist, fmtPathWindow } from '../lib/format';
 import { colorKeyOf, kindLabel } from '../lib/entity';
-import { REF_LABEL } from '../lib/ref-body';
 import { relatedFor } from '../lib/related';
 import { modelDef } from '../scene/models/registry';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
@@ -167,6 +166,7 @@ export function SceneView() {
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
     ctl.setSelected(s0.selectedId);
+    ctl.setFrame(s0.frame, s0.frameLocked);
     // objects related to the selection are never scoped out (same lookup FIT uses)
     const syncRelated = (s: ReturnType<typeof store.getState>) => {
       const rec = s.selectedId ? s.entities.get(s.selectedId) : undefined;
@@ -178,6 +178,7 @@ export function SceneView() {
       if (s.filters !== p.filters) ctl.setFilters(s.filters);
       if (s.launches !== p.launches) ctl.setLaunches(s.launches);
       if (s.selectedId !== p.selectedId) ctl.setSelected(s.selectedId);
+      if (s.frame !== p.frame || s.frameLocked !== p.frameLocked) ctl.setFrame(s.frame, s.frameLocked);
       if (s.selectedId !== p.selectedId || s.entities !== p.entities || s.launches !== p.launches || s.dsn !== p.dsn) syncRelated(s);
       if (s.follow !== p.follow) ctl.setFollow(s.follow);
       if (s.focus !== p.focus && s.focus) ctl.focus(s.focus);
@@ -261,7 +262,7 @@ export function SceneView() {
       <div className="scene-hud mono">
         {stats && (
           <>
-            <span>CAM {fmtDist(stats.distKm)}{stats.ref !== 'EARTH' ? ` FROM ${REF_LABEL[stats.ref].toUpperCase()}` : ''}</span>
+            <span>CAM {fmtDist(stats.distKm)}{!stats.frame.isDefault || stats.frame.locked ? ` FROM ${stats.frame.label.toUpperCase()}` : ''}{stats.frame.locked ? ' [LOCKED]' : ''}</span>
             <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>            <span title={`Earth map width in pixels (GPU texture limit ${stats.maxTexturePx}). Run npm run assets and reload the page for the high-resolution map.`}>EARTH {stats.earth === 'texture' ? `TEXTURE ${stats.earthPx}` : 'PROCEDURAL'}</span>
             {stats.detail && (
               <span className="accent" title="Streamed close-up imagery over the base map: tile level (0.6 km per pixel at 6) and tiles received of the 4 x 4 window. Missing tiles show the base map.">

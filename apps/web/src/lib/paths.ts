@@ -1,5 +1,6 @@
 import { EARTH, convert, defaultBodies, type CompositeSegment, type FrameId, type ProviderSpec, type StateVector, type Vec3 } from '@eio/core';
 import { compressDeepSpace, type DistanceScale } from './deepspace';
+import { framePathPoint, type FrameSampler } from './frame';
 
 /**
  * Path sampling for entities that are not SGP4: pure, no three.js. A path is `provider.stateAt` evaluated
@@ -167,6 +168,11 @@ export interface PathResult {
   moving: boolean;
   plan: PathPlan;
   phases: PathPhase[];
+  /**
+   * The centre's Earth-inertial position the points were drawn around (null: Earth centre or no frame). The scene shifts
+   * the buffer by c(now) - centreRef every frame so the path follows its centre between rebuilds.
+   */
+  centreRef: Vec3 | null;
 }
 
 export interface PathSource {
@@ -232,7 +238,13 @@ export function sampleTimes(plan: PathPlan, spec: ProviderSpec | undefined, maxP
  * Evaluate the entity over `plan` into `buf`. Samples with no state are skipped. See the module comment for
  * the display frame; inertial points get deep-space compression, so a probe's path matches its marker.
  */
-export function samplePath(src: PathSource, id: string, plan: PathPlan, spec: ProviderSpec | undefined, buf: PathBuffers, scale: DistanceScale = 'compressed'): PathResult {
+export function samplePath(
+  src: PathSource, id: string, plan: PathPlan, spec: ProviderSpec | undefined, buf: PathBuffers, scale: DistanceScale = 'compressed',
+  inFrame?: FrameSampler,
+): PathResult {
+  // in a frame centred away from the Earth a sample is r(t_i) - c(t_i) + c(ref): inertial only (the Earth-fixed
+  // shortcut below is for the Earth centre), and nothing can be drawn while the centre has no position at `ref`
+  if (inFrame && !inFrame.ref) return { count: 0, frame: 'inertial', compressed: false, moving: false, plan, phases: [], centreRef: null };
   const wanted = sampleTimes(plan, spec, Math.min(PATH_MAX_POINTS, buf.times.length - 2 * PATH_MAX_PHASES));
   const states: { t: number; s: StateVector }[] = [];
   for (const t of wanted) {
@@ -240,7 +252,7 @@ export function samplePath(src: PathSource, id: string, plan: PathPlan, spec: Pr
     if (s) states.push({ t, s });
   }
 
-  const allFixed = states.length > 0 && states.every((x) => x.s.frame === 'EARTH:fixed');
+  const allFixed = !inFrame && states.length > 0 && states.every((x) => x.s.frame === 'EARTH:fixed');
   const frame: 'fixed' | 'inertial' = allFixed && plan.t1 - plan.t0 <= FIXED_FRAME_MAX_WINDOW_MS ? 'fixed' : 'inertial';
 
   let n = 0;
@@ -257,7 +269,13 @@ export function samplePath(src: PathSource, id: string, plan: PathPlan, spec: Pr
       } catch {
         continue;
       }
-      const d = displayPosition(inertial.r, scale);
+      let p = inertial.r;
+      if (inFrame) {
+        const c = inFrame.centreAt(t);
+        if (!c) continue;
+        p = framePathPoint(p, c, inFrame.ref!);
+      }
+      const d = displayPosition(p, scale);
       compressed ||= d.compressed;
       r = d.r;
     }
@@ -284,5 +302,5 @@ export function samplePath(src: PathSource, id: string, plan: PathPlan, spec: Pr
       if (phases.length >= PATH_MAX_PHASES) break;
     }
   }
-  return { count: n, frame, compressed, moving, plan, phases };
+  return { count: n, frame, compressed, moving, plan, phases, centreRef: inFrame?.ref ?? null };
 }

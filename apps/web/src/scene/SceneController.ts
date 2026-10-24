@@ -4,7 +4,8 @@ import {
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
-import { refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } from '../lib/ref-body';
+import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
+import { isRefBody, refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, panGround, settleDistance, surfaceFrame, surfaceLift, viewAnglesFor, type V3 } from '../lib/camera';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
@@ -86,8 +87,8 @@ export interface SceneStats {
   /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
   scope: { mode: ScopeMode; rendered: number; total: number };
   distanceScale: DistanceScale;
-  /** body the view is centred on ('EARTH' unless the camera is following the Moon or the Sun) */
-  ref: RefBody;
+  /** frame of reference (docs/frames.md): its short label (`Moon`, an entity's name), whether it is the Earth, and the lock */
+  frame: { label: string; isDefault: boolean; locked: boolean };
   /** ids of entities whose 3D model is drawn this frame (camera within the model's LOD distance) */
   models: string[];
   /** ISS array pose in use while the ISS model is drawn: the source of each part and the joint angles (rad) */
@@ -156,6 +157,9 @@ export class SceneController {
   private celestial: CelestialLayer;
   /** the Moon or the Sun while the camera is centred on it (the followFn tracks its centre), else null */
   private bodyTarget: RefBody | null = null;
+  /** frame of reference: paths, trails and orbit lines are sampled relative to this centre (set by `setFrame`, independent of the camera) */
+  private frameCentre: Centre = EARTH_CENTRE;
+  private frameLocked = false;
   private earthMat: THREE.ShaderMaterial;
   private earthMode: 'texture' | 'procedural' = 'procedural';
   private earthPx = 0;
@@ -480,6 +484,24 @@ export class SceneController {
     if (!id && this.surfaceOn && this.surfaceSrc?.kind === 'entity') this.freezeSurfaceSource();
   }
 
+  /**
+   * Frame of reference (state `frame` / `frameLocked`): orbit lines, trails and paths are sampled relative to `centre`.
+   * Independent of the camera; `focus({centre})` moves the camera. The overlays rebuild when the centre changes.
+   */
+  setFrame(centre: Centre, locked = false): void {
+    this.frameCentre = centre;
+    this.frameLocked = locked;
+    this.ensureCentreInGraph();
+  }
+
+  /** The centre entity needs a live provider in the graph to be looked up (the selection and hints are put there too). */
+  private ensureCentreInGraph(): void {
+    const c = this.frameCentre;
+    if (c.kind !== 'entity') return;
+    const rec = this.recs.get(c.id);
+    if (rec && graph.get(c.id) !== rec) graph.upsert(rec);
+  }
+
   setFollow(follow: boolean): void {
     if (follow !== this.follow) this.groundLock = null;
     if (!follow && this.follow) {
@@ -494,16 +516,19 @@ export class SceneController {
 
   focus(req: FocusRequest): void {
     this.groundLock = null;
-    if (req.body && req.body !== 'EARTH') {
-      this.focusBody(req.body);
+    // a frame centre (setFrame with fly): a body pivots the camera on the body, an entity is followed like a selection
+    const c = req.centre;
+    if (c?.kind === 'body' && c.id !== 'EARTH' && isRefBody(c.id)) {
+      this.focusBody(c.id);
       return;
     }
     this.bodyTarget = null;
-    if (req.id) {
-      const rec = this.recs.get(req.id);
+    const entityId = req.id ?? (c?.kind === 'entity' ? c.id : undefined);
+    if (entityId) {
+      const rec = this.recs.get(entityId);
       if (!rec) return;
       graph.upsert(rec);
-      const id = req.id;
+      const id = entityId;
       this.followId = id;
       this.focusLatLon = null;
       this.followFn = (out, t) => this.worldPos(id, t, out);
@@ -803,7 +828,7 @@ export class SceneController {
       path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
       scope: { mode: this.scopeMode, ...this.scopeCounts },
       distanceScale: this.distScale,
-      ref: this.bodyTarget ?? 'EARTH',
+      frame: { label: centreLabel(this.frameCentre, (id) => this.recs.get(id)), isDefault: isEarthCentre(this.frameCentre), locked: this.frameLocked },
       models: this.models.activeIds,
       arrays: this.models.activeIds.some((id) => this.models.defOf(id)?.key === 'iss') ? { sources: this.issSources, joints: this.issJointsNow } : null,
     };
@@ -1431,14 +1456,16 @@ export class SceneController {
   }
 
   private updateOverlays(t: number, wall: number): void {
+    const centre = this.frameCentre;
+    this.ensureCentreInGraph(); // the record may have been replaced by a refresh
     for (const [id, o] of this.overlays) {
       const rec = this.recs.get(id);
       if (!rec) continue;
       if (this.overlayInScope.get(id) === false) o.hide();
-      else o.update(graph, rec, t, wall, this.fullOverlays.has(id));
+      else o.update(graph, rec, t, wall, this.fullOverlays.has(id), centre);
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
-    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, this.distScale);
+    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, this.distScale, centre);
   }
 
   /** Project the selected path's phase boundaries to the screen for the label layer. */
