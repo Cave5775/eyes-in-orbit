@@ -14,7 +14,8 @@ import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filter
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
-import { POPUP_MAX, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
+import { POPUP_MAX, SHOW_EXEMPT, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
+import { discGroups, hiddenByDisc, type DiscGroup } from '../lib/disc-hide';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
@@ -59,11 +60,11 @@ export interface SceneCallbacks {
   /**
    * A click found more than one object within the cluster radius (lib/pick.ts): ids highest in the hierarchy first, then
    * newest (the first is what a plain click would have selected), `total` counts all of them (the list is capped), x/y are
-   * the cursor in CSS px inside the scene container. `grouped` is set when zoomed out: `ids` are then the bodies the objects
-   * overlap and `grouped` those objects (the popup's "+ N objects", listed when expanded); it also opens the popup for a
-   * single body. onPick is not called for that click.
+   * the cursor in CSS px inside the scene container. Several drawn bodies under the cursor (an Earth and a Moon dot) list
+   * here too. Zoomed out, objects over a small distant body are not drawn nor pickable, so such a click finds the body alone
+   * and calls onPick. onPick is not called for a click that opens the list.
    */
-  onPickMany?(ids: string[], total: number, x: number, y: number, grouped?: { ids: string[]; total: number }): void;
+  onPickMany?(ids: string[], total: number, x: number, y: number): void;
   /**
    * The cursor is on the selected launch's drawn trajectory (a planned flight with real sample times) and nothing above it
    * in the pick order is: `tMs` is the sim time of the nearest point of the line, `x`/`y` the cursor and `sx`/`sy` that point,
@@ -126,17 +127,18 @@ interface PointSet {
   color: THREE.BufferAttribute;
   size: THREE.BufferAttribute;
   glyph: THREE.BufferAttribute;
-  /** 0/1 per point: scope policy (out of scope points are not drawn nor pickable) */
+  /** 0/1/2 per point: scope policy (0: out of scope, not drawn nor pickable); 2 = in scope and exempt from the small-disc hiding (lib/disc-hide.ts) */
   show: THREE.BufferAttribute;
 }
 
-function makePointSet(n: number, material: THREE.Material, world?: Float64Array, fixed = false): PointSet {
+/** `exempt`: the whole set is drawn whatever lies under it (pads, the highlight set): aShow starts at 2 (`SHOW_EXEMPT`). */
+function makePointSet(n: number, material: THREE.Material, world?: Float64Array, fixed = false, exempt = false): PointSet {
   const geo = new THREE.BufferGeometry();
   const pos = new RelPositions(world ?? n, fixed);
   const color = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
   const size = new THREE.BufferAttribute(new Float32Array(n), 1);
   const glyph = new THREE.BufferAttribute(new Float32Array(n), 1);
-  const show = new THREE.BufferAttribute(new Float32Array(n).fill(1), 1);
+  const show = new THREE.BufferAttribute(new Float32Array(n).fill(exempt ? SHOW_EXEMPT : 1), 1);
   size.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute('position', pos.attr);
   geo.setAttribute('aColor', color);
@@ -171,6 +173,8 @@ export class SceneController {
   private frameInfo = new RenderFrame();
   /** Earth occlusion test for camera-relative points, rebuilt every frame */
   private occ: (x: number, y: number, z: number) => boolean = () => false;
+  /** cones of the small, far bodies that hide the non-exempt points over them (lib/disc-hide.ts), rebuilt every frame in `prepareRender` */
+  private discCones: DiscGroup[] = discGroups([], 45, 1);
   private rig: OrbitRig;
   private palette: Palette;
   private sun = new THREE.Vector3(1, 0, 0);
@@ -252,6 +256,9 @@ export class SceneController {
   /** 1 where an active filter lets the object through: never scoped out */
   private satKeep = new Uint8Array(0);
   private dynKeep = new Uint8Array(0);
+  /** 1 = featured (`render.label`) or a launch vehicle: drawn with aShow = 2, never hidden over a small body's disc (set in `applyAppearance`) */
+  private satExempt = new Uint8Array(0);
+  private dynExempt = new Uint8Array(0);
   private scopeDirty = true;
   private lastScopeAt = -Infinity;
   private scopeCounts = { rendered: 0, total: 0 };
@@ -359,8 +366,8 @@ export class SceneController {
 
     this.sats = makePointSet(0, this.pointMat);
     this.dyn = makePointSet(0, this.pointMat);
-    this.pads = makePointSet(0, this.pointMat, undefined, true);
-    this.hi = makePointSet(4, this.pointMat);
+    this.pads = makePointSet(0, this.pointMat, undefined, true, true);
+    this.hi = makePointSet(4, this.pointMat, undefined, false, true);
     for (const set of [this.sats, this.dyn, this.pads, this.hi]) this.scene.add(set.points);
     this.sats.points.renderOrder = this.dyn.points.renderOrder = 5;
     this.pads.points.renderOrder = 4;
@@ -524,7 +531,7 @@ export class SceneController {
     this.scene.remove(this.pads.points);
     this.pads.geo.dispose();
     // ECEF positions, rotated by the Earth's spin and re-based on the camera every frame
-    this.pads = makePointSet(n, this.pointMat, undefined, true);
+    this.pads = makePointSet(n, this.pointMat, undefined, true, true);
     this.pads.points.renderOrder = 4;
     this.scene.add(this.pads.points);
     this.launches.forEach((l, i) => {
@@ -1064,21 +1071,26 @@ export class SceneController {
     const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters));
     // with a filter on, the objects it lets through ('show') are exempt from the scope policy
     const filtering = filtersActive(this.filters);
+    const exemptRec = (rec: EntityRecord | undefined) => !!rec && (rec.render?.label === true || colorKeyOf(rec) === 'vehicle');
     this.satKeep = new Uint8Array(this.propagator.ids.length);
+    this.satExempt = new Uint8Array(this.propagator.ids.length);
     this.propagator.ids.forEach((id, i) => {
       const rec = this.recs.get(id);
       const v = vis(rec, id === this.selectedId);
       paint(this.sats, i, rec, v);
       if (filtering && v === 'show') this.satKeep[i] = 1;
+      if (exemptRec(rec)) this.satExempt[i] = 1;
     });
     this.sats.color.needsUpdate = this.sats.size.needsUpdate = this.sats.glyph.needsUpdate = true;
     this.dynKeep = new Uint8Array(this.dynIds.length);
+    this.dynExempt = new Uint8Array(this.dynIds.length);
     this.dynIds.forEach((id, i) => {
       const rec = this.recs.get(id);
       const v = vis(rec);
       paint(this.dyn, i, rec, v);
       this.dynBaseSize[i] = this.dyn.size.getX(i);
       if (filtering && v === 'show') this.dynKeep[i] = 1;
+      if (exemptRec(rec)) this.dynExempt[i] = 1;
     });
     this.dyn.color.needsUpdate = this.dyn.size.needsUpdate = this.dyn.glyph.needsUpdate = true;
     this.scopeDirty = true;
@@ -1197,14 +1209,14 @@ export class SceneController {
 
   /**
    * Every visible object near a screen point, highest in the hierarchy first, then newest (lib/pick.ts does the scan).
-   * Points hidden behind the Earth (or the Moon and Sun, through `occ`), filtered out or out of scope are skipped. Zoomed
-   * out, objects over a far body's disc are grouped into that body (`grouped`). A plain click uses the first entry, so it
-   * agrees with the popup's list; hover takes the nearest object (`nearestFirst`).
+   * Points hidden behind the Earth (or the Moon and Sun, through `occ`), filtered out or out of scope are skipped, and so are
+   * the non-exempt ones over a small, far body's disc (`discCones`, the point shader's own test): the click then finds the
+   * body. A plain click uses the first entry, so it agrees with the popup's list; hover takes the nearest object (`nearestFirst`).
    */
   private pickMetaCache: ReturnType<typeof pickMeta> | null = null; // rank and creation time by id, rebuilt after a catalog change
   private pickAll(
     px: number, py: number, max: number, wantTotal = false, nearestFirst = false,
-  ): { ids: string[]; total: number; grouped: { ids: string[]; total: number } } {
+  ): { ids: string[]; total: number } {
     const meta = (this.pickMetaCache ??= pickMeta(this.recs.values()));
     const w = this.container.clientWidth, h = this.container.clientHeight;
     const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
@@ -1224,18 +1236,21 @@ export class SceneController {
       const dx = (p.x * 0.5 + 0.5) * w - px, dy = (1 - (p.y * 0.5 + 0.5)) * h - py;
       if (p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) extras.push({ id: this.selectedId, d2: dx * dx + dy * dy, rel });
     }
-    // the drawn bodies (Earth, Moon, Sun, Mars) join only when zoomed out far enough to group the objects over them, or
-    // where nothing else is (lib/pick.ts `resolvePick`): the Earth's disc must not turn a click on a satellite drawn over it
-    // into a choice popup when zoomed in
+    // the drawn bodies (Earth, Moon, Sun, Mars) are listed only where no object is (lib/pick.ts `resolvePick`): the Earth's
+    // disc must not turn a click on a satellite drawn over it into a choice popup when zoomed in
     const bodies = () => bodyPickExtras(this.celestial.bodies(), { origin: this.frameInfo.originV3, m, w, h, px, py, fovDeg: this.camera.fov });
+    const cones = this.discCones;
     const r = gatherWithBodies(
       [source(this.sats, this.propagator.ids, 0), source(this.dyn, this.dynIds, 60)], extras, bodies, m, w, h, px, py,
-      { max, wantTotal, nearestFirst, ranks: meta.ranks, created: meta.created, occluded: (x, y, z) => this.occludedRel(x, y, z) },
+      {
+        max, wantTotal, nearestFirst, ranks: meta.ranks, created: meta.created, occluded: (x, y, z) => this.occludedRel(x, y, z),
+        discHidden: (x, y, z) => hiddenByDisc(x, y, z, cones),
+      },
     );
-    return { ids: r.items.map((i) => i.id), total: r.total, grouped: { ids: r.grouped.map((i) => i.id), total: r.groupedTotal } };
+    return { ids: r.items.map((i) => i.id), total: r.total };
   }
 
-  /** What hover lands on: the nearest visible object, or the body a far crowd is grouped into. */
+  /** What hover lands on: the nearest visible object, or the body whose disc the hidden objects are over. */
   private pick(px: number, py: number): string | null {
     return this.pickAll(px, py, 1, false, true).ids[0] ?? null;
   }
@@ -1276,11 +1291,11 @@ export class SceneController {
       if (!d || e.button !== 0) return;
       const p = rel(e);
       if (Math.hypot(p.x - d.x, p.y - d.y) > 4 || performance.now() - d.t > 600) return;
-      // one candidate selects it; several (or a body that groups far objects) open the choice popup
-      const { ids, total, grouped } = this.pickAll(p.x, p.y, POPUP_MAX, true);
-      // the trajectory is the lowest priority: below every object and the popup, and below the objects a far body groups. Over
-      // a body alone (zoomed in, the Earth's disc covers the view) it still wins, or a path over the globe could not be clicked
-      if (grouped.ids.length === 0 && ids.every((id) => this.bodyRegId.has(id))) {
+      // one candidate selects it (a body too: objects over a small far body are hidden, so that click lands on the body); several open the choice popup
+      const { ids, total } = this.pickAll(p.x, p.y, POPUP_MAX, true);
+      // the trajectory is the lowest priority: below every object and the popup. Over a body alone (zoomed in, the Earth's
+      // disc covers the view) it still wins, or a path over the globe could not be clicked
+      if (ids.every((id) => this.bodyRegId.has(id))) {
         const hit = this.pathHitAt(p.x, p.y);
         if (hit && this.cb.onPathSeek) {
           this.setHover(null);
@@ -1289,11 +1304,10 @@ export class SceneController {
           return;
         }
       }
-      const group = grouped.ids.length > 0 && this.cb.onPickMany;
-      if (!group && (ids.length === 1 || (ids.length > 1 && !this.cb.onPickMany))) this.cb.onPick(ids[0]);
-      else if (ids.length > 1 || group) {
+      if (ids.length === 1 || (ids.length > 1 && !this.cb.onPickMany)) this.cb.onPick(ids[0]);
+      else if (ids.length > 1) {
         this.setHover(null);
-        this.cb.onPickMany?.(ids, total, p.x, p.y, grouped.ids.length ? grouped : undefined);
+        this.cb.onPickMany?.(ids, total, p.x, p.y);
       }
     };
     const onLeave = () => {
@@ -1468,6 +1482,17 @@ export class SceneController {
     }
     this.occ = makeOccluder(f.originV3, undefined, this.celestial.occluders());
 
+    // small, far bodies hide the non-exempt points over their disc: one cone per drawn body (a uniform update, no buffer upload)
+    const o = f.originV3;
+    this.discCones = discGroups(
+      this.celestial.bodies().map((b) => ({ rel: [b.c[0] - o[0], b.c[1] - o[1], b.c[2] - o[2]] as V3, radiusKm: b.radiusKm, k: b.k })),
+      this.camera.fov, this.container.clientHeight,
+    );
+    this.discCones.forEach((g, i) => {
+      u.uGroup.value[i].set(g.x, g.y, g.z, g.sinR);
+      u.uGroupD.value[i] = g.dist;
+    });
+
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);
     this.pads.pos.upload(f);
@@ -1560,7 +1585,9 @@ export class SceneController {
     let total = 0, rendered = 0;
     const tmp = this.tmp2;
 
-    const scan = (set: PointSet, ids: readonly string[], bulk: boolean, keepFlags: Uint8Array | null) => {
+    // `exemptFlags`: 1 = featured / launch vehicle; true = the whole set (pads). With the selected, hovered, related and
+    // filter-kept points these get aShow = 2, which the point shader and pickAll never hide over a small body's disc
+    const scan = (set: PointSet, ids: readonly string[], bulk: boolean, keepFlags: Uint8Array | null, exemptFlags: Uint8Array | true | null) => {
       const show = set.show.array as Float32Array, size = set.size.array as Float32Array;
       const rel = set.pos.attr.array as Float32Array;
       let changed = false;
@@ -1571,7 +1598,8 @@ export class SceneController {
         const id = ids[i];
         const keep = id === sel || id === hov || this.related.has(id) || (keepFlags !== null && keepFlags[i] === 1);
         const d = Math.hypot(w.x - focus.x, w.y - focus.y, w.z - focus.z);
-        const v = inScope({ d, key: i, bulk, keep }, radius, mode) ? 1 : 0;
+        const exempt = keep || exemptFlags === true || (exemptFlags !== null && exemptFlags[i] === 1);
+        const v = inScope({ d, key: i, bulk, keep }, radius, mode) ? (exempt ? SHOW_EXEMPT : 1) : 0;
         if (show[i] !== v) {
           show[i] = v;
           changed = true;
@@ -1579,13 +1607,13 @@ export class SceneController {
         if (v === 0 || size[i] <= 0) continue;
         const x = rel[i * 3], y = rel[i * 3 + 1], z = rel[i * 3 + 2];
         if (!inView(m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[3] * x + m[7] * y + m[11] * z + m[15])) continue;
-        if (!occluded(x, y, z)) rendered++;
+        if (!occluded(x, y, z) && (v === SHOW_EXEMPT || !hiddenByDisc(x, y, z, this.discCones))) rendered++;
       }
       if (changed) set.show.needsUpdate = true;
     };
-    scan(this.sats, this.propagator.ids, true, this.satKeep);
-    scan(this.dyn, this.dynIds, false, this.dynKeep);
-    scan(this.pads, this.launches.map((l) => l.entityId), false, null);
+    scan(this.sats, this.propagator.ids, true, this.satKeep, this.satExempt);
+    scan(this.dyn, this.dynIds, false, this.dynKeep, this.dynExempt);
+    scan(this.pads, this.launches.map((l) => l.entityId), false, null, true);
     this.scopeCounts = { rendered, total };
 
     // light overlays (orbit line, footprint) of entities that are scoped out are not drawn either

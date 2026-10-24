@@ -1,8 +1,8 @@
 /**
  * Screen-space picking, split from three.js so it can be tested: given the point sets (camera-relative positions, sizes,
  * show flags) and a projection * view matrix, list every visible object near a screen point: highest in the hierarchy
- * first, then the most recently created, then the nearest to the cursor (`resolvePick` adds the zoomed-out grouping of
- * objects into the body they overlap).
+ * first, then the most recently created, then the nearest to the cursor. Zoomed out, objects over a small distant body are
+ * not drawn and not candidates (`PickOptions.discHidden`, lib/disc-hide.ts), so a click there finds the body (`resolvePick`).
  *
  * One scan serves the callers so they cannot disagree: a plain click takes the first entry and a click with more than one
  * entry opens the choice popup (ui/PickPopup.tsx) with the whole list; hover asks for `nearestFirst` so the tooltip names
@@ -16,6 +16,10 @@ export const CLUSTER_PX = 10;
 export const MIN_HIT_PX = 6.05;
 /** Rows the choice popup lists. */
 export const POPUP_MAX = 12;
+/** `show` value (the shader's `aShow`) of a point that is drawn whatever lies under it: exempt from `PickOptions.discHidden`. */
+export const SHOW_EXEMPT = 2;
+/** The shader treats `aShow >= SHOW_EXEMPT_MIN` as exempt (a float compare with room for rounding). */
+export const SHOW_EXEMPT_MIN = 1.5;
 
 export interface PickSource {
   ids: readonly string[];
@@ -25,7 +29,7 @@ export interface PickSource {
   world: ArrayLike<number>;
   /** point size in px; 0 = not drawn */
   size: ArrayLike<number>;
-  /** 0 = scoped out */
+  /** 0 = scoped out, 1 = drawn, `SHOW_EXEMPT` (2) = drawn and never hidden over a small body's disc */
   show: ArrayLike<number>;
   /** squared px subtracted from the distance when ranking, so a propagated object beats a cloud point on a near tie */
   bias: number;
@@ -42,7 +46,7 @@ export interface PickExtra {
   rel?: readonly [number, number, number];
   /** hierarchy rank (`entityRank`, smaller = listed first); missing ranks last */
   rank?: number;
-  /** a drawn body: the projected radius of its disc, px (see `bodyDiscRadiusPx`); decides whether objects over it are grouped */
+  /** a drawn body: the projected radius of its disc, px (see `bodyDiscRadiusPx`) */
   discPx?: number;
   /** ms the entity was created (newer first among equal ranks); missing = oldest */
   created?: number;
@@ -67,6 +71,11 @@ export interface PickOptions {
   clusterPx?: number;
   /** is the camera-relative point hidden behind a body? */
   occluded: (x: number, y: number, z: number) => boolean;
+  /**
+   * is the camera-relative point not drawn because it is over a small, far body's disc (`hiddenByDisc`)? Asked only of
+   * points of the sources whose `show` is below `SHOW_EXEMPT_MIN`; extras (models, the selection) are never asked.
+   */
+  discHidden?: (x: number, y: number, z: number) => boolean;
   /** hierarchy rank by entity id for points and extras that carry none of their own (see `rankMap`) */
   ranks?: ReadonlyMap<string, number>;
   /** creation time by entity id (see `pickMeta`): among equal ranks the newest is listed first, before distance */
@@ -123,6 +132,7 @@ export function gatherCandidates(
       const r = Math.max(cluster, MIN_HIT_PX, size[i] * 0.5 + 4);
       const d2 = dx * dx + dy * dy;
       if (d2 <= r * r) {
+        if (opts.discHidden && show[i] < SHOW_EXEMPT_MIN && opts.discHidden(x, y, z)) continue;
         const hier = src.rank?.[i] ?? opts.ranks?.get(ids[i]) ?? DEFAULT_RANK;
         raws.push({ hier, created: opts.created?.get(ids[i]) ?? 0, rank: d2 - src.bias, d2, id: ids[i], x, y, z, checkOcc: true });
       }
@@ -240,49 +250,37 @@ export function pickMeta(
 }
 
 /**
- * Zoomed-out grouping: a body whose disc is at most this many px in radius (an Earth about 80 px across or smaller) is
- * "far away", and two or more objects under the cursor in its hit area are not worth telling apart: they collapse into the
- * body. Bigger than that the objects are drawn apart enough to aim at and stay individually selectable.
+ * Zoomed-out hiding: a body whose disc is at most this many px in radius (an Earth about 80 px across or smaller) is
+ * "far away", and the small objects over it (inside its pick hit area, in front of it) are not drawn and not pickable
+ * (lib/disc-hide.ts): a click there selects the body. Bigger than that the objects are drawn apart enough to aim at.
  */
 export const GROUP_DISC_PX = 40;
-/** Objects under the cursor (visible, after the cluster radius) from which a far body groups them; one object is always aimed at. */
-export const GROUP_MIN_OBJECTS = 2;
 
 export interface PickResolution {
   /** what the click lists, primary entry first (hierarchy order: bodies, then objects by rank and recency) */
   items: PickHit[];
   /** candidates counted, `items` may be capped */
   total: number;
-  /** objects hidden behind a grouping body (empty: nothing was grouped); the popup lists them when the user expands */
-  grouped: PickHit[];
-  groupedTotal: number;
 }
 
 /**
- * Decides what a click on `objects` (visible objects under the cursor, hierarchy ordered) and `bodies` (drawn bodies whose
- * hit area holds the cursor, with `discPx`) lists:
+ * Decides what a click on `objects` (visible objects under the cursor, hierarchy ordered; the ones hidden over a small body
+ * are not among them) and `bodies` (drawn bodies whose hit area holds the cursor) lists:
  *
- * - far away (some body under the cursor has a disc of at most `discPx` px) and at least `minObjects` objects there: the
- *   bodies, in hierarchy order, with the objects as `grouped` (the "+ N objects" entry). Every body under the cursor is
- *   listed, so a big Earth disc with a far Moon dot in front of it still offers both.
- * - otherwise any object: the objects only. A body is never listed beside objects, because the Earth's disc covers most
- *   of the screen when zoomed in and would join every click on a satellite drawn over it.
- * - no object: the bodies.
+ * - any object: the objects only. A body is never listed beside objects, because the Earth's disc covers most of the screen
+ *   when zoomed in and would join every click on a satellite drawn over it. (Objects over a small disc that are still
+ *   visible are the exempt ones: the selection, related, featured and launch vehicles.)
+ * - no object: the bodies, in hierarchy order. A single body is selected directly, several (an Earth disc with a Moon dot
+ *   in front of it) open the choice popup.
  *
- * Pass `bodies` as null when the objects alone decide (exactly one object: it is aimed at, so nothing is looked up).
+ * Pass `bodies` as null when the objects alone decide (an object was found, so nothing is looked up).
  */
 export function resolvePick(
   objects: { items: PickHit[]; total: number },
   bodies: { items: PickHit[]; total: number } | null,
-  discPx = GROUP_DISC_PX,
-  minObjects = GROUP_MIN_OBJECTS,
 ): PickResolution {
-  const none: PickHit[] = [];
-  if (bodies && bodies.items.length > 0 && objects.total >= minObjects && bodies.items.some((b) => (b.discPx ?? Infinity) <= discPx)) {
-    return { items: bodies.items, total: bodies.total, grouped: objects.items, groupedTotal: objects.total };
-  }
-  if (objects.items.length > 0 || !bodies) return { items: objects.items, total: objects.total, grouped: none, groupedTotal: 0 };
-  return { items: bodies.items, total: bodies.total, grouped: none, groupedTotal: 0 };
+  if (objects.items.length > 0 || !bodies) return { items: objects.items, total: objects.total };
+  return { items: bodies.items, total: bodies.total };
 }
 
 /** Wheel pixels that make one step of the popup highlight (a mouse notch is 100, so one notch = one row). */

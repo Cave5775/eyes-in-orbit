@@ -23,7 +23,7 @@ const HELP: [string, string][] = [
   ['Left drag', 'Orbit (surface view: look around the local horizon)'],
   ['Right / Shift drag', 'Pan (surface view: lets go of the followed object and slides along the ground at its height)'],
   ['Wheel / pinch', 'Zoom: step scales with height above the surface'],
-  ['Click', 'Select an object; hover for its name. Where several overlap a list opens (highest in the hierarchy first, then newest): wheel or arrows choose, click or Enter selects, Esc closes. Zoomed out, objects over a small distant body (Earth under about 80 px wide) are grouped into it: the body is listed with a "+ N objects" row that expands the list'],
+  ['Click', 'Select an object; hover for its name. Where several overlap a list opens (highest in the hierarchy first, then newest): wheel or arrows choose, click or Enter selects, Esc closes. Zoomed out, the small objects over a small distant body (Earth under about 80 px wide) are not drawn: a click there selects the body directly. The selection, related and filtered objects, launch vehicles and pads stay drawn'],
   ['Click a launch path', 'With a launch (or its booster) selected, clicking its drawn trajectory jumps the simulation clock to the moment at that point of the flight (T+ shown while hovering), at the current rate. Objects, the choice list and the Earth always take the click first'],
   ['F', 'Fit the selection and its related objects'],
   ['Shift+F', 'Fit everything visible (respects filters)'],
@@ -54,7 +54,7 @@ export function SceneView() {
   const [scopeAll, setScopeAll] = useState(false);
   const [trueScale, setTrueScale] = useState(false);
   /** open choice popup for a click on overlapping objects */
-  const [pick, setPick] = useState<{ items: PickItem[]; more: number; hidden: PickItem[]; hiddenMore: number; x: number; y: number } | null>(null);
+  const [pick, setPick] = useState<{ items: PickItem[]; more: number; x: number; y: number } | null>(null);
   const closePick = useCallback(() => setPick(null), []);
   const choosePick = useCallback((id: string) => {
     setPick(null);
@@ -151,21 +151,15 @@ export function SceneView() {
     };
     const ctl = new SceneController(host.current!, {
       onPick: (id) => store.getState().select(id),
-      onPickMany: (ids, total, x, y, grouped) => {
+      onPickMany: (ids, total, x, y) => {
         const ents = store.getState().entities;
-        const toItems = (list: string[]) => {
-          const out: PickItem[] = [];
-          for (const id of list) {
-            const rec = ents.get(id);
-            if (rec) out.push({ id, name: rec.name, kind: kindLabel(rec.kind), colorKey: colorKeyOf(rec) });
-          }
-          return out;
-        };
-        const items = toItems(ids);
-        // zoomed out: the body is the entry and the objects over it wait behind "+ N objects"
-        const hidden = grouped ? toItems(grouped.ids) : [];
-        if (items.length === 1 && hidden.length === 0) store.getState().select(items[0].id);
-        else if (items.length > 0) setPick({ items, more: total - items.length, hidden, hiddenMore: grouped ? grouped.total - hidden.length : 0, x, y });
+        const items: PickItem[] = [];
+        for (const id of ids) {
+          const rec = ents.get(id);
+          if (rec) items.push({ id, name: rec.name, kind: kindLabel(rec.kind), colorKey: colorKeyOf(rec) });
+        }
+        if (items.length === 1) store.getState().select(items[0].id);
+        else if (items.length > 0) setPick({ items, more: total - items.length, x, y });
       },
       onHover: (h) => {
         const el = tip.current;
@@ -272,7 +266,7 @@ export function SceneView() {
       <div ref={tip} className="scene-tip" />
       <div ref={pathTip} className="scene-tip" />
       <div ref={pathDot} className="path-dot" />
-      {pick && <PickPopup items={pick.items} more={pick.more} hidden={pick.hidden} hiddenMore={pick.hiddenMore} x={pick.x} y={pick.y} onSelect={choosePick} onClose={closePick} onHighlight={highlightPick} />}
+      {pick && <PickPopup items={pick.items} more={pick.more} x={pick.x} y={pick.y} onSelect={choosePick} onClose={closePick} onHighlight={highlightPick} />}
       <div className="scene-top">
       <div className="scene-actions">
         {selectedId && (

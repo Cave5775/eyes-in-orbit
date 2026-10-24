@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords } from '@eio/core';
 import { bodyLineAllowed, bodyLineIds, bodyPickExtras, gatherWithBodies, type BodyPickContext, type DrawnBody } from '../src/lib/body-scene';
 import { EARTH_CENTRE } from '../src/lib/frame';
-import type { PickExtra, PickSource } from '../src/lib/pick';
+import { SHOW_EXEMPT, type PickExtra, type PickSource } from '../src/lib/pick';
 
 const recs = bodyEntityRecords();
 const rec = (id: string) => recs.find((r) => r.id === id)!;
@@ -172,15 +172,29 @@ describe('gatherWithBodies', () => {
   it('zoomed in (big Earth disc) a click on overlapping satellites lists only them, newest first; the Earth is not in the list', () => {
     const r = gatherWithBodies([two], [], () => [earthAt(250)], M, 200, 200, 100, 100, withMeta);
     expect(r.items.map((h) => h.id)).toEqual(['new', 'old']);
-    expect(r.grouped).toEqual([]);
+    expect(r).not.toHaveProperty('grouped');
     expect(r.total).toBe(2);
   });
 
-  it('zoomed out (small Earth disc) the satellites collapse into the Earth and wait behind the "+ N objects" entry', () => {
-    const r = gatherWithBodies([two], [], () => [earthAt(20)], M, 200, 200, 100, 100, withMeta);
+  // zoomed out: the Earth's cone hides every point (the predicate stands for lib/disc-hide.ts `hiddenByDisc`)
+  const hiding = { ...withMeta, discHidden: () => true };
+
+  it('zoomed out (small Earth disc) the hidden satellites are not candidates: the click finds the Earth alone, no list', () => {
+    const r = gatherWithBodies([two], [], () => [earthAt(20)], M, 200, 200, 100, 100, hiding);
     expect(r.items.map((h) => h.id)).toEqual(['body-earth']);
-    expect(r.grouped.map((h) => h.id)).toEqual(['new', 'old']);
-    expect(r.groupedTotal).toBe(2);
+    expect(r.total).toBe(1);
+  });
+
+  it('zoomed out, an exempt satellite (show 2) stays pickable and wins over the Earth', () => {
+    const exempt: PickSource = { ...two, show: new Float32Array([1, SHOW_EXEMPT]) };
+    const r = gatherWithBodies([exempt], [], () => [earthAt(20)], M, 200, 200, 100, 100, hiding);
+    expect(r.items.map((h) => h.id)).toEqual(['new']);
+  });
+
+  it('zoomed out, an Earth disc with a Moon dot in front still lists both bodies (the popup)', () => {
+    const moonDot: PickExtra = { id: 'body-moon', d2: 9, discPx: 2 };
+    const r = gatherWithBodies([two], [], () => [earthAt(20), moonDot], M, 200, 200, 100, 100, hiding);
+    expect(r.items.map((h) => h.id)).toEqual(['body-earth', 'body-moon']);
   });
 
   it('a single satellite over a small Earth is still selected, and the body lookup is skipped', () => {
@@ -190,10 +204,10 @@ describe('gatherWithBodies', () => {
     expect(called).toBe(false);
   });
 
-  it('hover (nearestFirst) names the nearest satellite zoomed in and the body when grouped', () => {
+  it('hover (nearestFirst) names the nearest satellite zoomed in and the body when the satellites are hidden', () => {
     const hover = { ...withMeta, max: 1, wantTotal: false, nearestFirst: true };
     expect(gatherWithBodies([two], [], () => [earthAt(250)], M, 200, 200, 100, 100, hover).items.map((h) => h.id)).toEqual(['old']);
-    expect(gatherWithBodies([two], [], () => [earthAt(20)], M, 200, 200, 100, 100, hover).items.map((h) => h.id)).toEqual(['body-earth']);
+    expect(gatherWithBodies([two], [], () => [earthAt(20)], M, 200, 200, 100, 100, { ...hover, discHidden: () => true }).items.map((h) => h.id)).toEqual(['body-earth']);
   });
 
   it('bodies under the cursor list in hierarchy order, not by distance', () => {

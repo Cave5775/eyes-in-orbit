@@ -14,10 +14,6 @@ interface Props {
   items: PickItem[];
   /** candidates beyond the listed ones */
   more: number;
-  /** zoomed out: `items` are the bodies and these the objects grouped into them, listed once the user expands ("+ N objects") */
-  hidden?: PickItem[];
-  /** grouped objects beyond the listed `hidden` ones */
-  hiddenMore?: number;
   /** the click, CSS px inside the scene */
   x: number;
   y: number;
@@ -31,29 +27,22 @@ interface Props {
  * Choice list for a click on several overlapping objects. The mouse wheel moves the highlight (it is captured at the
  * window, so the camera does not zoom while the popup is open), hover highlights a row, a click or Enter selects it,
  * Up and Down also move, Escape or a press outside closes. Rows are plain buttons, so a tap works without hover.
- * Zoomed out (`hidden` given) the list is the body the objects overlap plus a last row "+ N objects"; selecting that row
- * lists them (hierarchy order, newest first) under the bodies.
+ * (Objects over a small distant body never get here: they are not drawn nor pickable, a click there selects the body.)
  */
-export function PickPopup({ items: bodies, more, hidden, hiddenMore = 0, x, y, onSelect, onClose, onHighlight }: Props) {
+export function PickPopup({ items, more, x, y, onSelect, onClose, onHighlight }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(0);
-  const [expanded, setExpanded] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  // zoomed out the bodies come first and the objects they group follow once expanded; the "+ N objects" row is the last row
-  const grouped = !!hidden && hidden.length > 0;
-  const items = grouped && expanded ? [...bodies, ...hidden] : bodies;
-  const shownMore = grouped && expanded ? hiddenMore + more : more;
-  const canExpand = grouped && !expanded;
-  const rows = items.length + (canExpand ? 1 : 0);
+  const rows = items.length;
   // handlers read the latest values without re-subscribing on every render
-  const live = useRef({ items, index, rows, canExpand, onSelect, onClose, onHighlight, expand: () => setExpanded(true) });
-  live.current = { items, index, rows, canExpand, onSelect, onClose, onHighlight, expand: () => setExpanded(true) };
+  const live = useRef({ items, index, rows, onSelect, onClose, onHighlight });
+  live.current = { items, index, rows, onSelect, onClose, onHighlight };
 
   // placed next to the cursor, flipped away from the scene edges once its size is known
   useLayoutEffect(() => {
     const el = root.current, host = el?.offsetParent as HTMLElement | null;
     if (el && host) setPos(popupPlacement(x, y, el.offsetWidth, el.offsetHeight, host.clientWidth, host.clientHeight));
-  }, [x, y, items.length, shownMore, canExpand]);
+  }, [x, y, items.length, more]);
 
   useEffect(() => {
     live.current.onHighlight(items[index]?.id ?? null);
@@ -74,7 +63,6 @@ export function PickPopup({ items: bodies, more, hidden, hiddenMore = 0, x, y, o
       else {
         const it = live.current.items[live.current.index];
         if (it) live.current.onSelect(it.id);
-        else if (live.current.canExpand) live.current.expand();
       }
     };
     const onWheel = (e: WheelEvent) => {
@@ -105,7 +93,7 @@ export function PickPopup({ items: bodies, more, hidden, hiddenMore = 0, x, y, o
       aria-label="Objects under the cursor"
       style={{ left: pos?.left ?? x + 12, top: pos?.top ?? y + 12, visibility: pos ? 'visible' : 'hidden' }}
     >
-      <div className="pop-title">{canExpand ? 'ZOOMED OUT · GROUPED' : `${items.length + shownMore} OBJECTS HERE`}</div>
+      <div className="pop-title">{items.length + more} OBJECTS HERE</div>
       {items.map((it, i) => (
         <button
           key={it.id}
@@ -120,20 +108,7 @@ export function PickPopup({ items: bodies, more, hidden, hiddenMore = 0, x, y, o
           <span className="pick-kind">{it.kind}</span>
         </button>
       ))}
-      {canExpand && (
-        <button
-          role="option"
-          aria-selected={index === items.length}
-          className={index === items.length ? 'pick-row on' : 'pick-row'}
-          onPointerEnter={() => setIndex(items.length)}
-          onClick={() => setExpanded(true)}
-        >
-          <i style={{ background: 'transparent', boxShadow: 'inset 0 0 0 1px var(--dim)' }} />
-          <span className="pick-name">+ {hidden!.length + hiddenMore} objects</span>
-          <span className="pick-kind">show list</span>
-        </button>
-      )}
-      {shownMore > 0 && <div className="pick-more">+ {shownMore} more, zoom in to separate them</div>}
+      {more > 0 && <div className="pick-more">+ {more} more, zoom in to separate them</div>}
       <div className="pick-hint">WHEEL / ARROWS CHOOSE · CLICK OR ENTER SELECT · ESC CLOSE</div>
     </div>
   );

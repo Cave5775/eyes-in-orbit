@@ -6,6 +6,7 @@ import { EARTH_CENTRE, centreKey, centrePositionEci, frameForRec, frameSampler, 
 import {
   PATH_MAX_PHASES, makePathBuffers, nowIndex, pathStale, planPathWindow, samplePath, type PathPlan, type PathResult,
 } from '../lib/paths';
+import { SHOW_EXEMPT } from '../lib/pick';
 import { GLYPH_ID } from './palette';
 import { RelPositions, type RenderFrame } from './relative';
 
@@ -71,7 +72,7 @@ export class PathOverlay {
     g.setAttribute('position', this.tickPos.attr);
     const col = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES * 3), 3);
     const glyph = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES).fill(GLYPH_ID.diamond), 1);
-    const show = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES).fill(1), 1);
+    const show = new THREE.BufferAttribute(new Float32Array(PATH_MAX_PHASES).fill(SHOW_EXEMPT), 1); // the selected path's ticks are never hidden over a small body
     const c = color.clone().lerp(new THREE.Color(1, 1, 1), 0.5);
     for (let i = 0; i < PATH_MAX_PHASES; i++) col.setXYZ(i, c.r, c.g, c.b);
     g.setAttribute('aColor', col);

@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { GROUP_SLOTS, offGroup } from '../lib/disc-hide';
+import { SHOW_EXEMPT_MIN } from '../lib/pick';
 
 /**
  * Uniforms the point shader needs for the analytic Earth occlusion test (see `lib/occlusion.ts`, same maths):
@@ -23,11 +25,18 @@ export function occlusionUniforms(): Record<string, THREE.IUniform> {
  * Positions arrive camera-relative (floating origin). Points are NOT depth tested: a sprite has one depth for all its
  * pixels, so against the Earth's depth it was half clipped at the limb (and z-fought on the ground). Instead the vertex
  * shader hides a point whose line of sight crosses the Earth (analytic ray test) and `aShow` (scope policy, 0/1) hides
- * out-of-scope points.
+ * out-of-scope points. `aShow >= 1.5` (2) marks a point exempt from the small-disc hiding: `uGroup[i]` is a body's cone
+ * (xyz unit direction from the camera, w the sine of its angular radius, > 1 = off) and `uGroupD[i]` the distance to its
+ * centre; a non-exempt point inside a cone and nearer than the body is not drawn (lib/disc-hide.ts has the same test for picking).
  */
 export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { uPx: { value: pixelRatio }, ...occlusionUniforms() },
+    uniforms: {
+      uPx: { value: pixelRatio },
+      ...occlusionUniforms(),
+      uGroup: { value: Array.from({ length: GROUP_SLOTS }, () => { const g = offGroup(); return new THREE.Vector4(g.x, g.y, g.z, g.sinR); }) },
+      uGroupD: { value: new Array<number>(GROUP_SLOTS).fill(0) },
+    },
     transparent: true,
     depthWrite: false,
     depthTest: false,
@@ -44,8 +53,24 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
       uniform vec4 uSph0;
       uniform vec4 uSph1;
       uniform vec2 uSphC2;
+      uniform vec4 uGroup[${GROUP_SLOTS}];
+      uniform float uGroupD[${GROUP_SLOTS}];
       varying vec3 vColor;
       varying float vGlyph;
+      // Small, far body (disc radius <= GROUP_DISC_PX): inside its pick cone and nearer than its centre -> not drawn.
+      // Same maths as hiddenByDisc in lib/disc-hide.ts; the sine of the miss angle is |cross(u, dir)| (no cancellation).
+      bool discHides(vec3 rel) {
+        float L = length(rel);
+        if (L <= 0.0) return false;
+        vec3 u = rel / L;
+        for (int i = 0; i < ${GROUP_SLOTS}; i++) {
+          vec4 g = uGroup[i];
+          if (g.w > 1.0 || dot(u, g.xyz) <= 0.0) continue;
+          if (length(cross(u, g.xyz)) >= g.w) continue;
+          if (dot(rel, g.xyz) < uGroupD[i]) return true;
+        }
+        return false;
+      }
       bool earthHides(vec3 rel) {
         if (uOcc < 0.5 || uC2 <= 0.0) return false;
         vec3 d = vec3(rel.xy, rel.z * uOccK);
@@ -77,7 +102,7 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = aSize * uPx;
         // size 0 means hidden: a zero point size is clamped up to 1 px on some GPUs/ANGLE, so also clip the vertex away
-        if (aSize <= 0.0 || aShow < 0.5 || earthHides(position) || sphereHides(position, uSph0, uSphC2.x) || sphereHides(position, uSph1, uSphC2.y)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        if (aSize <= 0.0 || aShow < 0.5 || earthHides(position) || sphereHides(position, uSph0, uSphC2.x) || sphereHides(position, uSph1, uSphC2.y) || (aShow < ${SHOW_EXEMPT_MIN.toFixed(2)} && discHides(position))) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
       varying vec3 vColor;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords, entityRank } from '@eio/core';
 import {
   CLUSTER_PX, GROUP_DISC_PX, bodyDiscRadiusPx, bodyHitRadiusPx, bodyPickExtra, gatherCandidates, moveIndex, pickMeta, popupPlacement,
-  rankMap, resolvePick, wheelSteps, type PickHit, type PickSource,
+  SHOW_EXEMPT, rankMap, resolvePick, wheelSteps, type PickHit, type PickSource,
 } from '../src/lib/pick';
 
 // Identity projection-view: ndc = (x, y), w = h = 200, so screen x = 100 + 100 x and screen y = 100 - 100 y.
@@ -180,55 +180,57 @@ describe('recency among equal ranks', () => {
   });
 });
 
-describe('resolvePick (zoomed-out grouping)', () => {
+describe('gatherCandidates with discHidden (objects over a small far body)', () => {
+  const near = source([{ id: 'plain', x: 102, y: 100 }, { id: 'exempt', x: 104, y: 100, show: SHOW_EXEMPT }, { id: 'out', x: 101, y: 100, show: 0 }]);
+  const hiddenAll = (_x: number, _y: number, _z: number) => true;
+  const ids = (discHidden?: (x: number, y: number, z: number) => boolean) =>
+    gatherCandidates([near], [], M, W, H, 100, 100, { max: 12, occluded: never, wantTotal: true, discHidden }).items.map((h) => h.id);
+
+  it('drops the plain points the predicate hides and keeps the exempt ones (show >= 1.5)', () => {
+    expect(ids()).toEqual(['plain', 'exempt']);
+    expect(ids(hiddenAll)).toEqual(['exempt']);
+    expect(ids(() => false)).toEqual(['plain', 'exempt']);
+  });
+
+  it('asks the predicate with the camera-relative position, and never for an exempt point', () => {
+    const asked: number[][] = [];
+    ids((x, y, z) => (asked.push([x, y, z]), false));
+    expect(asked).toHaveLength(1);
+    expect(asked[0][0]).toBeCloseTo(sx(102), 6);
+  });
+
+  it('never drops an extra (a model, the selection): they are exempt by construction', () => {
+    const r = gatherCandidates([], [{ id: 'sel', d2: 4, rel: [0, 0, 0] }], M, W, H, 100, 100, { max: 12, occluded: never, discHidden: hiddenAll });
+    expect(r.items.map((h) => h.id)).toEqual(['sel']);
+  });
+});
+
+describe('resolvePick (objects first, bodies where there is none)', () => {
   const hit = (id: string, discPx?: number): PickHit => (discPx === undefined ? { id, dist: 1 } : { id, dist: 1, discPx });
   const objs = (n: number) => ({ items: Array.from({ length: n }, (_, i) => hit(`o${i}`)), total: n });
   const earth = (disc: number) => ({ items: [hit('body-earth', disc)], total: 1 });
 
-  it('groups two or more objects into a body whose disc is small, keeping the objects as the expandable list', () => {
-    const r = resolvePick(objs(3), earth(30));
-    expect(r.items.map((h) => h.id)).toEqual(['body-earth']);
-    expect(r.grouped.map((h) => h.id)).toEqual(['o0', 'o1', 'o2']);
-    expect(r.groupedTotal).toBe(3);
-  });
-
-  it('threshold: a disc of exactly GROUP_DISC_PX groups, anything bigger does not', () => {
-    expect(resolvePick(objs(2), earth(GROUP_DISC_PX)).grouped).toHaveLength(2);
-    const zoomedIn = resolvePick(objs(2), earth(GROUP_DISC_PX + 0.5));
-    expect(zoomedIn.items.map((h) => h.id)).toEqual(['o0', 'o1']);
-    expect(zoomedIn.grouped).toEqual([]);
-    // a custom threshold
-    expect(resolvePick(objs(2), earth(100), 120).grouped).toHaveLength(2);
-  });
-
-  it('threshold: one object is never grouped (it is aimed at), two are', () => {
-    const one = resolvePick(objs(1), earth(10));
-    expect(one.items.map((h) => h.id)).toEqual(['o0']);
-    expect(one.grouped).toEqual([]);
-    expect(resolvePick(objs(2), earth(10)).items.map((h) => h.id)).toEqual(['body-earth']);
-    // the count is the total, so a capped list still groups
-    expect(resolvePick({ items: [hit('o0')], total: 2 }, earth(10)).groupedTotal).toBe(2);
-    expect(resolvePick(objs(2), earth(10), 40, 3).grouped).toEqual([]);
-  });
-
-  it('zoomed in (the disc covers the view, or it has no disc size) bodies never join the objects', () => {
-    expect(resolvePick(objs(2), earth(Infinity)).items.map((h) => h.id)).toEqual(['o0', 'o1']);
-    expect(resolvePick(objs(1), earth(300)).items.map((h) => h.id)).toEqual(['o0']);
-    expect(resolvePick(objs(2), { items: [hit('body-earth')], total: 1 }).grouped).toEqual([]);
+  it('any object wins: the bodies never join the objects, small disc or big', () => {
+    for (const disc of [10, GROUP_DISC_PX, GROUP_DISC_PX + 0.5, 300, Infinity]) {
+      expect(resolvePick(objs(2), earth(disc)).items.map((h) => h.id)).toEqual(['o0', 'o1']);
+      expect(resolvePick(objs(1), earth(disc)).items.map((h) => h.id)).toEqual(['o0']);
+    }
     expect(resolvePick(objs(2), null).items).toHaveLength(2);
+    expect(resolvePick({ items: [hit('o0')], total: 5 }, earth(10)).total).toBe(5);
   });
 
-  it('with no object under the cursor the bodies are the result', () => {
-    expect(resolvePick(objs(0), earth(300)).items.map((h) => h.id)).toEqual(['body-earth']);
-    expect(resolvePick(objs(0), earth(300)).grouped).toEqual([]);
+  it('with no object under the cursor the bodies are the result: one body is selected directly', () => {
+    const r = resolvePick(objs(0), earth(30));
+    expect(r.items.map((h) => h.id)).toEqual(['body-earth']);
+    expect(r).not.toHaveProperty('grouped');
     expect(resolvePick(objs(0), { items: [], total: 0 }).items).toEqual([]);
   });
 
-  it('lists every body under the cursor, in the order given, when grouping', () => {
-    const both = { items: [hit('body-earth', 300), hit('body-moon', 5)], total: 2 };
-    const r = resolvePick(objs(2), both);
+  it('lists every body under the cursor, in the order given (an Earth disc with a Moon dot: the popup)', () => {
+    const both = { items: [hit('body-earth', 30), hit('body-moon', 5)], total: 2 };
+    const r = resolvePick(objs(0), both);
     expect(r.items.map((h) => h.id)).toEqual(['body-earth', 'body-moon']);
-    expect(r.grouped).toHaveLength(2);
+    expect(r.total).toBe(2);
   });
 });
 

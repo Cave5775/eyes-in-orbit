@@ -1,7 +1,7 @@
 /**
  * Pure parts of the scene's handling of body entities (docs/frames.md, "Scene"): which body orbit lines to draw, the pick
  * extras of the drawn bodies and the rule that decides when a body is listed with the objects under the cursor
- * (`resolvePick`: grouping when zoomed out, only where no object is otherwise). No three.js.
+ * (`resolvePick`: only where no object is; objects over a small far body are hidden, lib/disc-hide.ts). No three.js.
  */
 import { orbitableBodyId, type EntityRecord } from '@eio/core';
 import type { V3 } from './camera';
@@ -114,9 +114,10 @@ export function bodyPickExtras(bodies: readonly DrawnBody[], ctx: BodyPickContex
 
 /**
  * Candidates near the cursor, as `resolvePick` decides: the objects (points, models, the selection, as `gatherCandidates`,
- * highest in the hierarchy first, then newest) when zoomed in, and the drawn bodies, with the objects as `grouped`, when the
- * body they overlap is far away (small disc). A body never joins the objects of a zoomed-in click: the Earth's disc covers
- * most of the screen and would turn every click on a satellite drawn over it into a choice popup.
+ * highest in the hierarchy first, then newest), and the drawn bodies where there is no object. Objects over a small, far body
+ * are not candidates (`PickOptions.discHidden`), so there the click finds the body. A body never joins the objects: the
+ * Earth's disc covers most of the screen when zoomed in and would turn every click on a satellite drawn over it into a
+ * choice popup.
  */
 export function gatherWithBodies(
   sources: readonly PickSource[],
@@ -130,8 +131,8 @@ export function gatherWithBodies(
   opts: PickOptions,
 ): PickResolution {
   const objects = gatherCandidates(sources, extras, m, w, h, px, py, opts);
-  // exactly one object is aimed at, whatever is behind it: the body lookup is skipped
-  if (objects.total === 1) return resolvePick(objects, null);
+  // an object is aimed at, whatever is behind it: the body lookup is skipped
+  if (objects.total > 0) return resolvePick(objects, null);
   const list = bodyExtras();
   return resolvePick(objects, list.length ? gatherCandidates([], list, m, w, h, px, py, opts) : { items: [], total: 0 });
 }
