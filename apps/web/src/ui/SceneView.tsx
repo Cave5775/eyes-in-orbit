@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { sourceLabel } from '../lib/arrays';
 import { fmtDist, fmtPathWindow } from '../lib/format';
+import { colorKeyOf, kindLabel } from '../lib/entity';
 import { REF_LABEL } from '../lib/ref-body';
 import { relatedFor } from '../lib/related';
 import { modelDef } from '../scene/models/registry';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { clock, runtime } from '../state/runtime';
 import { useStore } from '../state/store';
+import { PickPopup, type PickItem } from './PickPopup';
 
 const LEGEND: [string, string][] = [
   ['station', 'Station'], ['satellite', 'Satellite'], ['starlink', 'Starlink'], ['debris', 'Debris'],
@@ -17,7 +19,7 @@ const HELP: [string, string][] = [
   ['Left drag', 'Orbit (surface view: look around the local horizon)'],
   ['Right / Shift drag', 'Pan (globe view)'],
   ['Wheel / pinch', 'Zoom: step scales with height above the surface'],
-  ['Click', 'Select an object; hover for its name'],
+  ['Click', 'Select an object; hover for its name. Where several overlap a list opens: wheel or arrows choose, click or Enter selects, Esc closes'],
   ['F', 'Fit the selection and its related objects'],
   ['Shift+F', 'Fit everything visible (respects filters)'],
   ['S', 'Surface view: level horizon, north-up, around the object\'s sub-point or the point under the view'],
@@ -41,6 +43,14 @@ export function SceneView() {
   const [help, setHelp] = useState(false);
   const [scopeAll, setScopeAll] = useState(false);
   const [trueScale, setTrueScale] = useState(false);
+  /** open choice popup for a click on overlapping objects */
+  const [pick, setPick] = useState<{ items: PickItem[]; more: number; x: number; y: number } | null>(null);
+  const closePick = useCallback(() => setPick(null), []);
+  const choosePick = useCallback((id: string) => {
+    setPick(null);
+    useStore.getState().select(id);
+  }, []);
+  const highlightPick = useCallback((id: string | null) => scene.current?.setPreview(id), []);
   const selectedId = useStore((s) => s.selectedId);
   const follow = useStore((s) => s.follow);
   const resetView = useStore((s) => s.resetView);
@@ -58,6 +68,8 @@ export function SceneView() {
     scene.current?.fitVisible();
   }, []);
   const toggleSurface = useCallback(() => scene.current?.toggleSurface(), []);
+  // the popup describes where objects were under the cursor: any selection change (a list click, the browser, a hotkey) retires it
+  useEffect(() => setPick(null), [selectedId]);
   const selModel = useStore((s) => modelDef(s.selectedId ? s.entities.get(s.selectedId)?.render?.model : undefined));
   const showModel = useCallback(() => {
     const id = useStore.getState().selectedId;
@@ -118,6 +130,16 @@ export function SceneView() {
     };
     const ctl = new SceneController(host.current!, {
       onPick: (id) => store.getState().select(id),
+      onPickMany: (ids, total, x, y) => {
+        const ents = store.getState().entities;
+        const items: PickItem[] = [];
+        for (const id of ids) {
+          const rec = ents.get(id);
+          if (rec) items.push({ id, name: rec.name, kind: kindLabel(rec.kind), colorKey: colorKeyOf(rec) });
+        }
+        if (items.length === 1) store.getState().select(items[0].id);
+        else if (items.length > 1) setPick({ items, more: total - items.length, x, y });
+      },
       onHover: (h) => {
         const el = tip.current;
         if (!el) return;
@@ -197,6 +219,7 @@ export function SceneView() {
       <div ref={host} className="scene-host" />
       <div ref={labelHost} className="path-labels" />
       <div ref={tip} className="scene-tip" />
+      {pick && <PickPopup items={pick.items} more={pick.more} x={pick.x} y={pick.y} onSelect={choosePick} onClose={closePick} onHighlight={highlightPick} />}
       <div className="scene-actions">
         {selectedId && (
           <button className={follow ? 'btn active' : 'btn'} onClick={() => setFollow(!follow)} title="Keep the camera locked on the selected object">

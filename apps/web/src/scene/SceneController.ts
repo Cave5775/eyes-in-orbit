@@ -11,6 +11,7 @@ import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filter
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
+import { POPUP_MAX, gatherCandidates, type PickExtra, type PickSource } from '../lib/pick';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
@@ -50,6 +51,12 @@ export interface PathLabel {
 export interface SceneCallbacks {
   onPick(id: string): void;
   onHover(h: { id: string; x: number; y: number } | null): void;
+  /**
+   * A click found more than one object within the cluster radius (lib/pick.ts): ids nearest first (the first is what a
+   * plain click would have selected), `total` counts all of them (the list is capped), x/y are the cursor in CSS px
+   * inside the scene container. onPick is not called for that click.
+   */
+  onPickMany?(ids: string[], total: number, x: number, y: number): void;
   /** Screen positions of the selected path's phase boundaries (called each frame while there are any, once more to clear). */
   onPathLabels?(labels: PathLabel[]): void;
   /** The scene changed follow mode by itself (FIT leaves the followed object). */
@@ -207,6 +214,8 @@ export class SceneController {
   private followId: string | null = null;
   private selectedId: string | null = null;
   private hoverId: string | null = null;
+  /** object the choice popup has highlighted: drawn with the hover ring, and hover from the mouse is suspended meanwhile */
+  private previewId: string | null = null;
   private issFix: IssFix | undefined;
   /** world position of the followed thing at sim time `t` */
   private followFn: ((out: THREE.Vector3, t: number) => boolean) | null = null;
@@ -1033,47 +1042,53 @@ export class SceneController {
     return this.occ(x, y, z);
   }
 
-  /** Screen-space nearest visible point within a small radius; occluded-by-Earth and out-of-scope points are skipped. */
-  private pick(px: number, py: number): string | null {
+  /**
+   * Every visible object near a screen point, nearest first (lib/pick.ts does the scan). Points hidden behind the Earth
+   * (or the Moon and Sun, through `occ`), filtered out or out of scope are skipped. Hover and a plain click use the
+   * first entry, so they always agree with the popup's list.
+   */
+  private pickAll(px: number, py: number, max: number, wantTotal = false): { ids: string[]; total: number } {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
-    const hits: { d2: number; id: string; x: number; y: number; z: number }[] = [];
-    const scan = (set: PointSet, ids: string[], bias: number) => {
-      const pos = set.pos.attr.array as Float32Array, size = set.size.array as Float32Array, show = set.show.array as Float32Array;
-      const world = set.pos.world;
-      for (let i = 0; i < ids.length; i++) {
-        if (size[i] === 0 || show[i] === 0) continue;
-        if (world[i * 3] === 0 && world[i * 3 + 1] === 0 && world[i * 3 + 2] === 0) continue;
-        const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
-        const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
-        if (cw <= 0) continue;
-        const sx = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / cw * 0.5 + 0.5) * w;
-        const sy = (1 - ((m[1] * x + m[5] * y + m[9] * z + m[13]) / cw * 0.5 + 0.5)) * h;
-        const dx = sx - px, dy = sy - py;
-        const r = Math.max(PICK_RADIUS_PX * 0.55, size[i] * 0.5 + 4);
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= r * r) hits.push({ d2: d2 - bias, id: ids[i], x, y, z });
-      }
-    };
-    scan(this.sats, this.propagator.ids, 0);
-    scan(this.dyn, this.dynIds, 60);
-    hits.sort((a, b) => a.d2 - b.d2);
-    for (const hit of hits.slice(0, 8)) {
-      if (!this.occludedRel(hit.x, hit.y, hit.z)) return hit.id;
-    }
+    const source = (set: PointSet, ids: readonly string[], bias: number): PickSource => ({
+      ids, rel: set.pos.attr.array as Float32Array, world: set.pos.world, size: set.size.array as Float32Array, show: set.show.array as Float32Array, bias,
+    });
+    const extras: PickExtra[] = [];
     // a drawn 3D model is pickable as a whole (its sprite is hidden)
     const model = this.models.pick(px, py, m, w, h, PICK_RADIUS_PX);
-    if (model) return model;
+    if (model) extras.push({ id: model, d2: 0 });
     // the selected entity is drawn from the highlight set, not the sat cloud
     if (this.selectedId && this.hi.size.getX(1) > 0) {
       const a = this.hi.pos.attr;
       const p = new THREE.Vector3(a.getX(1), a.getY(1), a.getZ(1));
-      const hidden = this.occludedRel(p.x, p.y, p.z);
+      const rel: [number, number, number] = [p.x, p.y, p.z];
       p.project(this.rcam);
       const dx = (p.x * 0.5 + 0.5) * w - px, dy = (1 - (p.y * 0.5 + 0.5)) * h - py;
-      if (!hidden && p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) return this.selectedId;
+      if (p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) extras.push({ id: this.selectedId, d2: dx * dx + dy * dy, rel });
     }
-    return null;
+    const r = gatherCandidates(
+      [source(this.sats, this.propagator.ids, 0), source(this.dyn, this.dynIds, 60)], extras, m, w, h, px, py,
+      { max, wantTotal, occluded: (x, y, z) => this.occludedRel(x, y, z) },
+    );
+    return { ids: r.items.map((i) => i.id), total: r.total };
+  }
+
+  /** The object a plain click or hover lands on: the nearest visible one. */
+  private pick(px: number, py: number): string | null {
+    return this.pickAll(px, py, 1).ids[0] ?? null;
+  }
+
+  /**
+   * The choice popup's highlight (null: popup closed). The object gets the hover ring, the mouse hover is suspended while
+   * a highlight is set (the popup is a sibling of the canvas, so the pointer leaving the canvas must not clear it).
+   */
+  setPreview(id: string | null): void {
+    if (id === this.previewId) return;
+    this.previewId = id;
+    this.hoverId = id;
+    this.scopeDirty = true; // the hovered object is exempt from scope thinning
+    this.renderer.domElement.style.cursor = '';
+    this.cb.onHover(null);
   }
 
   // ------------------------------------------------------------------ interaction
@@ -1096,8 +1111,13 @@ export class SceneController {
       if (!d || e.button !== 0) return;
       const p = rel(e);
       if (Math.hypot(p.x - d.x, p.y - d.y) > 4 || performance.now() - d.t > 600) return;
-      const id = this.pick(p.x, p.y);
-      if (id) this.cb.onPick(id);
+      // one candidate selects it; several open the choice popup (its first entry is what pick() returns)
+      const { ids, total } = this.pickAll(p.x, p.y, POPUP_MAX, true);
+      if (ids.length === 1 || (ids.length > 1 && !this.cb.onPickMany)) this.cb.onPick(ids[0]);
+      else if (ids.length > 1) {
+        this.setHover(null);
+        this.cb.onPickMany?.(ids, total, p.x, p.y);
+      }
     };
     const onLeave = () => {
       this.mouse = null;
@@ -1116,6 +1136,7 @@ export class SceneController {
   }
 
   private setHover(id: string | null, x = 0, y = 0): void {
+    if (this.previewId) return; // the popup's highlight owns the hover ring
     this.hoverId = id;
     this.renderer.domElement.style.cursor = id ? 'pointer' : '';
     this.cb.onHover(id ? { id, x, y } : null);

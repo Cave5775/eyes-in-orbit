@@ -415,3 +415,18 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
   .topbar { overflow-x: auto; }
   .bottom { grid-template-columns: 1fr; }
 }
+
+/* ---- pick popup (ui/PickPopup.tsx): choice list when a click lands on overlapping objects ---- */
+.pick-pop { right: auto; bottom: auto; z-index: 8; width: 280px; max-width: calc(100% - 8px); padding: 6px 6px 4px; user-select: none; }
+.pick-pop .pop-title { padding: 0 4px; }
+.pick-row {
+  display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; padding: 4px 6px;
+  background: transparent; border: 0; border-left: 2px solid transparent; border-radius: 0; color: var(--text); text-align: left;
+  font-family: var(--mono); font-size: 11px; cursor: pointer;
+}
+.pick-row.on { background: rgba(79, 179, 217, 0.14); border-left-color: var(--accent); }
+.pick-row i { width: 8px; height: 8px; border-radius: 50%; }
+.pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-kind { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+.pick-more { padding: 4px 6px 0; font-size: 10.5px; color: var(--dim); }
+.pick-hint { margin-top: 4px; padding: 4px 6px 0; border-top: 1px solid var(--line); font-size: 9.5px; letter-spacing: 0.08em; color: var(--dim); }

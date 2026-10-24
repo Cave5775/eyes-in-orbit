@@ -1,0 +1,150 @@
+import { describe, expect, it } from 'vitest';
+import { CLUSTER_PX, gatherCandidates, moveIndex, popupPlacement, wheelSteps, type PickSource } from '../src/lib/pick';
+
+// Identity projection-view: ndc = (x, y), w = h = 200, so screen x = 100 + 100 x and screen y = 100 - 100 y.
+const M = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+const W = 200, H = 200;
+const sx = (px: number) => (px - 100) / 100;
+const sy = (py: number) => (100 - py) / 100;
+const never = (_x: number, _y: number, _z: number): boolean => false;
+
+/** points given as screen px; z is arbitrary (identity matrix: w = 1) */
+function source(pts: { id: string; x: number; y: number; size?: number; show?: number }[], bias = 0): PickSource & { rel: Float32Array; world: Float32Array } {
+  const n = pts.length;
+  const rel = new Float32Array(n * 3), world = new Float32Array(n * 3), size = new Float32Array(n), show = new Float32Array(n);
+  pts.forEach((p, i) => {
+    rel.set([sx(p.x), sy(p.y), 0], i * 3);
+    world.set([7000, 0, 0], i * 3);
+    size[i] = p.size ?? 4;
+    show[i] = p.show ?? 1;
+  });
+  return { ids: pts.map((p) => p.id), rel, world, size, show, bias };
+}
+
+const run = (src: PickSource[], extras: Parameters<typeof gatherCandidates>[1], max = 12, occluded: (x: number, y: number, z: number) => boolean = never, wantTotal = true) =>
+  gatherCandidates(src, extras, M, W, H, 100, 100, { max, occluded, wantTotal });
+
+describe('gatherCandidates', () => {
+  it('returns one entry for an isolated object and none for an empty spot', () => {
+    expect(run([source([{ id: 'a', x: 103, y: 100 }, { id: 'far', x: 160, y: 100 }])], []).items.map((h) => h.id)).toEqual(['a']);
+    expect(run([source([{ id: 'far', x: 160, y: 100 }])], []).items).toEqual([]);
+  });
+
+  it('lists everything within the cluster radius, nearest first', () => {
+    const r = run([source([
+      { id: 'c', x: 100 + CLUSTER_PX - 1, y: 100 },
+      { id: 'a', x: 101, y: 100 },
+      { id: 'b', x: 100, y: 105 },
+      { id: 'out', x: 100 + CLUSTER_PX + 2, y: 100 },
+    ])], []);
+    expect(r.items.map((h) => h.id)).toEqual(['a', 'b', 'c']);
+    expect(r.items[1].dist).toBeCloseTo(5, 5);
+    expect(r.total).toBe(3);
+  });
+
+  it('honours a larger own hit radius (a big marker is hit from further away)', () => {
+    expect(run([source([{ id: 'big', x: 100 + CLUSTER_PX + 4, y: 100, size: 40 }])], []).items.map((h) => h.id)).toEqual(['big']);
+  });
+
+  it('skips points that are not drawn, scoped out, unpositioned or behind the camera', () => {
+    const s = source([
+      { id: 'hidden', x: 100, y: 100, size: 0 },
+      { id: 'scoped', x: 100, y: 101, show: 0 },
+      { id: 'nopos', x: 100, y: 102 },
+      { id: 'behind', x: 100, y: 103 },
+      { id: 'ok', x: 100, y: 104 },
+    ]);
+    s.world[2 * 3] = s.world[2 * 3 + 1] = s.world[2 * 3 + 2] = 0;
+    // behind the camera: w = m[3] x + m[7] y + m[11] z + m[15]; use a matrix that makes w = 1 - z
+    const m = new Float32Array(M);
+    m[11] = -1;
+    (s.rel as Float32Array)[3 * 3 + 2] = 2;
+    const r = gatherCandidates([s], [], m, W, H, 100, 100, { max: 12, occluded: never });
+    expect(r.items.map((h) => h.id)).toEqual(['ok']);
+  });
+
+  it('drops objects behind a body, and the list and the first entry stay consistent', () => {
+    const s = source([{ id: 'near-but-hidden', x: 100, y: 100 }, { id: 'visible', x: 106, y: 100 }]);
+    const occ = (x: number) => Math.abs(x) < 0.001; // the point at screen x = 100 is behind the Earth
+    const r = run([s], [], 12, occ);
+    expect(r.items.map((h) => h.id)).toEqual(['visible']);
+    // a single click takes the first element of the same call
+    expect(run([s], [], 1, occ, false).items[0].id).toBe(r.items[0].id);
+  });
+
+  it('is not limited to the nearest 8: a hidden crowd cannot hide the visible object behind it', () => {
+    const pts = Array.from({ length: 20 }, (_, i) => ({ id: `h${i}`, x: 100 + (i % 3), y: 100 + Math.floor(i / 3) * 0.1 }));
+    pts.push({ id: 'v', x: 100, y: 108 });
+    // screen y 100..100.6 is ndc y 0..-0.006; v is at -0.08. Everything above -0.07 is behind the Earth
+    const r = run([source(pts)], [], 12, (_x, y) => y > -0.07);
+    expect(r.items.map((h) => h.id)).toEqual(['v']);
+  });
+
+  it('caps the list and counts the rest', () => {
+    const pts = Array.from({ length: 30 }, (_, i) => ({ id: `s${i}`, x: 100 + (i % 5) * 0.5, y: 100 + Math.floor(i / 5) * 0.5 }));
+    const r = run([source(pts)], [], 12);
+    expect(r.items).toHaveLength(12);
+    expect(r.total).toBe(30);
+    const quick = run([source(pts)], [], 12, never, false);
+    expect(quick.items).toHaveLength(12);
+    expect(quick.total).toBeLessThan(30);
+  });
+
+  it('prefers a propagated object over a cloud point on a near tie (bias)', () => {
+    const cloud = source([{ id: 'cloud', x: 103, y: 100 }]);
+    const dyn = source([{ id: 'dyn', x: 105, y: 100 }], 60);
+    expect(run([cloud, dyn], []).items.map((h) => h.id)).toEqual(['dyn', 'cloud']);
+    expect(run([cloud, source([{ id: 'dyn', x: 112, y: 100, size: 40 }], 60)], []).items[0].id).toBe('cloud');
+  });
+
+  it('de-duplicates an id found in two places and merges extras (model, selection ring)', () => {
+    const a = source([{ id: 'iss', x: 104, y: 100 }]);
+    const b = source([{ id: 'iss', x: 104, y: 100 }]);
+    const r = run([a, b], [{ id: 'model', d2: 0 }, { id: 'sel', d2: 9, rel: [sx(100), sy(100), 0] }]);
+    expect(r.items.map((h) => h.id)).toEqual(['model', 'sel', 'iss']);
+    expect(r.total).toBe(3);
+    // an extra with a position is occlusion-checked, one without is not
+    const hidden = run([], [{ id: 'model', d2: 0 }, { id: 'sel', d2: 9, rel: [0, 0, 0] }], 12, () => true);
+    expect(hidden.items.map((h) => h.id)).toEqual(['model']);
+  });
+});
+
+describe('wheelSteps', () => {
+  it('turns one mouse notch into one step and accumulates trackpad deltas', () => {
+    expect(wheelSteps(0, 100)).toEqual({ acc: 0, steps: 1 });
+    let acc = 0, total = 0;
+    for (let i = 0; i < 10; i++) {
+      const r = wheelSteps(acc, 20);
+      acc = r.acc;
+      total += r.steps;
+    }
+    expect(total).toBe(2); // 200 px = two steps
+    expect(wheelSteps(0, -120).steps).toBeLessThan(0);
+  });
+
+  it('drops leftovers when the direction flips and scales line mode', () => {
+    expect(wheelSteps(30, -10).steps).toBe(0);
+    expect(wheelSteps(30, -10).acc).toBe(-10);
+    expect(wheelSteps(0, 3, 1).steps).toBe(1); // 3 lines is one notch
+  });
+});
+
+describe('moveIndex', () => {
+  it('clamps at both ends', () => {
+    expect(moveIndex(0, -1, 5)).toBe(0);
+    expect(moveIndex(3, 5, 5)).toBe(4);
+    expect(moveIndex(1, 2, 5)).toBe(3);
+    expect(moveIndex(0, 1, 0)).toBe(0);
+  });
+});
+
+describe('popupPlacement', () => {
+  it('opens right and below the cursor, flips near the edges and stays inside', () => {
+    expect(popupPlacement(100, 100, 200, 100, 800, 600)).toEqual({ left: 112, top: 112 });
+    expect(popupPlacement(750, 100, 200, 100, 800, 600).left).toBe(538);
+    expect(popupPlacement(100, 560, 200, 100, 800, 600).top).toBe(448);
+    const p = popupPlacement(5, 5, 900, 700, 800, 600);
+    expect(p.left).toBeGreaterThanOrEqual(4);
+    expect(p.top).toBeGreaterThanOrEqual(4);
+  });
+});
