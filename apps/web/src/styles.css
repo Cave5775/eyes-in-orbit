@@ -243,9 +243,10 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .scene-help { left: 10px; right: auto; top: 46px; width: min(420px, calc(100% - 20px)); z-index: 6; }
 .help-row { display: grid; grid-template-columns: 136px 1fr; gap: 8px; padding: 3px 0; border-top: 1px solid var(--line); font-size: 11.5px; }
 .help-row kbd { font-family: var(--mono); font-size: 10.5px; color: var(--accent); letter-spacing: 0.04em; }
+/* colour key: a vertical list that lives in the .scene-top stack, under the frame bar, so it moves with it and cannot overlap it */
 .scene-legend {
-  position: absolute; top: 46px; right: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: flex-end; max-width: 60%;
-  z-index: 4; font-size: 10.5px; color: var(--dim); pointer-events: none;
+  display: flex; flex-direction: column; gap: 3px; padding: 4px 8px; font-size: 10.5px; color: var(--dim);
+  background: rgba(10, 15, 21, 0.82); border: 1px solid var(--line); border-radius: 3px; pointer-events: none;
 }
 .scene-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
 .scene-hud { position: absolute; left: 10px; right: 10px; bottom: 8px; z-index: 4; display: flex; flex-wrap: wrap; gap: 2px 14px; white-space: nowrap; font-size: 10.5px; color: var(--dim); pointer-events: none; letter-spacing: 0.06em; }
@@ -258,7 +259,6 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .hud-toggle:hover { color: var(--text); border-color: var(--accent); }
 .hud-toggle.on { color: var(--accent); border-color: var(--accent); }
 .scene-hud > span:nth-child(1) { min-width: 15ch; }
-.scene-hud > span:nth-child(4) { min-width: 7ch; }
 
 /* ---- entity browser ---- */
 .search { padding: 8px 10px 0; flex: none; }
@@ -464,9 +464,9 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 /* the scene's top-left stack: the action buttons, then the frame bar under them */
 .scene-top { position: absolute; top: 10px; left: 10px; z-index: 4; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: calc(100% - 20px); pointer-events: none; }
 .scene-top > * { pointer-events: auto; }
+.scene-top > .scene-legend { pointer-events: none; }
 .scene-top > .scene-actions { position: static; max-width: 100%; }
 .scene-help { top: 84px; }
-.scene-legend { top: 100px; } /* under the frame bar, which can be as wide as the scene */
 .frame-bar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: 100%; padding: 3px 6px;
   background: rgba(10, 15, 21, 0.78); border: 1px solid var(--line-2); border-radius: 3px; font-family: var(--mono); font-size: 11px;

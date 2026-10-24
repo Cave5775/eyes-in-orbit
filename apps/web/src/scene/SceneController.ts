@@ -73,13 +73,9 @@ export interface SceneStats {
   altKm: number;
   satCount: number;
   dynCount: number;
-  earth: 'texture' | 'procedural';
-  /** width in pixels of the Earth map in use (0: procedural) and the GPU's maximum texture size */
-  earthPx: number;
   /** streamed close-up imagery over the base map: the tile level and how many of its tiles have arrived (null: not active) */
   detail: DetailStats | null;
   detailEnabled: boolean;
-  maxTexturePx: number;
   shellSelected: boolean;
   /** surface-aligned camera mode */
   surface: boolean;
@@ -164,8 +160,6 @@ export class SceneController {
   private frameCentre: Centre = EARTH_CENTRE;
   private frameLocked = false;
   private earthMat: THREE.ShaderMaterial;
-  private earthMode: 'texture' | 'procedural' = 'procedural';
-  private earthPx = 0;
   private detail = new EarthDetail();
   private lastDetailAt = 0;
   private detailDir = new THREE.Vector3();
@@ -864,11 +858,8 @@ export class SceneController {
       altKm: this.rig.altitudeKm,
       satCount: this.propagator.ids.length,
       dynCount: this.dynIds.length,
-      earth: this.earthMode,
-      earthPx: this.earthPx,
       detail: this.detail.stats,
       detailEnabled: this.detail.enabled,
-      maxTexturePx: this.renderer.capabilities.maxTextureSize,
       shellSelected: this.shellSelected,
       surface: this.surfaceOn,
       path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
@@ -918,27 +909,19 @@ export class SceneController {
   }
 
   /**
-   * Earth map: the high-resolution file (`npm run assets`) when it exists, else the 2k one, else the procedural shading
-   * stays. A map wider than the GPU's maximum texture size is scaled down to that size rather than dropped, so a small GPU
-   * still gets the best map it can hold. A missing file shows up as a failed load (the dev server answers with its HTML page).
+   * Earth map: the single high-resolution file (`npm run assets`, 8192 px) when it exists, else the procedural shading
+   * stays (there is no lower-resolution fallback; close views use the streamed DETAIL tiles). A map wider than the GPU's
+   * maximum texture size is scaled down to that size rather than dropped, so a small GPU still gets the best map it can
+   * hold. A missing file shows up as a failed load (the dev server answers with its HTML page).
    */
   private loadEarthTexture(): void {
     const max = this.renderer.capabilities.maxTextureSize;
-    const apply = (tex: THREE.Texture, px: number) => {
+    const apply = (tex: THREE.Texture) => {
       tex.colorSpace = THREE.NoColorSpace;
       tex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
       this.earthMat.uniforms.uTex.value?.dispose?.();
       this.earthMat.uniforms.uTex.value = tex;
       this.earthMat.uniforms.uHasTex.value = 1;
-      this.earthMode = 'texture';
-      this.earthPx = px;
-    };
-    const loadStandard = (why: string) => {
-      console.info(`[earth] using earth.jpg: ${why}`);
-      new THREE.TextureLoader().load('/textures/earth.jpg', (tex) => {
-        if (this.disposed) tex.dispose();
-        else apply(tex, (tex.image as { width: number }).width);
-      }, undefined, () => console.info('[earth] earth.jpg is missing too: procedural Earth (run npm run assets)'));
     };
     new THREE.TextureLoader().load(
       '/textures/earth-hires.jpg',
@@ -947,19 +930,19 @@ export class SceneController {
         const img = tex.image as HTMLImageElement;
         if (img.width <= max) {
           console.info(`[earth] using earth-hires.jpg (${img.width} x ${img.height})`);
-          return apply(tex, img.width);
+          return apply(tex);
         }
-        // too wide for this GPU: scale down to the limit (keeping the aspect ratio) instead of falling back to 2k
+        // too wide for this GPU: scale down to the limit (keeping the aspect ratio) instead of dropping the map
         const canvas = document.createElement('canvas');
         canvas.width = max;
         canvas.height = Math.max(1, Math.round((max * img.height) / img.width));
         canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
         tex.dispose();
         console.info(`[earth] using earth-hires.jpg scaled from ${img.width} to ${max} px (GPU texture limit)`);
-        apply(new THREE.CanvasTexture(canvas), max);
+        apply(new THREE.CanvasTexture(canvas));
       },
       undefined,
-      () => loadStandard('earth-hires.jpg is missing (run npm run assets, then reload the page)'),
+      () => console.info('[earth] earth-hires.jpg is missing: procedural Earth (run npm run assets, then reload the page)'),
     );
   }
 

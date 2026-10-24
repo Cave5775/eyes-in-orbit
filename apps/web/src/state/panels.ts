@@ -1,20 +1,21 @@
 import { create } from 'zustand';
 
 /** Panels the PANELS menu can show and hide. */
-export type PanelId = 'dsn' | 'board' | 'ticker';
+export type PanelId = 'dsn' | 'board' | 'ticker' | 'legend';
 export type PanelVisibility = Record<PanelId, boolean>;
 
-export const PANEL_IDS: readonly PanelId[] = ['dsn', 'board', 'ticker'];
+export const PANEL_IDS: readonly PanelId[] = ['dsn', 'board', 'ticker', 'legend'];
 
 /** What the menu shows for each panel (label, one-line hint). */
 export const PANEL_INFO: Record<PanelId, { label: string; hint: string }> = {
   dsn: { label: 'DSN', hint: 'Deep Space Network: dishes, links and ranges' },
   board: { label: 'LAUNCH BOARD', hint: 'Upcoming launches with countdowns' },
   ticker: { label: 'NEWS TICKER', hint: 'Scrolling spaceflight headlines' },
+  legend: { label: 'COLOUR LEGEND', hint: 'Colour key for the scene, top left under the frame bar' },
 };
 
 /** The DSN panel starts hidden; the rest start shown. */
-export const DEFAULT_PANELS: PanelVisibility = { dsn: false, board: true, ticker: true };
+export const DEFAULT_PANELS: PanelVisibility = { dsn: false, board: true, ticker: true, legend: true };
 
 export const PANELS_STORAGE_KEY = 'eio.panels.v1';
 

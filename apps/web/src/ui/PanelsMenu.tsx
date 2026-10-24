@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { PANEL_IDS, PANEL_INFO, usePanels } from '../state/panels';
 
 /**
- * Top bar menu that shows and hides the optional panels (DSN, launch board, news ticker). The state lives in
+ * Top bar menu that shows and hides the optional panels (DSN, launch board, news ticker, scene colour legend). The state lives in
  * `state/panels.ts` and is remembered per browser. Closes on an outside click and on Esc.
  */
 export function PanelsMenu() {
@@ -37,7 +37,7 @@ export function PanelsMenu() {
     <div className="health panels-menu" ref={root}>
       <button
         ref={button} className={open ? 'btn health-btn panels-btn active' : 'btn health-btn panels-btn'} onClick={() => setOpen((o) => !o)}
-        aria-expanded={open} aria-haspopup="true" aria-label="Panels menu: show or hide panels" title="Panels: show or hide the DSN panel, launch board and news ticker">
+        aria-expanded={open} aria-haspopup="true" aria-label="Panels menu: show or hide panels" title="Panels: show or hide the DSN panel, launch board, news ticker and colour legend">
         <svg className="panels-icon" width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">
           <path d="M1 1.5h12M1 6h12M1 10.5h12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>

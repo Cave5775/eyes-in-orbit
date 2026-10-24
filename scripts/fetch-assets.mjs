@@ -1,4 +1,4 @@
-// Downloads optional runtime assets. The web app works without them (procedural Earth fallback).
+// Downloads optional runtime assets: the Earth map (8192 px) and the Moon map. The web app works without them (procedural fallback).
 //   npm run assets
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -9,13 +9,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // `minWidth` guards against image services that answer with a small preview instead of the full image.
 const ASSETS = [
   {
-    // three.js example texture derived from NASA Blue Marble imagery (public domain source data)
-    url: 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg',
-    out: 'apps/web/public/textures/earth.jpg',
-    minBytes: 50_000,
-    minWidth: 2000,
-  },
-  {
     // three.js example texture of the Moon (equirectangular, from NASA LRO imagery); used by the Moon view
     url: 'https://threejs.org/examples/textures/planets/moon_1024.jpg',
     out: 'apps/web/public/textures/moon.jpg',
@@ -24,9 +17,9 @@ const ASSETS = [
   },
   {
     // NASA Blue Marble Next Generation (topography and bathymetry, August), resized by NASA's image service from the
-    // 21600 x 10800 original (500 m per pixel at the equator) to 8192 x 4096 (4.9 km per texel). The scene prefers this file
-    // over earth.jpg and scales it down on GPUs with a smaller texture limit; it takes about 180 MB of video memory with
-    // mipmaps. The service returns a 1280 x 640 preview unless the size is requested, and refuses sizes above 8192.
+    // 21600 x 10800 original (500 m per pixel at the equator) to 8192 x 4096 (4.9 km per texel). It is the only Earth map: the
+    // scene scales it down on GPUs with a smaller texture limit (and streams finer DETAIL tiles for close views); it takes
+    // about 180 MB of video memory with mipmaps. The service returns a 1280 x 640 preview unless the size is requested, and refuses sizes above 8192.
     // NASA imagery is generally free to use; check NASA's media usage guidelines. EARTH_HIRES_URL swaps in any other
     // equirectangular JPEG (a 4096 x 2048 map for a small GPU, say).
     url: process.env.EARTH_HIRES_URL
@@ -67,6 +60,6 @@ for (const a of ASSETS) {
     console.log(`ok   ${a.out} (${(buf.length / 1024).toFixed(0)} KiB${size ? `, ${size.w} x ${size.h}` : ''})`);
   } catch (err) {
     console.warn(`skip ${a.out}: ${err instanceof Error ? err.message : err}`);
-    console.warn('     The app falls back to a lower-resolution or procedural Earth; download any equirectangular JPG to that path to override.');
+    console.warn('     The app falls back to the procedural Earth (or the Moon without a map); download any equirectangular JPG to that path to override.');
   }
 }

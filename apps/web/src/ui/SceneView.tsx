@@ -5,6 +5,7 @@ import { colorKeyOf, kindLabel } from '../lib/entity';
 import { relatedFor } from '../lib/related';
 import { modelDef } from '../scene/models/registry';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
+import { usePanels } from '../state/panels';
 import { clock, runtime } from '../state/runtime';
 import { useStore } from '../state/store';
 import { FrameBar } from './FrameBar';
@@ -25,7 +26,7 @@ const HELP: [string, string][] = [
   ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or SURFACE switches to the globe view, and that choice is remembered until you press S again'],
   ['Esc', 'Deselect and return to the Earth view'],
   ['MODEL', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or MODEL on such a selection flies to it'],
-  ['PANELS (top bar)', 'Show or hide the DSN panel (hidden by default), the launch board and the news ticker; the space is given back to the globe and the choice is remembered'],
+  ['PANELS (top bar)', 'Show or hide the DSN panel (hidden by default), the launch board, the news ticker and the colour legend (top left of the scene); a hidden panel gives its space back to the globe and the choice is remembered'],
   ['H', 'Show / hide this help'],
 ];
 
@@ -52,6 +53,7 @@ export function SceneView() {
     useStore.getState().select(id);
   }, []);
   const highlightPick = useCallback((id: string | null) => scene.current?.setPreview(id), []);
+  const showLegend = usePanels((s) => s.visible.legend);
   const selectedId = useStore((s) => s.selectedId);
   const follow = useStore((s) => s.follow);
   const resetView = useStore((s) => s.resetView);
@@ -250,6 +252,13 @@ export function SceneView() {
         <button className={help ? 'btn icon active' : 'btn icon'} onClick={() => setHelp((v) => !v)} aria-pressed={help} title="Controls (H)">?</button>
       </div>
       <FrameBar />
+      {showLegend && (
+        <div className="scene-legend" aria-label="Colour legend">
+          {LEGEND.map(([k, label]) => (
+            <span key={k}><i style={{ background: `var(--c-${k})` }} />{label}</span>
+          ))}
+        </div>
+      )}
       </div>
       {help && (
         <div className="popover scene-help" role="dialog" aria-label="Scene controls">
@@ -259,22 +268,17 @@ export function SceneView() {
           ))}
         </div>
       )}
-      <div className="scene-legend">
-        {LEGEND.map(([k, label]) => (
-          <span key={k}><i style={{ background: `var(--c-${k})` }} />{label}</span>
-        ))}
-      </div>
       <div className="scene-hud mono">
         {stats && (
           <>
             <span>CAM {fmtDist(stats.distKm)}{!stats.frame.isDefault || stats.frame.locked ? ` FROM ${stats.frame.label.toUpperCase()}` : ''}{stats.frame.locked ? ' [LOCKED]' : ''}</span>
-            <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>            <span title={`Earth map width in pixels (GPU texture limit ${stats.maxTexturePx}). Run npm run assets and reload the page for the high-resolution map.`}>EARTH {stats.earth === 'texture' ? `TEXTURE ${stats.earthPx}` : 'PROCEDURAL'}</span>
+            <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>
             {stats.detail && (
               <span className="accent" title="Streamed close-up imagery over the base map: tile level (0.6 km per pixel at 6) and tiles received of the 4 x 4 window. Missing tiles show the base map.">
                 DETAIL Z{stats.detail.z} {stats.detail.ready}/{stats.detail.total}
               </span>
             )}
-            <span>{Math.round(stats.fps)} FPS</span>
+            <span style={{ minWidth: '7ch' }}>{Math.round(stats.fps)} FPS</span>
             <span style={{ minWidth: '24ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">
               RENDERED {stats.scope.rendered.toLocaleString('en-US')} / {stats.scope.total.toLocaleString('en-US')}
             </span>

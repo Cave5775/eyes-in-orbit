@@ -19,7 +19,12 @@ const broken: StorageLike = {
 
 describe('panel visibility defaults', () => {
   it('hides the DSN panel and shows the rest', () => {
-    expect(DEFAULT_PANELS).toEqual({ dsn: false, board: true, ticker: true });
+    expect(DEFAULT_PANELS).toEqual({ dsn: false, board: true, ticker: true, legend: true });
+  });
+
+  it('keeps stored state from before the legend existed working (missing key takes its default)', () => {
+    expect(parsePanels('{"dsn":true,"board":false,"ticker":true}')).toEqual({ dsn: true, board: false, ticker: true, legend: true });
+    expect(parsePanels('{"legend":false}')).toEqual({ dsn: false, board: true, ticker: true, legend: false });
   });
 
   it('falls back to the defaults for empty, malformed or non-object input', () => {
@@ -29,29 +34,29 @@ describe('panel visibility defaults', () => {
 
 describe('parse and serialise', () => {
   it('round-trips every combination', () => {
-    for (let n = 0; n < 8; n++) {
-      const state = { dsn: !!(n & 1), board: !!(n & 2), ticker: !!(n & 4) };
+    for (let n = 0; n < 16; n++) {
+      const state = { dsn: !!(n & 1), board: !!(n & 2), ticker: !!(n & 4), legend: !!(n & 8) };
       expect(parsePanels(serialisePanels(state))).toEqual(state);
     }
   });
 
   it('takes valid booleans, keeps the default for the rest and drops unknown keys', () => {
-    expect(parsePanels('{"dsn":true,"board":"no","ticker":0,"extra":true}')).toEqual({ dsn: true, board: true, ticker: true });
-    expect(parsePanels('{"board":false}')).toEqual({ dsn: false, board: false, ticker: true });
-    expect(Object.keys(parsePanels('{"extra":1}'))).toEqual(['dsn', 'board', 'ticker']);
+    expect(parsePanels('{"dsn":true,"board":"no","ticker":0,"extra":true}')).toEqual({ dsn: true, board: true, ticker: true, legend: true });
+    expect(parsePanels('{"board":false}')).toEqual({ dsn: false, board: false, ticker: true, legend: true });
+    expect(Object.keys(parsePanels('{"extra":1}'))).toEqual(['dsn', 'board', 'ticker', 'legend']);
   });
 
   it('serialises only the known keys', () => {
-    expect(JSON.parse(serialisePanels({ dsn: true, board: false, ticker: true, extra: 1 } as never))).toEqual({ dsn: true, board: false, ticker: true });
+    expect(JSON.parse(serialisePanels({ dsn: true, board: false, ticker: true, legend: false, extra: 1 } as never))).toEqual({ dsn: true, board: false, ticker: true, legend: false });
   });
 });
 
 describe('storage access', () => {
   it('saves under the documented key and loads it back', () => {
     const s = memoryStorage();
-    expect(savePanels({ dsn: true, board: true, ticker: false }, s)).toBe(true);
+    expect(savePanels({ dsn: true, board: true, ticker: false, legend: false }, s)).toBe(true);
     expect(Object.keys(s.data)).toEqual([PANELS_STORAGE_KEY]);
-    expect(loadPanels(s)).toEqual({ dsn: true, board: true, ticker: false });
+    expect(loadPanels(s)).toEqual({ dsn: true, board: true, ticker: false, legend: false });
   });
 
   it('never throws when storage is missing or denies access', () => {
