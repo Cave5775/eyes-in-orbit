@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { CLUSTER_PX, gatherCandidates, moveIndex, popupPlacement, wheelSteps, type PickSource } from '../src/lib/pick';
+import { bodyEntityRecords, entityRank } from '@eio/core';
+import {
+  CLUSTER_PX, bodyHitRadiusPx, bodyPickExtra, gatherCandidates, moveIndex, popupPlacement, rankMap, wheelSteps, type PickSource,
+} from '../src/lib/pick';
 
 // Identity projection-view: ndc = (x, y), w = h = 200, so screen x = 100 + 100 x and screen y = 100 - 100 y.
 const M = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
@@ -106,6 +109,80 @@ describe('gatherCandidates', () => {
     // an extra with a position is occlusion-checked, one without is not
     const hidden = run([], [{ id: 'model', d2: 0 }, { id: 'sel', d2: 9, rel: [0, 0, 0] }], 12, () => true);
     expect(hidden.items.map((h) => h.id)).toEqual(['model']);
+  });
+});
+
+describe('hierarchy rank', () => {
+  it('lists a lower rank first even when a higher one is nearer the cursor; equal ranks keep the distance order', () => {
+    const near = source([{ id: 'sat', x: 101, y: 100 }]);
+    const r = run([near], [{ id: 'moon', d2: 81, rank: 2000 }, { id: 'earth', d2: 100, rank: 1000 }]);
+    expect(r.items.map((h) => h.id)).toEqual(['earth', 'moon', 'sat']);
+    // equal ranks: nearest first, as without ranks
+    const eq = run([source([{ id: 'far', x: 107, y: 100 }, { id: 'near', x: 102, y: 100 }])], [{ id: 'a', d2: 30, rank: 5 }, { id: 'b', d2: 4, rank: 5 }]);
+    expect(eq.items.map((h) => h.id)).toEqual(['b', 'a', 'near', 'far']);
+  });
+
+  it('takes ranks per point, per extra or from the id map; missing ranks last', () => {
+    const s = source([{ id: 'p1', x: 101, y: 100 }, { id: 'p2', x: 102, y: 100 }, { id: 'p3', x: 103, y: 100 }]);
+    s.rank = [1e6 + 3, 1e6 + 2]; // p3 has none per point: the id map supplies it
+    const ranks = new Map([['p3', 1e6 + 1]]);
+    const r = gatherCandidates([s], [{ id: 'x', d2: 0 }], M, W, H, 100, 100, { max: 12, occluded: never, ranks });
+    // p3 from the map, p2 and p1 per point, the unranked extra last although it is dead centre
+    expect(r.items.map((h) => h.id)).toEqual(['p3', 'p2', 'p1', 'x']);
+  });
+
+  it('builds the id map with the core entity rank (bodies first, then by the body they orbit)', () => {
+    const recs = [
+      { id: 'sat', bodyId: 'EARTH' }, { id: 'lro', bodyId: 'MOON' }, { id: 'probe', bodyId: 'SUN' },
+      ...bodyEntityRecords(),
+    ];
+    const m = rankMap(recs);
+    const order = [...m.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+    expect(order).toEqual(['body-sun', 'body-earth', 'body-mars', 'body-moon', 'probe', 'sat', 'lro']);
+    expect(m.get('body-moon')).toBe(entityRank(bodyEntityRecords().find((r) => r.id === 'body-moon')!));
+  });
+});
+
+describe('body picking', () => {
+  // fov 60 degrees, viewport 600 px high: 520.8 px focal length
+  const hit = (radiusKm: number, k: number, dist: number) => bodyHitRadiusPx(radiusKm, k, dist, 60, 600);
+
+  it('has a pixel minimum for far or tiny bodies', () => {
+    expect(hit(1737.4, 1, 384_400)).toBe(14); // the Moon from the Earth: 2.4 px + 3
+    expect(bodyHitRadiusPx(1737.4, 1, 384_400, 60, 600, 20)).toBe(20);
+  });
+
+  it('grows with the angular size and is the disc radius plus 3 px', () => {
+    const near = hit(1737.4, 1, 6000), nearer = hit(1737.4, 1, 3000);
+    expect(nearer).toBeGreaterThan(near);
+    expect(near).toBeGreaterThan(14);
+    // r / sqrt(d^2 - r^2) * focal + 3
+    expect(hit(6378.137, 1, 24_000)).toBeCloseTo((6378.137 / Math.sqrt(24_000 ** 2 - 6378.137 ** 2)) * (600 / (2 * Math.tan(Math.PI / 6))) + 3, 9);
+    // the displayed (shrunk) radius counts, not the true one
+    expect(hit(695_700, 0.02, 3e6)).toBeLessThan(hit(695_700, 1, 3e6));
+    // inside the sphere the disc covers the whole view
+    expect(hit(1737.4, 1, 1000)).toBe(600);
+  });
+
+  it('builds a pick extra for a body from its camera-relative centre', () => {
+    // identity matrix: ndc = (x, y), the screen centre is (100, 100) of 200 x 200
+    const base = { id: 'body-moon', radiusKm: 1737.4, k: 1, fovDeg: 60, m: M, w: W, h: H, px: 100, py: 100, rank: 2000 };
+    // on the disc's centre
+    expect(bodyPickExtra({ ...base, rel: [0, 0, 5000] })).toEqual({ id: 'body-moon', d2: 0, rank: 2000 });
+    // 10 px off, inside the 14 px floor
+    const near = bodyPickExtra({ ...base, rel: [sx(110), 0, 1e6] })!;
+    expect(near.d2).toBeCloseTo(100, 5);
+    // 30 px off a far, small Moon: a miss
+    expect(bodyPickExtra({ ...base, rel: [sx(130), 0, 1e6] })).toBeNull();
+    // behind the camera (w = 1 with the identity matrix; make w negative with m[15] = -1)
+    expect(bodyPickExtra({ ...base, m: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, -1]), rel: [0, 0, 0] })).toBeNull();
+    // occlusion check only when asked for
+    expect(bodyPickExtra({ ...base, rel: [0, 0, 5000] })!.rel).toBeUndefined();
+    expect(bodyPickExtra({ ...base, rel: [0, 0, 5000], checkOcclusion: true })!.rel).toEqual([0, 0, 5000]);
+    // the Moon in front of the satellite in the popup order: ranks decide
+    const extra = bodyPickExtra({ ...base, rel: [sx(102), 0, 5000] })!;
+    const r = run([source([{ id: 'sat', x: 100, y: 100 }])], [extra]);
+    expect(r.items.map((h) => h.id)).toEqual(['body-moon', 'sat']);
   });
 });
 

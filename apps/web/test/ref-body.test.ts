@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { EARTH, EntityGraph, moonPositionEci, norm, type Vec3 } from '@eio/core';
+import { EARTH, EntityGraph, bodyStateEci, moonPositionEci, norm, type Vec3 } from '@eio/core';
 import { bodyCentre } from '../src/lib/frame';
 import { computeTelemetry } from '../src/lib/telemetry';
 import { mockSatellites } from '../src/mock/generators';
 import {
-  REF_BODIES, REF_RADIUS_KM, isRefBody, refDisplay, refMaxDistKm, refMinDistKm, refPositionEci, refViewDistKm, relativeToRef,
+  REF_BODIES, REF_LABEL, REF_RADIUS_KM, isRefBody, isRegistryBody, refDisplay, refMaxDistKm, refMinDistKm, refPositionEci, refRadiusKm,
+  refViewDistKm, relativeToRef, type RefBody,
 } from '../src/lib/ref-body';
 import { SHELL_THRESHOLD_KM, shellRadius } from '../src/lib/deepspace';
 
@@ -47,6 +48,54 @@ describe('reference bodies', () => {
     expect(refMaxDistKm('SUN', 1e11, 'true')).toBe(1e11);
     // the compressed Sun is only ~3e6 km out: no need for the 6e8 zoom
     expect(refMaxDistKm('SUN', 3e7, 'compressed')).toBe(3e7);
+  });
+});
+
+describe('reference bodies from the registry (Mars)', () => {
+  it('takes any registry body, with the old names unchanged', () => {
+    expect(isRegistryBody('MARS')).toBe(true);
+    expect(isRegistryBody('CERES')).toBe(false);
+    expect(REF_RADIUS_KM.MARS).toBe(3396.19);
+    expect(REF_LABEL.MARS).toBe('Mars');
+    expect(refRadiusKm('MOON')).toBe(1737.4);
+    const asBody: RefBody = 'MARS'; // any string is a RefBody, the literals stay assignable
+    expect(refPositionEci(asBody, NOW)).toEqual(bodyStateEci('MARS', NOW).r);
+  });
+
+  it('delegates every position to core bodyStateEci (one source of truth)', () => {
+    for (const id of ['EARTH', 'MOON', 'SUN', 'MARS']) expect(refPositionEci(id, NOW)).toEqual(bodyStateEci(id, NOW).r);
+    expect(refPositionEci('NOPE', NOW)).toEqual([0, 0, 0]);
+  });
+
+  it('puts Mars on the deep-space shell with a shell display factor k like the Sun', () => {
+    const real = refPositionEci('MARS', NOW);
+    expect(norm(real)).toBeGreaterThan(5e7);
+    const d = refDisplay('MARS', NOW, 'compressed');
+    expect(norm(d.r)).toBeCloseTo(shellRadius(norm(real)), 3);
+    expect(norm(d.r)).toBeGreaterThan(SHELL_THRESHOLD_KM);
+    expect(norm(d.r)).toBeLessThan(4e6);
+    expect(d.k).toBeCloseTo(shellRadius(norm(real)) / norm(real), 12);
+    expect(d.k).toBeLessThan(0.1);
+    // the disc keeps its true angular size seen from the Earth
+    expect((REF_RADIUS_KM.MARS * d.k) / norm(d.r)).toBeCloseTo(REF_RADIUS_KM.MARS / norm(real), 12);
+    expect(refDisplay('MARS', NOW, 'true')).toEqual({ r: real, k: 1 });
+  });
+
+  it('frames and bounds the camera against the displayed Mars radius', () => {
+    const { k } = refDisplay('MARS', NOW, 'compressed');
+    expect(refViewDistKm('MARS', k)).toBeCloseTo(3396.19 * k * 4, 6);
+    expect(refMinDistKm('MARS', k)).toBeCloseTo(3396.19 * k * 1.02, 6);
+    expect(refViewDistKm('MARS', k)).toBeGreaterThan(refMinDistKm('MARS', k));
+    // the true-scale Mars view reaches the Earth like the Sun view; the compressed one keeps the scale limit
+    expect(refMaxDistKm('MARS', 3e7, 'true')).toBeGreaterThan(1.5e8);
+    expect(refMaxDistKm('MARS', 3e7, 'compressed')).toBe(3e7);
+    expect(refMaxDistKm('EARTH', 3e7, 'true')).toBe(3e7);
+  });
+
+  it('re-expresses a point relative to Mars', () => {
+    const c = refPositionEci('MARS', NOW);
+    relativeToRef('MARS', c, NOW).forEach((x) => expect(x).toBe(0));
+    expect(norm(relativeToRef('MARS', [0, 0, 0], NOW))).toBeCloseTo(norm(c), 3);
   });
 });
 

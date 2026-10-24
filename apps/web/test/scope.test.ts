@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SCOPE_FACTOR, SCOPE_MIN_KM, SCOPE_SOLO_CUT, hash01, inScope, inView, scopeRadius, scopeWeight, type ScopeObject,
+  SCOPE_FACTOR, SCOPE_MIN_KM, SCOPE_SOLO_CUT, hash01, inScope, inView, isScopeExempt, scopeRadius, scopeWeight, type ScopeObject,
 } from '../src/lib/scope';
 import { SHELL_THRESHOLD_KM } from '../src/lib/deepspace';
 
@@ -72,6 +72,18 @@ describe('exemptions and mode', () => {
   it('always keeps selected / related / hovered / filtered-in objects', () => {
     expect(inScope(obj({ d: 1e10, keep: true }), 100)).toBe(true);
     expect(inScope(obj({ d: 1e10, keep: true, bulk: true, key: 3 }), 100)).toBe(true);
+  });
+
+  it('never thins or cuts celestial bodies (star, planet, moon), however far or bulk-flagged', () => {
+    for (const kind of ['star', 'planet', 'moon']) {
+      expect(isScopeExempt(kind)).toBe(true);
+      expect(inScope(obj({ d: 1e10, kind }), 100)).toBe(true);
+      expect(inScope(obj({ d: 1e10, kind, bulk: true, key: 3 }), 100)).toBe(true);
+    }
+    expect(isScopeExempt('satellite')).toBe(false);
+    expect(isScopeExempt(undefined)).toBe(false);
+    expect(inScope(obj({ d: 1e10, kind: 'probe' }), 100)).toBe(false);
+    expect(inScope(obj({ d: 1e10 }), 100)).toBe(false);
   });
 
   it('"all" mode keeps everything', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultBodies } from '@eio/core';
+import { bodyEntityRecords, defaultBodies } from '@eio/core';
 import { bodyCentre, entityCentre } from '../src/lib/frame';
 import { bodyKey, bodyPathKeys, buildTreeRows, entityKey, groupKey, type TreeBody, type TreeItem, type TreeRow } from '../src/lib/entity-tree';
 
@@ -96,6 +96,62 @@ describe('entity tree rows', () => {
     const hits = [{ id: 'x', kind: 'probe' }, { id: 'y', kind: 'probe', bodyId: 'CERES' }];
     const rows = buildTreeRows(hits, { ...base, openAll: true, bodyOf: (h) => (h.id === 'x' ? 'MOON' : undefined) });
     expect(types(rows)).toEqual(['B:SUN', 'B:EARTH', 'B:MOON', 'E:x', 'B:CERES', 'E:y']);
+  });
+
+  describe('body entities as nodes', () => {
+    const bodyItems: TreeItem[] = bodyEntityRecords().map((r) => ({ id: r.id, kind: r.kind, bodyId: r.bodyId, provider: r.provider }));
+    const all = [...bodyItems, ...CATALOG];
+    const bodyRows = (rows: TreeRow[]) => rows.filter((r): r is Extract<TreeRow, { type: 'body' }> => r.type === 'body');
+
+    it('backs the nodes with the entities: entityId on the row, no duplicate rows, counts without the bodies', () => {
+      const rows = buildTreeRows(all, { ...base, openAll: true });
+      const ent = Object.fromEntries(bodyRows(rows).map((r) => [r.bodyId, r.entityId]));
+      expect(ent).toEqual({ SUN: 'body-sun', EARTH: 'body-earth', MOON: 'body-moon', MARS: 'body-mars' });
+      // no body entity is also listed as an ordinary row
+      expect(rows.filter((r) => r.type === 'entity' && r.id.startsWith('body-'))).toEqual([]);
+      expect(rows.filter((r) => r.type === 'entity')).toHaveLength(CATALOG.length);
+      const count = (id: string) => bodyRows(rows).find((r) => r.bodyId === id)!.count;
+      expect(count('SUN')).toBe(CATALOG.length);
+      expect(count('EARTH')).toBe(24);
+      expect(count('MARS')).toBe(1);
+      // same shape as without the body entities
+      expect(types(rows)).toEqual(types(buildTreeRows(CATALOG, { ...base, openAll: true })));
+    });
+
+    it('keeps the collapsed layout and the open path with the entities present', () => {
+      expect(types(buildTreeRows(all, base))).toEqual(['B:SUN', 'B:EARTH', 'B:MOON', 'G:satellite', 'G:station', 'B:MARS']);
+    });
+
+    it('shows a node for a hit body entity even with nothing under it (Mars alone)', () => {
+      const hits = all.filter((r) => r.id === 'body-mars');
+      const rows = buildTreeRows(hits, { ...base, openAll: true });
+      expect(types(rows)).toEqual(['B:SUN', 'B:MARS']);
+      expect(bodyRows(rows).find((r) => r.bodyId === 'MARS')).toMatchObject({ entityId: 'body-mars', count: 0 });
+      expect(bodyRows(rows).find((r) => r.bodyId === 'SUN')!.entityId).toBeUndefined();
+    });
+
+    it('a filtered-out body entity leaves a synthesised node that still has objects under it, with the known entity id', () => {
+      const noBodies = CATALOG;
+      const rows = buildTreeRows(noBodies, { ...base, bodies: BODIES.map((b) => ({ ...b, entityId: `body-${b.id.toLowerCase()}` })) });
+      expect(bodyRows(rows).find((r) => r.bodyId === 'MARS')).toMatchObject({ entityId: 'body-mars', count: 1 });
+      // fallback: a registry body with no entity at all keeps the synthesised node and no entityId
+      const plain = buildTreeRows(noBodies, base);
+      expect(bodyRows(plain).map((r) => r.bodyId)).toEqual(['SUN', 'EARTH', 'MOON', 'MARS']);
+      expect(bodyRows(plain).every((r) => r.entityId === undefined)).toBe(true);
+    });
+
+    it('recognises search hits of body entities through standsForBody', () => {
+      const hit: TreeItem = { id: 'body-moon', kind: 'moon' };
+      const rows = buildTreeRows([hit], { ...base, openAll: true, standsForBody: (h) => (h.id === 'body-moon' ? 'MOON' : undefined) });
+      expect(types(rows)).toEqual(['B:SUN', 'B:EARTH', 'B:MOON']);
+      expect(bodyRows(rows).find((r) => r.bodyId === 'MOON')!.entityId).toBe('body-moon');
+    });
+
+    it('an entity whose body the registry lacks hangs a node off the root', () => {
+      const ceres = { id: 'body-ceres', kind: 'planet', bodyId: 'SUN', provider: { type: 'body', bodyId: 'CERES' } };
+      const rows = buildTreeRows([ceres], { ...base, openAll: true });
+      expect(types(rows)).toEqual(['B:SUN', 'B:CERES']);
+    });
   });
 
   it('bodyPathKeys runs from the root down', () => {

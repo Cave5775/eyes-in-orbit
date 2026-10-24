@@ -69,6 +69,14 @@ Where the implementation decided something or differs from the text above:
 - **Rank** (`entityRank`, smaller = higher up; `compareHierarchy` = rank ascending, then `createdAt ?? updatedAt` descending, then id): body entities by `bodyDepth * 1000 + registry index` (Sun, Earth, Mars, Moon), then every other object by `1e6 + bodyDepth(bodyId) + 1`: objects orbiting the Sun, then those orbiting Earth or Mars (same level, ordered by recency), then those orbiting the Moon; an unknown primary body ranks last. All bodies precede all objects, so a body always comes before anything that orbits it.
 - **`orbitableBodyId(rec)`**: the registry id for a body entity (`provider.type === 'body'`), the entity's own id when `attrs.orbitable === true` (a future large asteroid), else `undefined`. `isBodyEntity(rec)` tests the provider type. `bodyPeriodSec(body, registry)` is `2 pi sqrt(a^3 / gm_parent)` (Moon about 27.4 d, Earth 365.3 d, Mars 687 d; the elements are approximate).
 
+## Web libs for bodies
+
+- `lib/ref-body.ts`: `RefBody` is any registry body id (the literals `EARTH | MOON | SUN` keep autocompleting); `refPositionEci` is core `bodyStateEci(...).r`; radius, `k` (deep-space shell factor), view / min / max distances work for Mars (it sits on the shell like the Sun). `isRefBody` still means the original three, `isRegistryBody` any registry body.
+- `lib/frame.ts`: `isOrbitableBody(id)` = `defaultBodies.has(id)`; `frameForRec(centre, rec)` (or `frameFor(..., standsForBody)`) samples a body entity's own orbit in its parent body's frame whatever the centre is (Moon around the Earth, Earth and Mars around the Sun's current position; the Sun keeps the centre).
+- `lib/orbit.ts`: a body entity's period is `bodyPeriodSec` (the Sun: null), not the satellite closed-orbit test.
+- `lib/pick.ts`: candidates sort by hierarchy rank (`rankMap` / `PickSource.rank` / `PickExtra.rank` / `PickOptions.ranks`; missing ranks last), then by distance; `bodyHitRadiusPx` and `bodyPickExtra` make a drawn body pickable.
+- `lib/entity-tree.ts`: body entities are the tree nodes (`TreeRow.entityId`); registry bodies without an entity keep a synthesised node. `lib/scope.ts`: star / planet / moon kinds are exempt from scope culling.
+
 ## Work split and file ownership (phase 1, parallel)
 
 | Agent | Scope | Owns |

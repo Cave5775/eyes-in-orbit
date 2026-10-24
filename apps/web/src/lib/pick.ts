@@ -5,6 +5,7 @@
  * One scan serves three callers so they cannot disagree: hover and a plain click take the first entry, and a click with
  * more than one entry opens the choice popup (ui/PickPopup.tsx) with the whole list.
  */
+import { entityRank, type BodyRegistry, type EntityRecord } from '@eio/core';
 
 /** Everything whose centre is within this many CSS px of the cursor is a candidate (a point's own hit radius may be larger). */
 export const CLUSTER_PX = 10;
@@ -25,16 +26,23 @@ export interface PickSource {
   show: ArrayLike<number>;
   /** squared px subtracted from the distance when ranking, so a propagated object beats a cloud point on a near tie */
   bias: number;
+  /** hierarchy rank per point (`entityRank`, smaller = listed first); a point without one ranks last */
+  rank?: ArrayLike<number>;
 }
 
-/** A candidate that is not in a point set (a drawn 3D model, the selected object's highlight). */
+/** A candidate that is not in a point set (a drawn 3D model, the selected object's highlight, a drawn body). */
 export interface PickExtra {
   id: string;
   /** squared px from the cursor, used for ranking */
   d2: number;
   /** camera-relative position; when given, an object behind the Earth (or the Moon, the Sun) is dropped */
   rel?: readonly [number, number, number];
+  /** hierarchy rank (`entityRank`, smaller = listed first); missing ranks last */
+  rank?: number;
 }
+
+/** Rank of a candidate without one: after every body and every object ranked by `entityRank` (those are below 2e6). */
+export const DEFAULT_RANK = 1e9;
 
 export interface PickHit {
   id: string;
@@ -50,9 +58,13 @@ export interface PickOptions {
   clusterPx?: number;
   /** is the camera-relative point hidden behind a body? */
   occluded: (x: number, y: number, z: number) => boolean;
+  /** hierarchy rank by entity id for points and extras that carry none of their own (see `rankMap`) */
+  ranks?: ReadonlyMap<string, number>;
 }
 
 interface Raw {
+  /** hierarchy rank: candidates sort by it first */
+  hier: number;
   rank: number;
   d2: number;
   id: string;
@@ -94,13 +106,17 @@ export function gatherCandidates(
       const dx = sx - px, dy = sy - py;
       const r = Math.max(cluster, MIN_HIT_PX, size[i] * 0.5 + 4);
       const d2 = dx * dx + dy * dy;
-      if (d2 <= r * r) raws.push({ rank: d2 - src.bias, d2, id: ids[i], x, y, z, checkOcc: true });
+      if (d2 <= r * r) {
+        const hier = src.rank?.[i] ?? opts.ranks?.get(ids[i]) ?? DEFAULT_RANK;
+        raws.push({ hier, rank: d2 - src.bias, d2, id: ids[i], x, y, z, checkOcc: true });
+      }
     }
   }
   for (const e of extras) {
-    raws.push({ rank: e.d2, d2: e.d2, id: e.id, x: e.rel?.[0] ?? 0, y: e.rel?.[1] ?? 0, z: e.rel?.[2] ?? 0, checkOcc: !!e.rel });
+    const hier = e.rank ?? opts.ranks?.get(e.id) ?? DEFAULT_RANK;
+    raws.push({ hier, rank: e.d2, d2: e.d2, id: e.id, x: e.rel?.[0] ?? 0, y: e.rel?.[1] ?? 0, z: e.rel?.[2] ?? 0, checkOcc: !!e.rel });
   }
-  raws.sort((a, b) => a.rank - b.rank);
+  raws.sort((a, b) => a.hier - b.hier || a.rank - b.rank);
 
   const items: PickHit[] = [];
   const seen = new Set<string>();
@@ -114,6 +130,74 @@ export function gatherCandidates(
     else if (!opts.wantTotal) break;
   }
   return { items, total };
+}
+
+/** Smallest pick radius of a drawn body, px (a far-away Moon or Mars is a dot a few px wide but must be easy to hit). */
+export const BODY_MIN_HIT_PX = 14;
+
+/**
+ * Pick radius (CSS px) of a drawn body: the projected radius of its disc plus 3 px, never below `minPx`. `radiusKm` is the
+ * true radius and `k` the display shrink factor (see `refDisplay`; 1 when nothing is compressed), so `radiusKm * k` is
+ * the radius that is drawn; `distKm` the distance from the camera to the body's centre in display space; `fovDeg` the
+ * vertical field of view and `viewportPx` the viewport height. Inside the sphere the disc covers the view.
+ */
+export function bodyHitRadiusPx(radiusKm: number, k: number, distKm: number, fovDeg: number, viewportPx: number, minPx = BODY_MIN_HIT_PX): number {
+  const r = radiusKm * k;
+  if (!(distKm > r)) return Math.max(minPx, viewportPx);
+  const focalPx = viewportPx / (2 * Math.tan((fovDeg * Math.PI) / 360));
+  // tangent half-angle of the silhouette: r / sqrt(d^2 - r^2)
+  const px = (r / Math.sqrt(distKm * distKm - r * r)) * focalPx;
+  return Math.max(minPx, px + 3);
+}
+
+export interface BodyPickInput {
+  id: string;
+  /** camera-relative position of the body's centre in display space, km */
+  rel: readonly [number, number, number];
+  radiusKm: number;
+  /** display shrink factor of the radius (1: true scale) */
+  k: number;
+  fovDeg: number;
+  /** column-major projection * view matrix and viewport size in CSS px (as for `gatherCandidates`) */
+  m: ArrayLike<number>;
+  w: number;
+  h: number;
+  /** the cursor in CSS px from the viewport's top-left */
+  px: number;
+  py: number;
+  /** hierarchy rank (`entityRank`) */
+  rank?: number;
+  minPx?: number;
+  /** drop it when it is behind another body (the Moon behind the Earth); the Earth itself is not checked against itself */
+  checkOcclusion?: boolean;
+}
+
+/**
+ * The pick extra for a drawn body (Earth, Moon, Sun, Mars), or null when the cursor is not on it or it is behind the
+ * camera. `d2` is the squared px distance from the cursor to the disc's centre; the hit area is `bodyHitRadiusPx`.
+ */
+export function bodyPickExtra(b: BodyPickInput): PickExtra | null {
+  const [x, y, z] = b.rel;
+  const m = b.m;
+  const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+  if (cw <= 0) return null;
+  const sx = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / cw * 0.5 + 0.5) * b.w;
+  const sy = (1 - ((m[1] * x + m[5] * y + m[9] * z + m[13]) / cw * 0.5 + 0.5)) * b.h;
+  const dx = sx - b.px, dy = sy - b.py;
+  const d2 = dx * dx + dy * dy;
+  const R = bodyHitRadiusPx(b.radiusKm, b.k, Math.hypot(x, y, z), b.fovDeg, b.h, b.minPx);
+  if (d2 > R * R) return null;
+  const extra: PickExtra = { id: b.id, d2 };
+  if (b.rank !== undefined) extra.rank = b.rank;
+  if (b.checkOcclusion) extra.rel = [x, y, z];
+  return extra;
+}
+
+/** Hierarchy rank of every entity by id (core `entityRank`), computed once per catalog change for `PickOptions.ranks`. */
+export function rankMap(entities: Iterable<Pick<EntityRecord, 'id' | 'provider' | 'bodyId'>>, registry?: BodyRegistry): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const e of entities) out.set(e.id, entityRank(e, registry));
+  return out;
 }
 
 /** Wheel pixels that make one step of the popup highlight (a mouse notch is 100, so one notch = one row). */

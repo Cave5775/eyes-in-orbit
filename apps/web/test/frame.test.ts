@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EntityGraph, MOON, moonPositionEci, norm, type EntityRecord, type Sample, type Vec3,
+  EntityGraph, MOON, bodyEntityRecords, bodyPeriodSec, bodyStateEci, defaultBodies, moonPositionEci, norm,
+  type EntityRecord, type Sample, type Vec3,
 } from '@eio/core';
 import {
-  EARTH_CENTRE, bodyCentre, centreKey, centreLabel, centrePositionEci, entityCentre, entityRelativeToCentre, frameChainLabel,
-  frameCrumbs, frameFor, framePathPoint, frameSampler, graphLookup, isEarthCentre, isOrbitableBody, relativeState, sameCentre,
+  EARTH_CENTRE, bodyCentre, centreKey, centreLabel, centrePositionEci, centreStateEci, entityCentre, entityRelativeToCentre,
+  frameChainLabel, frameCrumbs, frameFor, frameForRec, framePathPoint, frameSampler, graphLookup, isEarthCentre, isOrbitableBody,
+  relativeState, sameCentre,
 } from '../src/lib/frame';
 import { orbitPeriodSec } from '../src/lib/orbit';
 import { displayPosition, makePathBuffers, samplePath } from '../src/lib/paths';
@@ -49,9 +51,17 @@ describe('centres', () => {
   });
 
   it('knows which bodies can be a frame centre', () => {
-    expect(['EARTH', 'MOON', 'SUN'].every(isOrbitableBody)).toBe(true);
-    expect(isOrbitableBody('MARS')).toBe(false);
+    expect(['EARTH', 'MOON', 'SUN', 'MARS'].every(isOrbitableBody)).toBe(true);
     expect(isOrbitableBody('sat-25544')).toBe(false);
+    expect(isOrbitableBody('body-moon')).toBe(false); // registry ids, not entity ids
+  });
+
+  it('places Mars from the core body state (heliocentric, 5e7 to 4e8 km from the Earth)', () => {
+    const mars = centrePositionEci(bodyCentre('MARS'), NOW, lookup)!;
+    expect(mars).toEqual(bodyStateEci('MARS', NOW).r);
+    expect(norm(mars)).toBeGreaterThan(5e7);
+    expect(norm(mars)).toBeLessThan(4e8);
+    expect(centreStateEci(bodyCentre('SUN'), NOW, lookup)!.v).toEqual(bodyStateEci('SUN', NOW).v);
   });
 
   it('places body centres from the same series the scene draws and entity centres from their state', () => {
@@ -81,6 +91,62 @@ describe('centres', () => {
     expect(frameFor(entityCentre('lro'), 'lro', 'MOON')).toEqual(bodyCentre('MOON'));
     expect(frameFor(entityCentre('iss'), 'lro', 'MOON')).toEqual(entityCentre('iss'));
     expect(frameFor(bodyCentre('SUN'), 'lro', 'MOON')).toEqual(bodyCentre('SUN'));
+  });
+
+  it('samples a body entity in its parent body frame whatever the active centre is (the Sun keeps the centre)', () => {
+    const recs = Object.fromEntries(bodyEntityRecords().map((r) => [r.id, r]));
+    for (const centre of [EARTH_CENTRE, bodyCentre('MOON'), bodyCentre('SUN'), entityCentre('body-moon'), entityCentre('sat-1')]) {
+      expect(frameForRec(centre, recs['body-moon'])).toEqual(bodyCentre('EARTH'));
+      expect(frameForRec(centre, recs['body-earth'])).toEqual(bodyCentre('SUN'));
+      expect(frameForRec(centre, recs['body-mars'])).toEqual(bodyCentre('SUN'));
+      expect(frameForRec(centre, recs['body-sun'])).toEqual(centre);
+    }
+    expect(frameFor(entityCentre('body-moon'), 'body-moon', 'EARTH', 'MOON')).toEqual(bodyCentre('EARTH'));
+    // ordinary records behave as before
+    expect(frameForRec(entityCentre('lro'), lroLike())).toEqual(bodyCentre('MOON'));
+    expect(frameForRec(bodyCentre('SUN'), lroLike())).toEqual(bodyCentre('SUN'));
+  });
+
+  it('draws the Moon entity path as a closed ellipse around the Earth, Earth and Mars around the Sun', () => {
+    const g = new EntityGraph();
+    const recs = bodyEntityRecords();
+    for (const r of recs) g.upsert(r);
+    const lookup = graphLookup(g);
+    const moon = recs.find((r) => r.id === 'body-moon')!;
+    const period = bodyPeriodSec(defaultBodies.get('MOON'))! * 1000;
+    expect(period / 86_400_000).toBeGreaterThan(27);
+    expect(period / 86_400_000).toBeLessThan(27.8);
+    // an active Moon centre does not change the sampling centre of the Moon's own orbit
+    const buf = makePathBuffers();
+    const res = samplePath(g, moon.id, { t0: NOW, t1: NOW + period }, moon.provider, buf, 'compressed',
+      frameSampler(frameForRec(bodyCentre('MOON'), moon), NOW, lookup));
+    expect(res.count).toBeGreaterThan(100);
+    // around the Earth's centre (the origin): distances stay in the Moon's 356,000 to 407,000 km range, and the loop closes
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < res.count; i++) {
+      const d = Math.hypot(buf.pos[i * 3], buf.pos[i * 3 + 1], buf.pos[i * 3 + 2]);
+      lo = Math.min(lo, d);
+      hi = Math.max(hi, d);
+    }
+    expect(lo).toBeGreaterThan(350_000);
+    expect(hi).toBeLessThan(410_000);
+    const last = res.count - 1;
+    expect(dist([buf.pos[0], buf.pos[1], buf.pos[2]], [buf.pos[last * 3], buf.pos[last * 3 + 1], buf.pos[last * 3 + 2]])).toBeLessThan(0.12 * lo);
+
+    // Earth in the Sun's frame: the offset from the Sun is about 1 AU all along (drawn around the Sun's current position)
+    const earth = recs.find((r) => r.id === 'body-earth')!;
+    const sunLookup = graphLookup(g);
+    const sampler = frameSampler(frameForRec(EARTH_CENTRE, earth), NOW, sunLookup)!;
+    const sunNow = sampler.ref!;
+    expect(norm(sunNow)).toBeGreaterThan(1.45e8);
+    const eb = makePathBuffers();
+    const er = samplePath(g, earth.id, { t0: NOW, t1: NOW + 100 * 86_400_000 }, earth.provider, eb, 'true', sampler);
+    expect(er.count).toBeGreaterThan(10);
+    for (let i = 0; i < er.count; i += 5) {
+      const d = dist([eb.pos[i * 3], eb.pos[i * 3 + 1], eb.pos[i * 3 + 2]], sunNow);
+      expect(d).toBeGreaterThan(1.45e8);
+      expect(d).toBeLessThan(1.55e8);
+    }
   });
 });
 
@@ -224,6 +290,23 @@ describe('primary body physics', () => {
     // a periapsis below the Moon's surface is no orbit; 40 km above it is (the Moon has no atmosphere)
     expect(orbitPeriodSec(g, rec, { ...moonState, r: [MOON.radiusKm - 10, 0, 0], v: [0, Math.sqrt(MOON.gm / (MOON.radiusKm - 10)), 0] })).toBeNull();
     expect(orbitPeriodSec(g, rec, { ...moonState, r: [MOON.radiusKm + 40, 0, 0], v: [0, Math.sqrt(MOON.gm / (MOON.radiusKm + 40)), 0] })).not.toBeNull();
+  });
+
+  it('gives body entities the period of their orbit around the parent body, and the Sun none', () => {
+    const g = new EntityGraph();
+    const recs = Object.fromEntries(bodyEntityRecords().map((r) => [r.id, r]));
+    for (const r of Object.values(recs)) g.upsert(r);
+    const day = 86_400;
+    const period = (id: string) => orbitPeriodSec(g, recs[id], g.stateIn(id, NOW, 'EARTH:inertial')!, NOW);
+    expect(period('body-moon')! / day).toBeGreaterThan(27.2);
+    expect(period('body-moon')! / day).toBeLessThan(27.6);
+    expect(period('body-earth')! / day).toBeGreaterThan(365);
+    expect(period('body-earth')! / day).toBeLessThan(365.6);
+    expect(period('body-mars')! / day).toBeGreaterThan(680);
+    expect(period('body-mars')! / day).toBeLessThan(695);
+    expect(period('body-sun')).toBeNull();
+    // the satellite limits (closed orbit within 5e5 km of the Earth) do not apply to a body
+    expect(period('body-moon')).toBeCloseTo(bodyPeriodSec(defaultBodies.get('MOON'))!, 6);
   });
 
   it('reports the Moon period and the Moon-relative altitude in the telemetry of a Moon orbiter', () => {

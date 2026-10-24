@@ -1,5 +1,4 @@
-import { convert, defaultBodies, type EntityGraph, type StateVector, type Vec3 } from '@eio/core';
-import { isRefBody, refPositionEci } from './ref-body';
+import { bodyStateEci as coreBodyStateEci, defaultBodies, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
 
 /**
  * Frame of reference (see docs/frames.md). The frame is a centre, a body or an entity. Frames are translations only
@@ -20,20 +19,31 @@ export const isEarthCentre = (c: Centre): boolean => c.kind === 'body' && c.id =
 export const sameCentre = (a: Centre, b: Centre): boolean => a.kind === b.kind && a.id === b.id;
 
 /**
- * The frame an entity's own paths and orbit line are drawn in: the active centre, except that nothing can be drawn
- * relative to itself (a single point), so the entity that is the centre is drawn relative to its primary body.
+ * The frame an entity's own paths and orbit line are drawn in: the active centre, except that
+ * - nothing can be drawn relative to itself (a single point), so the entity that is the centre is drawn relative to its
+ *   primary body, and
+ * - a body ENTITY (`standsForBody` given: the registry id its provider names) always draws its orbit in its parent
+ *   body's frame whatever the active centre is: the Moon as an ellipse around the Earth, Earth and Mars around the Sun's
+ *   current position. The Sun orbits nothing (its `bodyId` names itself) and keeps the active centre.
+ * Callers with a record use `frameForRec`.
  */
-export const frameFor = (centre: Centre, entityId: string, primaryBodyId: string): Centre =>
-  centre.kind === 'entity' && centre.id === entityId ? bodyCentre(primaryBodyId) : centre;
+export const frameFor = (centre: Centre, entityId: string, primaryBodyId: string, standsForBody?: string): Centre => {
+  if (standsForBody !== undefined) return standsForBody === primaryBodyId ? centre : bodyCentre(primaryBodyId);
+  return centre.kind === 'entity' && centre.id === entityId ? bodyCentre(primaryBodyId) : centre;
+};
+
+/** `frameFor` from a record: a record with provider type `body` uses `{kind:'body', id: rec.bodyId}` as its sampling centre. */
+export const frameForRec = (centre: Centre, rec: Pick<EntityRecord, 'id' | 'bodyId' | 'provider'>): Centre =>
+  frameFor(centre, rec.id, rec.bodyId, rec.provider?.type === 'body' ? rec.provider.bodyId : undefined);
 
 /** Stable string for a centre (cache keys). */
 export const centreKey = (c: Centre): string => `${c.kind}:${c.id}`;
 
 /**
- * Bodies the scene can centre on: the ones it draws and has a display for (Earth, Moon, Sun; Mars has no map or
- * ephemeris display yet). Used by `select` to decide whether selecting something re-centres the frame.
+ * Bodies a frame can centre on: every body of the core registry (Sun, Earth, Moon, Mars). Used by `select` to decide
+ * whether selecting something re-centres the frame.
  */
-export const isOrbitableBody = (id: string): boolean => isRefBody(id);
+export const isOrbitableBody = (id: string): boolean => defaultBodies.has(id);
 
 /** The Earth-inertial state of an entity at `tMs` (null: no state at that time or unknown entity). */
 export type EntityLookup = (id: string, tMs: number) => StateVector | null;
@@ -41,15 +51,15 @@ export type EntityLookup = (id: string, tMs: number) => StateVector | null;
 /** Lookup over an `EntityGraph` (the entity must have been upserted into it). */
 export const graphLookup = (graph: EntityGraph): EntityLookup => (id, t) => graph.stateIn(id, t, 'EARTH:inertial');
 
-const ZERO: Vec3 = [0, 0, 0];
-
-/** Position and velocity of a body's centre in Earth-inertial coordinates, or null for an unknown body. */
+/**
+ * Position and velocity of a body's centre in Earth-inertial coordinates, or null for an unknown body. Core's
+ * `bodyStateEci`: the same almanac series the scene draws for the Moon and the Sun.
+ */
 function bodyStateEci(id: string, t: number): { r: Vec3; v?: Vec3 } | null {
-  if (id === 'EARTH') return { r: ZERO, v: ZERO };
+  if (!defaultBodies.has(id)) return null;
   try {
-    const hop = convert({ frame: `${id}:inertial`, r: ZERO, v: ZERO }, 'EARTH:inertial', t);
-    // the displayed positions of the Moon and the Sun come from the almanac series, the same one the scene draws
-    return { r: isRefBody(id) ? refPositionEci(id, t) : hop.r, v: hop.v };
+    const s = coreBodyStateEci(id, t);
+    return { r: s.r, v: s.v };
   } catch {
     return null;
   }

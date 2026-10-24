@@ -1,5 +1,5 @@
 import {
-  Sgp4Provider, convert, cross, defaultBodies, norm, type EntityGraph, type EntityRecord, type FrameId, type StateVector, type Vec3,
+  Sgp4Provider, bodyPeriodSec, convert, cross, defaultBodies, norm, type EntityGraph, type EntityRecord, type FrameId, type StateVector, type Vec3,
 } from '@eio/core';
 
 /** Largest semi-major axis still treated as a closed orbit around the primary body (km). */
@@ -14,6 +14,15 @@ const ATMOSPHERE_KM: Record<string, number> = { EARTH: 100 };
  * converted into the primary body's inertial frame first, otherwise it must already be in that frame.
  */
 export function orbitPeriodSec(graph: EntityGraph, rec: EntityRecord, s: StateVector, tMs?: number): number | null {
+  if (rec.provider?.type === 'body') {
+    // a body entity: the period of its orbit around the parent (Moon 27.4 d, Earth 365.3 d); the Sun has none. The
+    // closed-orbit limits below are for satellites and would reject a planet.
+    try {
+      return bodyPeriodSec(defaultBodies.get(rec.provider.bodyId)) ?? null;
+    } catch {
+      return null;
+    }
+  }
   const p = graph.provider(rec.id);
   if (p instanceof Sgp4Provider) return p.periodMin * 60;
   if (!s.v) return null;
