@@ -459,3 +459,51 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 .pick-kind { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
 .pick-more { padding: 4px 6px 0; font-size: 10.5px; color: var(--dim); }
 .pick-hint { margin-top: 4px; padding: 4px 6px 0; border-top: 1px solid var(--line); font-size: 9.5px; letter-spacing: 0.08em; color: var(--dim); }
+
+/* ==== FRAME-UI: frame breadcrumb + lock (FrameBar), LOCK action (DetailPanel), entity tree (EntityBrowser) ==== */
+/* the scene's top-left stack: the action buttons, then the frame bar under them */
+.scene-top { position: absolute; top: 10px; left: 10px; z-index: 4; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; max-width: calc(100% - 20px); pointer-events: none; }
+.scene-top > * { pointer-events: auto; }
+.scene-top > .scene-actions { position: static; max-width: 100%; }
+.scene-help { top: 84px; }
+.scene-legend { top: 100px; } /* under the frame bar, which can be as wide as the scene */
+.frame-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: 100%; padding: 3px 6px;
+  background: rgba(10, 15, 21, 0.78); border: 1px solid var(--line-2); border-radius: 3px; font-family: var(--mono); font-size: 11px;
+}
+.frame-bar.locked { border-color: var(--warn); }
+.frame-label { color: var(--dim); font-size: 9.5px; letter-spacing: 0.1em; }
+.frame-crumbs { display: flex; flex-wrap: wrap; align-items: center; margin: 0; padding: 0; list-style: none; }
+.frame-crumbs li { display: inline-flex; align-items: center; }
+.frame-sep { color: var(--dim); margin: 0 3px; }
+.frame-crumb {
+  background: transparent; border: 0; border-radius: 2px; padding: 1px 4px; color: var(--text); font: inherit; letter-spacing: 0.04em; cursor: pointer;
+  max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.frame-crumb:hover:not(:disabled) { background: rgba(79, 179, 217, 0.14); color: var(--accent); }
+.frame-crumb.cur { color: var(--accent); font-weight: 600; }
+.frame-crumb:disabled { color: var(--dim); opacity: 0.55; cursor: not-allowed; }
+.frame-lock {
+  display: inline-flex; align-items: center; gap: 5px; background: transparent; border: 1px solid var(--line-2); border-radius: 2px;
+  padding: 1px 7px; color: var(--dim); font: inherit; font-size: 10px; letter-spacing: 0.08em; cursor: pointer;
+}
+.frame-lock:hover { border-color: var(--accent); color: var(--text); }
+.frame-lock.on { border-color: var(--warn); color: var(--warn); background: rgba(224, 164, 58, 0.12); }
+.frame-hint { color: var(--warn); font-size: 10px; letter-spacing: 0.06em; }
+.frame-action { margin: 8px 12px 0; align-self: flex-start; font-size: 10.5px; letter-spacing: 0.06em; flex: none; }
+.frame-action.on { border-color: var(--warn); color: var(--warn); background: rgba(224, 164, 58, 0.1); }
+.panel-head .seg { margin-left: auto; flex: none; }
+.panel-head .seg + .mono { margin-left: 8px; }
+.row.tree-body, .row.tree-group { cursor: default; }
+.row.tree-group { color: var(--dim); cursor: pointer; }
+.row.tree-group:hover { color: var(--text); }
+.tree-chev { flex: none; width: 14px; padding: 0; background: transparent; border: 0; color: var(--dim); font-size: 13px; line-height: 1; cursor: pointer; text-align: center; }
+.tree-chev:hover { color: var(--accent); }
+.tree-body-name {
+  flex: 1; min-width: 0; background: transparent; border: 0; padding: 0; text-align: left; color: var(--text); font: inherit;
+  font-weight: 600; letter-spacing: 0.08em; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tree-body-name:hover { color: var(--accent); }
+.tree-count { flex: none; color: var(--dim); font-size: 10px; }
+.row-frame { flex: none; color: var(--warn); font-size: 9px; letter-spacing: 0.08em; border: 1px solid rgba(224, 164, 58, 0.5); border-radius: 2px; padding: 0 3px; }
+/* ==== end FRAME-UI ==== */

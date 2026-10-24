@@ -1,0 +1,154 @@
+import type { Centre } from './frame';
+
+/**
+ * The hierarchical entity browser (docs/frames.md, UI): entities grouped under their primary body (`bodyId`), the bodies
+ * nested like the body tree (SUN > EARTH > MOON, SUN > MARS). Everything here is pure: `buildTreeRows` turns the (already
+ * filtered and ordered) entities into the flat list of rows the virtualised list draws, one fixed-height row each, and
+ * only the nodes that are open contribute rows, so the cost is one pass over the entities plus the visible rows.
+ */
+
+export interface TreeBody {
+  id: string;
+  name: string;
+  parentId?: string;
+}
+
+/** What the tree needs of an entity (a record or a search hit). */
+export interface TreeItem {
+  id: string;
+  kind: string;
+  bodyId?: string;
+}
+
+export type TreeRow =
+  | { type: 'body'; key: string; bodyId: string; name: string; depth: number; count: number; open: boolean }
+  | { type: 'group'; key: string; kind: string; depth: number; count: number; open: boolean }
+  | { type: 'entity'; key: string; id: string; depth: number };
+
+export interface TreeOptions<T extends TreeItem> {
+  bodies: readonly TreeBody[];
+  /** the active frame: its path (and the node of an entity centre) is open by default */
+  frame: Centre;
+  /** the primary body of an entity centre (its record's `bodyId`) */
+  frameBodyId?: string;
+  /** a query or a filter is active: every node that has a hit is open by default */
+  openAll?: boolean;
+  /** explicit user choices by row key; they win over the defaults */
+  overrides?: ReadonlyMap<string, boolean>;
+  /** a body with more direct entities than this lists them under kind groups (default 12) */
+  groupMin?: number;
+  /** display name of a kind, used to order groups alphabetically among equals */
+  kindName?: (kind: string) => string;
+  /** body of an item when the item itself has no `bodyId` (search hits) */
+  bodyOf?: (item: T) => string | undefined;
+}
+
+export const bodyKey = (id: string): string => `b:${id}`;
+export const groupKey = (bodyId: string, kind: string): string => `g:${bodyId}:${kind}`;
+export const entityKey = (bodyId: string, id: string): string => `e:${bodyId}:${id}`;
+
+interface Node<T> {
+  id: string;
+  name: string;
+  parent: Node<T> | null;
+  children: Node<T>[];
+  items: T[];
+  count: number;
+}
+
+export const DEFAULT_GROUP_MIN = 12;
+
+/** Keys of the body nodes from the root down to `bodyId` (root first). Unknown ids give just their own key. */
+export function bodyPathKeys(bodies: readonly TreeBody[], bodyId: string): string[] {
+  const byId = new Map(bodies.map((b) => [b.id, b]));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let cur: string | undefined = bodyId;
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    out.push(bodyKey(cur));
+    cur = byId.get(cur)?.parentId;
+  }
+  return out.reverse();
+}
+
+export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: TreeOptions<T>): TreeRow[] {
+  const groupMin = opts.groupMin ?? DEFAULT_GROUP_MIN;
+  const overrides = opts.overrides;
+  const kindName = opts.kindName ?? ((k: string) => k);
+
+  // nodes in registry order, linked to their parents
+  const nodes = new Map<string, Node<T>>();
+  for (const b of opts.bodies) nodes.set(b.id, { id: b.id, name: b.name, parent: null, children: [], items: [], count: 0 });
+  const roots: Node<T>[] = [];
+  for (const b of opts.bodies) {
+    const n = nodes.get(b.id)!;
+    const p = b.parentId ? nodes.get(b.parentId) : undefined;
+    if (p) {
+      n.parent = p;
+      p.children.push(n);
+    } else roots.push(n);
+  }
+
+  // one pass over the entities; a body the registry does not know hangs off the first root
+  for (const it of items) {
+    const bid = it.bodyId ?? opts.bodyOf?.(it) ?? 'EARTH';
+    let n = nodes.get(bid);
+    if (!n) {
+      n = { id: bid, name: bid, parent: roots[0] ?? null, children: [], items: [], count: 0 };
+      nodes.set(bid, n);
+      if (roots[0]) roots[0].children.push(n);
+      else roots.push(n);
+    }
+    n.items.push(it);
+  }
+
+  const count = (n: Node<T>): number => {
+    n.count = n.items.length;
+    for (const c of n.children) n.count += count(c);
+    return n.count;
+  };
+  for (const r of roots) count(r);
+
+  // open by default: the path to the frame (and its own node), and everything with a hit while filtering
+  const auto = new Set<string>();
+  if (opts.frame.kind === 'body') for (const k of bodyPathKeys(opts.bodies, opts.frame.id)) auto.add(k);
+  else for (const k of bodyPathKeys(opts.bodies, opts.frameBodyId ?? 'EARTH')) auto.add(k);
+  const frameEntity = opts.frame.kind === 'entity' ? opts.frame.id : null;
+  const isOpen = (key: string): boolean => {
+    const o = overrides?.get(key);
+    if (o !== undefined) return o;
+    return !!opts.openAll || auto.has(key);
+  };
+
+  const rows: TreeRow[] = [];
+  const emit = (n: Node<T>, depth: number): void => {
+    if (n.count === 0) return;
+    const key = bodyKey(n.id);
+    const open = isOpen(key);
+    rows.push({ type: 'body', key, bodyId: n.id, name: n.name, depth, count: n.count, open });
+    if (!open) return;
+    for (const c of n.children) emit(c, depth + 1);
+    if (n.items.length === 0) return;
+    if (n.items.length <= groupMin) {
+      for (const it of n.items) rows.push({ type: 'entity', key: entityKey(n.id, it.id), id: it.id, depth: depth + 1 });
+      return;
+    }
+    const byKind = new Map<string, T[]>();
+    for (const it of n.items) {
+      const l = byKind.get(it.kind);
+      if (l) l.push(it);
+      else byKind.set(it.kind, [it]);
+    }
+    const kinds = [...byKind.entries()].sort((a, b) => b[1].length - a[1].length || kindName(a[0]).localeCompare(kindName(b[0])));
+    for (const [kind, list] of kinds) {
+      const gkey = groupKey(n.id, kind);
+      // the frame's own entity keeps its group open so it can be seen
+      const gopen = isOpen(gkey) || (!overrides?.has(gkey) && frameEntity !== null && list.some((it) => it.id === frameEntity));
+      rows.push({ type: 'group', key: gkey, kind, depth: depth + 1, count: list.length, open: gopen });
+      if (gopen) for (const it of list) rows.push({ type: 'entity', key: entityKey(n.id, it.id), id: it.id, depth: depth + 2 });
+    }
+  };
+  for (const r of roots) emit(r, 0);
+  return rows;
+}

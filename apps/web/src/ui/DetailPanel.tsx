@@ -13,6 +13,10 @@ export function DetailPanel() {
   const rec = useStore((s) => (s.selectedId ? s.entities.get(s.selectedId) : undefined));
   const launches = useStore((s) => s.launches);
   const select = useStore((s) => s.select);
+  const frame = useStore((s) => s.frame);
+  const frameLocked = useStore((s) => s.frameLocked);
+  const setFrame = useStore((s) => s.setFrame);
+  const setFrameLocked = useStore((s) => s.setFrameLocked);
   const [tab, setTab] = useState<TabId>('telemetry');
 
   const launch = useMemo(() => launchOf(rec, launches), [rec, launches]);
@@ -51,6 +55,20 @@ export function DetailPanel() {
         {rec.group && <span className="chip alt">{rec.group}</span>}
         <span className="mono dim">{rec.id}</span>
       </div>
+      {/* LOCK FRAME: this object becomes the frame of reference and stays it while other objects are selected */}
+      {frame.kind === 'entity' && frame.id === rec.id && frameLocked ? (
+        <button
+          className="btn frame-action on" onClick={() => setFrameLocked(false)}
+          title={`The frame of reference is locked on ${rec.name}: selecting other objects does not change it. Unlock to let the Earth, Moon and Sun views take it over again; the frame stays on this object until you pick another in the FRAME bar.`}>
+          UNLOCK FRAME
+        </button>
+      ) : (
+        <button
+          className="btn frame-action" onClick={() => setFrame({ kind: 'entity', id: rec.id }, { lock: true, fly: true })}
+          title={`Make ${rec.name} the frame of reference and lock it: orbit lines, trails, paths and range / speed readouts of every object you select next are relative to it. Selecting other objects does not change the frame.`}>
+          LOCK FRAME TO THIS OBJECT
+        </button>
+      )}
       <div className="tabs" role="tablist">
         {tabs.map(([id, label]) => (
           <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'tab on' : 'tab'} onClick={() => setTab(id)}>{label}</button>

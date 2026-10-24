@@ -7,6 +7,7 @@ import { modelDef } from '../scene/models/registry';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { clock, runtime } from '../state/runtime';
 import { useStore } from '../state/store';
+import { FrameBar } from './FrameBar';
 import { PickPopup, type PickItem } from './PickPopup';
 
 const LEGEND: [string, string][] = [
@@ -222,6 +223,7 @@ export function SceneView() {
       <div ref={labelHost} className="path-labels" />
       <div ref={tip} className="scene-tip" />
       {pick && <PickPopup items={pick.items} more={pick.more} x={pick.x} y={pick.y} onSelect={choosePick} onClose={closePick} onHighlight={highlightPick} />}
+      <div className="scene-top">
       <div className="scene-actions">
         {selectedId && (
           <button className={follow ? 'btn active' : 'btn'} onClick={() => setFollow(!follow)} title="Keep the camera locked on the selected object">
@@ -246,6 +248,8 @@ export function SceneView() {
           DETAIL
         </button>
         <button className={help ? 'btn icon active' : 'btn icon'} onClick={() => setHelp((v) => !v)} aria-pressed={help} title="Controls (H)">?</button>
+      </div>
+      <FrameBar />
       </div>
       {help && (
         <div className="popover scene-help" role="dialog" aria-label="Scene controls">
