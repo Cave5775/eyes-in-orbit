@@ -1,11 +1,9 @@
 import {
-  ascentCompositeSegments, ascentEntityEvents, modeledAscentForLaunch, modeledAscentSegments, reconstructDownrange,
+  LL2_STATUS, ascentCompositeSegments, ascentEntityEvents, modeledAscentForLaunch, modeledAscentSegments, modeledOrbitTail, reconstructDownrange,
   sampleAscentRows, type AscentEvent, type AscentRow, type AscentSeries, type AscentSegmentBoundary, type CompositeSegment,
   type EntityEvent, type Launch, type LiveAscent, type ModeledAscent, type TrajectorySource,
 } from '@eio/core';
-import { trajectorySamples, type Trajectory } from './trajectory';
-
-const DAY_MS = 86_400_000;
+import type { Trajectory } from './trajectory';
 
 /**
  * Ascent telemetry ingest + trajectory selection.
@@ -138,7 +136,7 @@ export interface AscentPlan {
 const HOLD_SEC = 600;
 
 /** Live rows, a modeled lead-in before the first row and a modeled (offset) continuation after the last one. */
-export function liveSegments(netMs: number, pad: { latDeg: number; lonDeg: number }, live: LiveAscent, modeled: ModeledAscent | null, fileAzimuth?: number): {
+export function liveSegments(netMs: number, pad: { latDeg: number; lonDeg: number }, live: LiveAscent, modeled: ModeledAscent | null, fileAzimuth?: number, reachedOrbit = true): {
   segments: CompositeSegment[]; extrapolatedFromSec: number | null; azimuthDeg: number;
 } {
   const azimuthDeg = live.azimuthDeg ?? modeled?.azimuthDeg ?? fileAzimuth ?? 90;
@@ -175,8 +173,14 @@ export function liveSegments(netMs: number, pad: { latDeg: number; lonDeg: numbe
     bounds.push({ phase: 'last fix (held)', fromSec: last.tSec, confidence: 0.3 });
     extrapolatedFromSec = last.tSec;
   }
-  return { segments: ascentCompositeSegments(netMs, pad, azimuthDeg, rows, bounds, { trailingPad: true }), extrapolatedFromSec, azimuthDeg };
+  // past the last row the vehicle continues on the modeled orbit (when the rows end on one), else it returns to the pad marker
+  const orbit = reachedOrbit ? (modeled ? modeledOrbitTail(modeled) : {}) : undefined;
+  return { segments: ascentCompositeSegments(netMs, pad, azimuthDeg, rows, bounds, { orbit, trailingPad: true }), extrapolatedFromSec, azimuthDeg };
 }
+
+/** False when LL2 reports the flight failed: the nominal orbit is not drawn, the entity returns to the pad marker after the ascent. */
+export const reachedOrbit = (launch: Pick<Launch, 'status'>): boolean =>
+  launch.status.id !== LL2_STATUS.FAILURE && launch.status.id !== LL2_STATUS.PARTIAL_FAILURE;
 
 /** Decide the trajectory source for a launch and build its composite segments and events. */
 export function planAscent(launch: Launch, trajectory?: Trajectory, live?: LiveAscent): AscentPlan {
@@ -187,19 +191,20 @@ export function planAscent(launch: Launch, trajectory?: Trajectory, live?: LiveA
   const pad = { latDeg: launch.pad.latitude, lonDeg: launch.pad.longitude };
 
   if (live && live.rows.length) {
-    const { segments, extrapolatedFromSec, azimuthDeg } = liveSegments(netMs, pad, live, modeled, trajectory?.azimuthDeg);
+    const { segments, extrapolatedFromSec, azimuthDeg } = liveSegments(netMs, pad, live, modeled, trajectory?.azimuthDeg, reachedOrbit(launch));
     return { source: 'live', segments, events: ascentEntityEvents(mergeEvents(modeled?.events ?? [], live.events), netMs), modeled, extrapolatedFromSec, azimuthDeg };
   }
   if (trajectory) {
-    const samples = trajectorySamples(trajectory, pad, netMs);
-    const segments: CompositeSegment[] = [
-      { fromMs: netMs - 30 * DAY_MS, toMs: netMs - 1, phase: 'pad', spec: { type: 'geodetic', bodyId: 'EARTH', latDeg: pad.latDeg, lonDeg: pad.lonDeg, altKm: 0 } },
-      { fromMs: netMs, toMs: samples[samples.length - 1][0], phase: 'ascent', spec: { type: 'sampled', frame: 'EARTH:fixed', samples } },
-    ];
+    // After the last row the flight continues on the modeled orbit when the file ends on one (speed and heading from its
+    // last two rows), else the last fix is held: the entity must not vanish after the file ends.
+    const segments = ascentCompositeSegments(
+      netMs, pad, trajectory.azimuthDeg, trajectory.rows, [{ phase: 'ascent', fromSec: 0 }],
+      { orbit: reachedOrbit(launch) ? {} : undefined, holdLast: true, trailingPad: true },
+    );
     return { source: 'file', segments, events: undefined, modeled, extrapolatedFromSec: null, azimuthDeg: trajectory.azimuthDeg };
   }
   if (modeled) {
-    const segments = modeledAscentSegments(netMs, pad, modeled);
+    const segments = modeledAscentSegments(netMs, pad, modeled, { orbit: reachedOrbit(launch) });
     return { source: 'modeled', segments, events: ascentEntityEvents(modeled.events, netMs), modeled, extrapolatedFromSec: null, azimuthDeg: modeled.azimuthDeg };
   }
   return none;

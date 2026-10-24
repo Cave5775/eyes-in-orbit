@@ -249,30 +249,37 @@ describe('planned launch trajectories', () => {
     Math.max(...(spec as { segments: CompositeSegment[] }).segments.filter((s) => s.spec.type === 'sampled').map((s) => s.toMs));
 
   it('covers the whole modeled flight, whatever the clock says', () => {
+    const orbitEnd = Math.max(...(vehicle.provider as { segments: CompositeSegment[] }).segments.filter((s) => s.spec.type === 'keplerian').map((s) => s.toMs));
     for (const rec of [vehicle, booster]) {
       const end = lastSampled(rec.provider!);
-      for (const now of [net - 5 * DAY, net - 10 * MIN, net + 2 * MIN, end + 3 * HOUR]) {
+      // the booster ends at its landing point; the vehicle goes on in its modeled orbit, of which the first part is drawn
+      // (the whole path is one body-fixed polyline: a 12 h orbit tail would be a ribbon), so it ends at the frame limit
+      const drawnEnd = rec === vehicle ? net + FIXED_FRAME_MAX_WINDOW_MS : end;
+      for (const now of [net - 5 * DAY, net - 10 * MIN, net + 2 * MIN, end + 3 * HOUR, orbitEnd + HOUR]) {
         const p = planPathWindow(rec.provider, now, { validRange: graph.provider(rec.id)?.validRange })!;
         expect(p.t0, `${rec.id} from`).toBe(net);
-        expect(p.t1, `${rec.id} to`).toBe(end);
+        expect(p.t1, `${rec.id} to`).toBe(drawnEnd);
         expect(p.anchored).toBe(true);
       }
     }
+    // the vehicle path reaches past the last sampled ascent row, into the orbit
+    expect(net + FIXED_FRAME_MAX_WINDOW_MS).toBeGreaterThan(lastSampled(vehicle.provider!) + 10 * MIN);
     // up to the booster landing, not only the first minutes
     expect(lastSampled(booster.provider!) - net).toBeGreaterThan(5 * MIN);
   });
 
-  it('draws the ascent in the body-fixed frame days before liftoff, from the pad to the end of the ascent', () => {
+  it('draws the ascent in the body-fixed frame days before liftoff, from the pad on into the orbit', () => {
     const plan = planPathWindow(vehicle.provider, net - 3 * DAY, { validRange: graph.provider(vehicle.id)?.validRange })!;
     const buf = makePathBuffers();
     const res = samplePath(graph, vehicle.id, plan, vehicle.provider, buf);
-    expect(res.frame).toBe('fixed');
+    expect(res.frame).toBe('fixed'); // the keplerian tail is converted too: one ground-glued polyline
     expect(res.moving).toBe(true);
     expect(res.count).toBeGreaterThan(100);
     expect(res.phases.length).toBeGreaterThan(0);
     const alt = (i: number) => Math.hypot(buf.pos[i * 3], buf.pos[i * 3 + 1], buf.pos[i * 3 + 2]) - RE;
     expect(alt(0)).toBeLessThan(25); // liftoff from the pad
-    expect(alt(res.count - 1)).toBeGreaterThan(100); // up to the end of the modeled ascent
+    expect(alt(res.count - 1)).toBeGreaterThan(100); // past the end of the modeled ascent, in orbit
+    expect(buf.times[res.count - 1]).toBe(net + FIXED_FRAME_MAX_WINDOW_MS);
     // the marker is on the pad, i.e. at the first point of the line, and no "past" part is drawn yet
     expect(nowIndex(buf.times, res.count, net - 3 * DAY)).toBe(-1);
   });
@@ -312,5 +319,76 @@ describe('planned launch trajectories', () => {
     expect(planPathWindow(two, NOW + 2 * MIN)!.t0).toBe(NOW);
     expect(planPathWindow(two, NOW + 20 * MIN)!.t0).toBe(NOW + HOUR);
     expect(planPathWindow(two, NOW + 3 * HOUR)!.t0).toBe(NOW + HOUR);
+  });
+});
+
+describe('launch orbit tail (on orbit (modeled))', () => {
+  const { entities } = mockLaunches(NOW);
+  const graph = graphOf(entities);
+  const vehicle = entities.find((e) => e.id === 'launch-mock-m02')!;
+  const segs = (vehicle.provider as { segments: CompositeSegment[] }).segments;
+  const net = NOW + 12 * MIN;
+  const orbit = segs.find((s) => s.spec.type === 'keplerian')!;
+  const altAt = (t: number): number => Math.hypot(...graph.stateIn(vehicle.id, t, 'EARTH:inertial')!.r) - RE;
+  const posAt = (t: number): Vec3 => graph.stateIn(vehicle.id, t, 'EARTH:inertial')!.r;
+  const dist = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  it('follows the sampled ascent with a 12 h keplerian segment, then the pad marker', () => {
+    expect(orbit.phase).toBe('on orbit (modeled)');
+    expect(orbit.toMs - orbit.fromMs).toBe(12 * HOUR);
+    expect(orbit.fromMs - net).toBe(1110_000); // the end of the modeled ascent and hold
+    const after = segs.filter((s) => s.fromMs >= orbit.toMs);
+    expect(after.map((s) => s.phase)).toEqual(['pad (launch complete)']);
+  });
+
+  it('draws one path that is continuous across SECO and covers the first part of the orbit', () => {
+    const plan = planPathWindow(vehicle.provider, net + 2 * MIN, { validRange: graph.provider(vehicle.id)?.validRange })!;
+    const buf = makePathBuffers();
+    const res = samplePath(graph, vehicle.id, plan, vehicle.provider, buf);
+    expect(res.frame).toBe('fixed');
+    // the phase ticks include the hand-over to the orbit
+    expect(res.phases.map((p) => p.name)).toContain('on orbit (modeled)');
+    const join = res.phases.find((p) => p.name === 'on orbit (modeled)')!;
+    expect(buf.times[join.index]).toBe(orbit.fromMs);
+    // no gap anywhere (a step is at most ~45 s of orbital motion even where the grid is coarse), in particular at the join
+    const p = (i: number): Vec3 => [buf.pos[i * 3], buf.pos[i * 3 + 1], buf.pos[i * 3 + 2]];
+    let worst = 0;
+    for (let i = 1; i < res.count; i++) worst = Math.max(worst, dist(p(i - 1), p(i)));
+    expect(worst).toBeLessThan(60);
+    expect(dist(p(join.index - 1), p(join.index))).toBeLessThan(60);
+    // the orbit part is long and stays in orbit: well above the atmosphere, nowhere near the pad
+    const orbitPoints = Array.from({ length: res.count - join.index }, (_, k) => join.index + k);
+    expect(buf.times[res.count - 1] - orbit.fromMs).toBeGreaterThan(20 * MIN);
+    for (const i of orbitPoints) {
+      const alt = Math.hypot(...p(i)) - RE;
+      expect(alt).toBeGreaterThan(100);
+      expect(alt).toBeLessThan(400);
+    }
+    // the path is the same whichever way the clock runs, and the marker (state at now) is on it while in the drawn range
+    const k = nowIndex(buf.times, res.count, orbit.fromMs + 10 * MIN);
+    const marker = graph.stateIn(vehicle.id, orbit.fromMs + 10 * MIN, 'EARTH:fixed')!.r;
+    expect(dist(p(k), marker)).toBeLessThan(60);
+  });
+
+  it('never jumps back to the pad within the 12 h; the pad marker returns only when the orbit ends', () => {
+    let prev = posAt(orbit.fromMs - 10_000);
+    for (let t = orbit.fromMs - 10_000 + 60_000; t < orbit.toMs; t += 60_000) {
+      const r = posAt(t);
+      // 60 s of orbital motion is at most ~470 km; the pad is thousands of km away, so any jump shows
+      expect(dist(prev, r), `at T+${Math.round((t - net) / 1000)} s`).toBeLessThan(500);
+      expect(altAt(t)).toBeGreaterThan(100);
+      prev = r;
+    }
+    // what ASCENT left open: a late second teleport, to the pad marker, when the modeled orbit ends
+    expect(altAt(orbit.toMs + 2 * MIN)).toBeLessThan(1);
+  });
+
+  it('a payload\'s orbit-only composite is no planned flight (it has its orbit line instead)', () => {
+    const payload = entities.find((e) => e.id === 'launch-mock-m01-payload')!;
+    const spec = payload.provider!;
+    for (const now of [NOW - 2 * HOUR, NOW]) {
+      const plan = planPathWindow(spec, now, { validRange: graph.provider(payload.id)?.validRange });
+      expect(plan?.anchored).toBeUndefined();
+    }
   });
 });

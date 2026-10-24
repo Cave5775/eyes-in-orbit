@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatCountdown, sampleAscentRows, type AscentEvent, type AscentSeries, type Launch } from '@eio/core';
 import { api } from '../../api/client';
 import {
-  METRICS, chartDomain, chartSeries, fmtAxisT, fmtTPlus, labelY, layoutLabels, linePath, linear, niceTicks, phaseNow, plotTimeAt, readingAt,
+  METRICS, chartDomain, chartSeries, fmtAxisT, fmtTPlus, labelY, layoutLabels, linePath, linear, niceTicks, phaseNow, plotTimeAt, postAscentLabel, readingAt,
   timeTicks, timelineEvents, timelinePhases, valueDomain, visibleRows, type ChartSeries, type Metric, type Reading, type SeriesId,
 } from '../../lib/ascent-chart';
 import { fmtDeg, fmtKm, fmtNum, fmtSpeedKmS, fmtUtc } from '../../lib/format';
+import { liveMission } from '../../lib/launch';
 import { jumpTitle } from '../../lib/launch-seek';
 import { jumpToFlightTime } from '../../state/seek';
 import { useStore } from '../../state/store';
@@ -70,7 +71,8 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
   const phase = phaseNow(series, tSec);
   const reading = readingAt(series, Math.max(0, tSec));
   const inFlight = tSec >= 0 && tSec <= tMax;
-  const phaseLabel = tSec < 0 ? 'PRE-LAUNCH' : phase?.label ?? (tSec > tMax ? 'ASCENT COMPLETE' : 'IN FLIGHT');
+  const onOrbit = liveMission(launch, now).phase === 'ON_ORBIT';
+  const phaseLabel = tSec < 0 ? 'PRE-LAUNCH' : phase?.label ?? (tSec > tMax ? postAscentLabel(series, tSec, onOrbit) : 'IN FLIGHT');
   const m = series.modeled;
 
   return (
@@ -97,7 +99,7 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
           cursorT={inFlight ? tSec : null} reading={inFlight ? reading : null} hoverT={hoverT} onHover={setHoverT} onJump={jump} liveRows={series.live?.rows.length ?? 0} />
       ))}
 
-      <Timeline series={series} events={events} tMax={tMax} tSec={tSec} hoverT={hoverT} onHover={setHoverT} onJump={jump} />
+      <Timeline series={series} events={events} tMax={tMax} tSec={tSec} onOrbit={onOrbit} hoverT={hoverT} onHover={setHoverT} onJump={jump} />
 
       <EventTable events={events} liftoffMs={liftoffMs} tSec={tSec} onJump={jump} />
 
@@ -230,8 +232,8 @@ function Chart({ metric, title, unit, series, events, tMax, cursorT, reading, ho
 
 const TL = { h: 112, labelRows: 3, rowH: 10, bandY: 38, bandH: 14, boosterY: 74 };
 
-function Timeline({ series, events, tMax, tSec, hoverT, onHover, onJump }: {
-  series: AscentSeries; events: AscentEvent[]; tMax: number; tSec: number; hoverT: number | null; onHover: (t: number | null) => void;
+function Timeline({ series, events, tMax, tSec, onOrbit, hoverT, onHover, onJump }: {
+  series: AscentSeries; events: AscentEvent[]; tMax: number; tSec: number; onOrbit: boolean; hoverT: number | null; onHover: (t: number | null) => void;
   onJump: (t: number) => void;
 }) {
   const x = linear(0, tMax, X0, X1);
@@ -244,7 +246,7 @@ function Timeline({ series, events, tMax, tSec, hoverT, onHover, onJump }: {
 
   return (
     <figure className="at-chart at-timeline">
-      <figcaption><span>EVENTS</span><span className="dim"> T+ · {current ? current.label : tSec < 0 ? 'pre-launch' : 'ascent complete'}</span></figcaption>
+      <figcaption><span>EVENTS</span><span className="dim"> T+ · {current ? current.label : tSec < 0 ? 'pre-launch' : postAscentLabel(series, tSec, onOrbit).toLowerCase()}</span></figcaption>
       <svg className="at-jumpable" viewBox={`0 0 ${W} ${TL.h}`} role="img" aria-label="Ascent event timeline"
         onPointerMove={(e) => onHover(plotTimeAt(svgX(e), X0, X1, tMax))}
         onPointerLeave={() => onHover(null)}

@@ -142,6 +142,33 @@ describe('mock non-SGP4 entities', () => {
     expect(launches.some((l) => l.phase === 'ON_ORBIT')).toBe(true);
   });
 
+  it('a flown launch has a modeled payload satellite in orbit; launches not yet flying have none', () => {
+    const { launches, entities: ents } = mockLaunches(NOW);
+    const g = new EntityGraph();
+    ents.forEach((e) => g.upsert(e));
+    const payloads = ents.filter((e) => e.id.endsWith('-payload'));
+    // the recent Starlink launch (3 h ago, Launch Successful) is the only one flying or flown
+    expect(payloads.map((e) => e.id)).toEqual(['launch-mock-m01-payload']);
+    const p = payloads[0];
+    const vehicle = ents.find((e) => e.id === 'launch-mock-m01')!;
+    expect(p).toMatchObject({ kind: 'satellite', bodyId: 'EARTH', parentId: vehicle.id, render: { orbitLine: true, label: true } });
+    expect(p.attrs).toMatchObject({ trajectorySource: 'modeled' });
+    expect(p.provider?.type).toBe('composite');
+    if (p.provider?.type !== 'composite') throw new Error('expected composite');
+    expect(p.provider.segments.map((s) => s.phase)).toEqual(['on orbit (modeled)']);
+    // it has a position and a velocity on a bound orbit in the 12 h window, none before the end of the ascent
+    const net = Date.parse(launches.find((l) => l.entityId === vehicle.id)!.net);
+    const s = g.stateIn(p.id, NOW, 'EARTH:inertial')!;
+    expect(s).not.toBeNull();
+    expect(norm(s.r) - EARTH.radiusKm).toBeGreaterThan(150);
+    expect(norm(s.r) - EARTH.radiusKm).toBeLessThan(400);
+    expect(orbitPeriodSec(g, p, s, NOW)).toBeGreaterThan(85 * 60);
+    expect(g.stateIn(p.id, net + 600_000, 'EARTH:inertial')).toBeNull();
+    // the payload is where the launch vehicle is while the vehicle is on the modeled orbit
+    const v = g.stateIn(vehicle.id, NOW, 'EARTH:inertial')!;
+    expect(norm([v.r[0] - s.r[0], v.r[1] - s.r[1], v.r[2] - s.r[2]])).toBeLessThan(1e-6);
+  });
+
   it('news, DSN and ISS fix are well-formed', () => {
     expect(mockNews(NOW).length).toBeGreaterThan(5);
     expect(mockNews(NOW, 'voyager').every((a) => /voyager/i.test(a.title))).toBe(true);

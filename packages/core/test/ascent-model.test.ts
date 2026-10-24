@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CompositeProvider, DEG, EARTH, defaultInclination, groundAzimuthDeg, inclinationForAzimuthDeg, inertialAzimuthDeg,
+  CompositeProvider, DEG, EARTH, convert, norm, defaultInclination, groundAzimuthDeg, inclinationForAzimuthDeg, inertialAzimuthDeg,
   modelFalcon9Ascent, modeledAscentForLaunch, modeledAscentSegments, pchip, providerFromSpec, sampleAscentRows,
   secoSpeedKmS, stateToGeodetic, ascentEntityEvents, ascentPhaseAt, defaultBranch, modelAscent, vehicleProfileFor, VEHICLES,
-  type Launch,
+  type Launch, type ProviderSpec,
 } from '../src';
 
 const VSFB = { padLatDeg: 34.632, padLonDeg: -120.611 };
@@ -192,7 +192,7 @@ describe('modeled composite provider', () => {
     const m = vsfb();
     const net = Date.parse('2026-10-22T22:51:18Z');
     const segs = modeledAscentSegments(net, { latDeg: VSFB.padLatDeg, lonDeg: VSFB.padLonDeg }, m);
-    expect(segs.map((s) => s.phase)).toEqual(['pad', 'stage 1 ascent', 'staging', 'stage 2 burn', 'orbit (held)', 'pad (launch complete)']);
+    expect(segs.map((s) => s.phase)).toEqual(['pad', 'stage 1 ascent', 'staging', 'stage 2 burn', 'orbit (held)', 'on orbit (modeled)', 'pad (launch complete)']);
     const p = providerFromSpec({ type: 'composite', segments: segs }) as CompositeProvider;
     expect(p.segmentAt(net - 1000)!.phase).toBe('pad');
     expect(p.segmentAt(net + 60_000)!.phase).toBe('stage 1 ascent');
@@ -200,9 +200,9 @@ describe('modeled composite provider', () => {
 
     // every instant from -10 s to the end of the hold has a state, with no gaps at segment joins
     for (let t = -10; t <= 1110; t += 0.5) expect(p.stateAt(net + t * 1000), `t=${t}`).not.toBeNull();
-    expect(p.segmentAt(net + 1200_000)!.phase).toBe('pad (launch complete)');
+    expect(p.segmentAt(net + 1200_000)!.phase).toBe('on orbit (modeled)');
 
-    const g = (t: number) => stateToGeodetic(p.stateAt(net + t * 1000)!, net + t * 1000, 'EARTH');
+    const g =(t: number) => stateToGeodetic(p.stateAt(net + t * 1000)!, net + t * 1000, 'EARTH');
     expect(g(-5).lat / DEG).toBeCloseTo(VSFB.padLatDeg, 4);
     const meco = sampleAscentRows(m.rows, 150)!;
     expect(g(150).alt).toBeCloseTo(meco.altKm, 1);
@@ -213,6 +213,79 @@ describe('modeled composite provider', () => {
     const dLat = (end.lat / DEG - VSFB.padLatDeg) * DEG;
     const dLon = (end.lon / DEG - VSFB.padLonDeg) * DEG * Math.cos(VSFB.padLatDeg * DEG);
     expect(Math.hypot(dLat, dLon) * EARTH.radiusKm).toBeGreaterThan(sampleAscentRows(m.rows, 510)!.downrangeKm * 0.9);
+  });
+});
+
+describe('after SECO (Held Orbit)', () => {
+  const net = Date.parse('2026-10-22T22:51:18Z');
+  const pad = { latDeg: VSFB.padLatDeg, lonDeg: VSFB.padLonDeg };
+  const composite = (m = vsfb(), opts?: Parameters<typeof modeledAscentSegments>[3]) =>
+    providerFromSpec({ type: 'composite', segments: modeledAscentSegments(net, pad, m, opts) }) as CompositeProvider;
+  const fixedAt = (p: CompositeProvider, tMs: number) => convert(p.stateAt(tMs)!, 'EARTH:fixed', tMs).r;
+  const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  it('does not teleport back to the pad when the held phase ends', () => {
+    const p = composite();
+    // one second of orbital motion is about 8 km; the pad is thousands of km away
+    const jump = dist(fixedAt(p, net + 1110_000), fixedAt(p, net + 1111_000));
+    expect(jump).toBeLessThan(12);
+    expect(stateToGeodetic(p.stateAt(net + 1111_000)!, net + 1111_000, 'EARTH').alt).toBeGreaterThan(100);
+  });
+
+  it('continues on a keplerian orbit with matching position and velocity at the last ascent row', () => {
+    const m = vsfb();
+    const p = composite(m);
+    const t = net + 1110_000;
+    expect(p.segmentAt(t + 5000)!.phase).toBe('on orbit (modeled)');
+    expect(p.segmentAt(t + 5000)!.spec.type).toBe('keplerian');
+    expect(dist(fixedAt(p, t - 1), fixedAt(p, t + 1))).toBeLessThan(0.1);
+
+    const before = convert(p.stateAt(t - 1)!, 'EARTH:inertial', t - 1);
+    const after = convert(p.stateAt(t + 1)!, 'EARTH:inertial', t + 1);
+    // the sampled hold has a finite-difference velocity; the orbit is built from the plane and the SECO speed
+    expect(norm(after.v!)).toBeCloseTo(norm(before.v!), 0);
+    const cosAngle = (before.v![0] * after.v![0] + before.v![1] * after.v![1] + before.v![2] * after.v![2]) / (norm(before.v!) * norm(after.v!));
+    expect(Math.acos(Math.min(1, cosAngle)) / DEG).toBeLessThan(5);
+
+    const seg = p.segmentAt(t + 5000)!.spec as Extract<ProviderSpec, { type: 'keplerian' }>;
+    expect(seg.bodyId).toBe('EARTH');
+    expect(seg.elements.i / DEG).toBeGreaterThan(m.inclinationDeg - 3);
+    expect(seg.elements.i / DEG).toBeLessThan(m.inclinationDeg + 3);
+    const perigee = seg.elements.a * (1 - seg.elements.e) - EARTH.radiusKm;
+    expect(perigee).toBeGreaterThan(100);
+    expect(seg.elements.a * (1 + seg.elements.e) - EARTH.radiusKm).toBeLessThan(450);
+  });
+
+  it('stays in orbit for about 12 hours, then returns the launch entity to the pad marker', () => {
+    const p = composite();
+    const t = net + 1110_000;
+    for (const dh of [1, 5, 11]) {
+      const s = p.stateAt(t + dh * 3600_000)!;
+      expect(s, `+${dh} h`).not.toBeNull();
+      expect(stateToGeodetic(s, t + dh * 3600_000, 'EARTH').alt).toBeGreaterThan(100);
+    }
+    expect(p.segmentAt(t + 13 * 3600_000)!.phase).toBe('pad (launch complete)');
+    // the payload variant has no pad tail: it ends with the orbit
+    const payload = composite(vsfb(), { padAfterOrbit: false });
+    expect(payload.stateAt(t + 11 * 3600_000)).not.toBeNull();
+    expect(payload.stateAt(t + 13 * 3600_000)).toBeNull();
+  });
+
+  it('keeps the pad tail when the flight did not reach orbit', () => {
+    const p = composite(vsfb(), { orbit: false });
+    const segs = modeledAscentSegments(net, pad, vsfb(), { orbit: false });
+    expect(segs.map((s) => s.phase).slice(-2)).toEqual(['orbit (held)', 'pad (launch complete)']);
+    expect(p.segmentAt(net + 1200_000)!.phase).toBe('pad (launch complete)');
+  });
+
+  it('has a state at every instant across segment joins, including fractional milliseconds', () => {
+    const p = composite();
+    const joins = [0, 150, 153, 158, 510, 1110].map((s) => net + s * 1000);
+    for (const j of joins) {
+      for (const d of [-1, -0.75, -0.5, -0.25, -0.0001, 0, 0.0001, 0.25, 0.5, 0.75, 1]) {
+        expect(p.stateAt(j + d), `join ${(j - net) / 1000} s ${d}`).not.toBeNull();
+      }
+    }
   });
 });
 

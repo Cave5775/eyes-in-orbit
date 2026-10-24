@@ -1,5 +1,5 @@
 import {
-  ascentPhaseAt, sampleAscentRows, type AscentEvent, type AscentPhaseSpan, type AscentRow, type AscentSeries,
+  ORBIT_TAIL_SEC, ascentPhaseAt, sampleAscentRows, type AscentEvent, type AscentPhaseSpan, type AscentRow, type AscentSeries,
 } from '@eio/core';
 
 /** Pure helpers behind `ui/detail/AscentTelemetry.tsx`: scales, ticks, series selection, label layout. */
@@ -123,6 +123,17 @@ export function timelinePhases(s: AscentSeries): AscentPhaseSpan[] {
 
 export function phaseNow(s: AscentSeries, tSec: number): AscentPhaseSpan | undefined {
   return ascentPhaseAt(timelinePhases(s), tSec);
+}
+
+/**
+ * Status text for a time after the last modeled phase. The flight goes on in the modeled orbit (`on orbit (modeled)`, a placeholder
+ * until a TLE exists) for ORBIT_TAIL_SEC when the launch reached orbit (`onOrbit`: mission phase ON_ORBIT); before and after
+ * that window, and without a modeled series, the ascent is just complete.
+ */
+export function postAscentLabel(s: AscentSeries, tSec: number, onOrbit: boolean): string {
+  const phases = timelinePhases(s);
+  const end = phases.length ? phases[phases.length - 1].toSec : undefined;
+  return onOrbit && end !== undefined && tSec >= end && tSec <= end + ORBIT_TAIL_SEC ? 'ON ORBIT (MODELED)' : 'ASCENT COMPLETE';
 }
 
 export interface PlacedLabel {

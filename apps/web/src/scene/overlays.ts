@@ -175,11 +175,16 @@ export class EntityOverlay {
     const pos = this.orbit.pos;
     this.orbitRef = inFrame?.ref ?? null;
     let n = 0;
+    let prev: Vec3 | null = null;
     if (!inFrame || inFrame.ref) {
       for (let i = 0; i <= ORBIT_POINTS; i++) {
         const ts = t + (i / ORBIT_POINTS) * periodSec * 1000;
         const s = graph.stateIn(rec.id, ts, 'EARTH:inertial');
         if (!s) continue;
+        // a step of a quarter of the radius or more is no orbit: the provider moved the entity elsewhere (a modeled orbit
+        // that ends hands the launch vehicle back to its pad marker), so the line stops where the orbit does
+        if (prev && norm(prev) > 1 && Math.hypot(s.r[0] - prev[0], s.r[1] - prev[1], s.r[2] - prev[2]) > 0.25 * norm(prev)) break;
+        prev = s.r;
         let p = s.r;
         if (inFrame) {
           const c = inFrame.centreAt(ts);

@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { CompositeProvider, providerFromSpec, stateToGeodetic, DEG, LL2_STATUS, type Launch } from '@eio/core';
+import {
+  CompositeProvider, convert, modelFalcon9Ascent, modeledAscentForLaunch, providerFromSpec, stateToGeodetic, DEG, LL2_STATUS, type KeplerElements, type Launch,
+} from '@eio/core';
 import { describe, expect, it } from 'vitest';
-import { boosterEntity, launchEntity, normalizeLaunch, normalizeStreams, streamKind, syncLaunchEntities } from '../src/connectors/launchlibrary';
+import { boosterEntity, launchEntity, normalizeLaunch, normalizeStreams, payloadEntity, streamKind, syncLaunchEntities } from '../src/connectors/launchlibrary';
 import { Hub } from '../src/hub';
-import { parseTrajectory } from '../src/trajectory';
+import { parseTrajectory, type Trajectory } from '../src/trajectory';
 
 const raw = () => JSON.parse(readFileSync(new URL('./fixtures/ll2-launch.json', import.meta.url), 'utf8'));
 const NET = Date.parse('2026-10-22T22:51:18Z');
@@ -183,7 +185,9 @@ describe('launch entity provider', () => {
     const p = providerFromSpec(e.provider!) as CompositeProvider;
     expect(p.segmentAt(NET - 5000)!.phase).toBe('pad');
     expect(p.segmentAt(NET + 30_000)!.phase).toBe('ascent');
-    expect(p.segmentAt(NET + 200_000)).toBeNull();
+    // the file ends mid-ascent (T+120 s, 50 km): the last fix is held instead of the entity vanishing
+    expect(p.segmentAt(NET + 200_000)!.phase).toBe('last fix (held)');
+    expect(stateToGeodetic(p.stateAt(NET + 600_000)!, NET + 600_000, 'EARTH').alt).toBeCloseTo(50, 1);
 
     const pad = stateToGeodetic(p.stateAt(NET - 5000)!, NET - 5000, 'EARTH');
     expect(pad.lat / DEG).toBeCloseTo(34.632, 4);
@@ -192,5 +196,84 @@ describe('launch entity provider', () => {
     // azimuth 140 deg from Vandenberg heads south-east: lat decreases, lon increases
     expect(climb.lat / DEG).toBeLessThan(34.632);
     expect(climb.lon / DEG).toBeGreaterThan(-120.611);
+  });
+
+  it('continues a trajectory file that ends on an orbit with the modeled orbit, never null after the last row', () => {
+    const m = modeledAscentForLaunch(launch())!;
+    const file: Trajectory = {
+      id: 'full', match: { launchId: launch().id }, azimuthDeg: m.azimuthDeg,
+      rows: m.rows.filter((r) => r.tSec <= 510).map((r) => ({ tSec: r.tSec, altKm: r.altKm, downrangeKm: r.downrangeKm })),
+    };
+    const e = launchEntity(launch(), file);
+    expect(e.attrs).toMatchObject({ trajectorySource: 'file' });
+    const p = providerFromSpec(e.provider!) as CompositeProvider;
+    const fixed = (t: number) => convert(p.stateAt(NET + t * 1000)!, 'EARTH:fixed', NET + t * 1000).r;
+    expect(p.stateAt(NET + 600_000)).not.toBeNull();
+    expect(p.segmentAt(NET + 600_000)!.phase).toBe('on orbit (modeled)');
+    // no jump at the end of the file and about 8 km per second afterwards
+    const step = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    expect(step(fixed(509.9), fixed(510.1))).toBeLessThan(3);
+    expect(step(fixed(600), fixed(601))).toBeGreaterThan(5);
+    expect(step(fixed(600), fixed(601))).toBeLessThan(10);
+    for (const t of [511, 3600, 11 * 3600]) expect(p.stateAt(NET + t * 1000), `t=${t}`).not.toBeNull();
+  });
+
+  it('keeps the vehicle on the modeled orbit after the held phase instead of jumping back to the pad', () => {
+    const e = launchEntity(launch());
+    const p = providerFromSpec(e.provider!) as CompositeProvider;
+    const fixed = (t: number) => convert(p.stateAt(NET + t * 1000)!, 'EARTH:fixed', NET + t * 1000).r;
+    const step = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    expect(step(fixed(1110), fixed(1111))).toBeLessThan(12);
+    expect(p.segmentAt(NET + 1200_000)!.phase).toBe('on orbit (modeled)');
+    expect(stateToGeodetic(p.stateAt(NET + 3600_000)!, NET + 3600_000, 'EARTH').alt).toBeGreaterThan(100);
+    // failed flights never reached the modeled orbit: they return to the pad marker after the ascent
+    const failed = launchEntity({ ...launch(), status: { id: LL2_STATUS.FAILURE, name: 'Launch Failure', abbrev: 'Failure' } });
+    const pf = providerFromSpec(failed.provider!) as CompositeProvider;
+    expect(pf.segmentAt(NET + 1200_000)!.phase).toBe('pad (launch complete)');
+    expect(payloadEntity({ ...launch(), status: { id: LL2_STATUS.FAILURE, name: 'f', abbrev: 'f' }, phase: 'FAILED' })).toBeNull();
+  });
+
+  it('keeps the model aligned with the FSM: a Go launch at T+1200 s is ON_ORBIT with a modeled orbit', () => {
+    const flown = normalizeLaunch(raw(), NET + 1200_000);
+    expect(flown.phase).toBe('ON_ORBIT');
+    expect(normalizeLaunch(raw(), NET + 1100_000).phase).toBe('ORBIT_INSERTION');
+    expect(modelFalcon9Ascent({ padLatDeg: 34.632, padLonDeg: -120.611, inclinationDeg: 70 }).rows.at(-1)!.tSec).toBe(1110);
+  });
+
+  it('adds the payload as a satellite on the modeled orbit for launches that reached orbit', () => {
+    const flown = normalizeLaunch(raw(), NET + 3600_000);
+    const e = payloadEntity(flown)!;
+    expect(e).toMatchObject({
+      id: `${flown.entityId}-payload`, kind: 'satellite', bodyId: 'EARTH', parentId: flown.entityId,
+      render: { orbitLine: true }, attrs: { trajectorySource: 'modeled', launch: flown.name, ascentInclinationDeg: 70 },
+    });
+    expect(e.provider!.type).toBe('composite');
+    const p = providerFromSpec(e.provider!) as CompositeProvider;
+    expect(p.segmentAt(NET + 1200_000)!.phase).toBe('on orbit (modeled)');
+    expect(p.stateAt(NET + 300_000)).toBeNull(); // nothing before the end of the modeled ascent
+    expect(p.stateAt(NET + 1110_000 + 11 * 3600_000)).not.toBeNull();
+    expect(p.stateAt(NET + 1110_000 + 13 * 3600_000)).toBeNull(); // the placeholder ends after about 12 h, no pad tail
+    // the same orbit as the launch vehicle's tail
+    const veh = providerFromSpec(launchEntity(flown).provider!) as CompositeProvider;
+    const at = NET + 7200_000;
+    const a = p.stateAt(at)!.r, b = veh.stateAt(at)!.r;
+    expect(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])).toBeLessThan(1e-6);
+    const k = (p.segmentAt(at)!.spec as { elements: KeplerElements }).elements;
+    expect(k.i / DEG).toBeCloseTo(70, 0);
+
+    // not for launches that have not flown, failed, or have no model
+    expect(payloadEntity(launch())).toBeNull();
+    expect(payloadEntity({ ...flown, vehicle: 'Ariane 64', name: 'Ariane 6 | CSO-4' })).toBeNull();
+    expect(payloadEntity({ ...flown, pad: undefined })).toBeNull();
+  });
+
+  it('syncLaunchEntities publishes the payload once the launch has flown', () => {
+    const hub = new Hub();
+    hub.setLaunches([launch()]);
+    syncLaunchEntities(hub, NET - 7200_000);
+    expect(hub.graph.get(`${launch().entityId}-payload`)).toBeUndefined();
+    syncLaunchEntities(hub, NET + 2000_000);
+    expect(hub.launches[0].phase).toBe('ON_ORBIT');
+    expect(hub.graph.get(`${launch().entityId}-payload`)).toMatchObject({ kind: 'satellite', parentId: launch().entityId });
   });
 });

@@ -12,7 +12,9 @@ import { framePathPoint, type FrameSampler } from './frame';
  * 460 m/s eastward streak, and an ascent would be sheared by the Earth's rotation. So when every sample is
  * native `EARTH:fixed` and the window is short (<= 45 min, <= 11 degrees of rotation) the path is returned
  * in the body-fixed frame and the scene attaches it to the rotating Earth group; the marker (evaluated at
- * "now") sits exactly on it. Everything else (probes, Keplerian, sampled inertial) is converted to
+ * "now") sits exactly on it. A whole planned launch flight (anchored plan) is also drawn body-fixed when its tail is a
+ * Keplerian orbit continuation: the inertial tail is converted to EARTH:fixed sample by sample, so the line stays one
+ * continuous ground-glued polyline from the pad through SECO into the first part of the orbit. Everything else (probes, Keplerian, sampled inertial) is converted to
  * `EARTH:inertial`, like the rest of the scene.
  */
 
@@ -70,29 +72,44 @@ function clip(t0: number, t1: number, range?: [number, number]): PathPlan | null
 }
 
 /**
- * The planned flight of a composite made only of geodetic holds and sampled trajectories (a launch ascent or a booster
- * return between its pad and its landing point): the run of abutting sampled segments nearest to `nowMs` (the one in
- * progress, else the next to fly, else the last flown). Null for any other composite, and for a flight too long to be
- * drawn on the rotating ground (see FIXED_FRAME_MAX_WINDOW_MS).
+ * The planned flight of a composite made only of geodetic holds, sampled trajectories and (after the ascent) a keplerian
+ * continuation: a launch ascent that goes on in the modeled orbit (`on orbit (modeled)`, 12 h) or a booster return between
+ * its pad and its landing point. It is the run of abutting sampled / keplerian segments nearest to `nowMs` (the one in
+ * progress, else the next to fly, else the last flown) that holds at least one sampled segment (a payload's keplerian-only
+ * composite is no planned flight: it has its orbit line). Null for any other composite, and for a sampled flight too long to
+ * be drawn on the rotating ground (see FIXED_FRAME_MAX_WINDOW_MS).
+ *
+ * The orbit tail is drawn only as far as the same limit reaches, counted from the start of the run: the whole planned path
+ * is one body-fixed polyline (the ascent stays glued to the ground), and a 12 h ribbon would be neither readable nor
+ * correct in that frame. For Falcon 9 that is the 18.5 minute ascent plus about 26 minutes (a third of an orbit) of the
+ * orbit, so the line visibly carries on past SECO; the full orbit is the orbit line (`EntityOverlay`) of the vehicle and of
+ * its payload.
  */
 function plannedFlight(spec: ProviderSpec, nowMs: number): PathPlan | null {
   const segs = compositePhases(spec);
-  if (!segs.length || !segs.every((s) => s.spec.type === 'geodetic' || s.spec.type === 'sampled')) return null;
-  const runs: [number, number][] = [];
+  if (!segs.length || !segs.every((s) => s.spec.type === 'geodetic' || s.spec.type === 'sampled' || s.spec.type === 'keplerian')) return null;
+  // from, to: the abutting run; sampledTo: where its last sampled segment ends (the flight proper, before any orbit tail)
+  const runs: { from: number; to: number; sampledTo: number }[] = [];
   for (const s of segs) {
-    if (s.spec.type !== 'sampled') continue;
+    if (s.spec.type === 'geodetic') continue;
+    const sampled = s.spec.type === 'sampled';
     const last = runs[runs.length - 1];
-    if (last && s.fromMs - last[1] <= 1000) last[1] = Math.max(last[1], s.toMs);
-    else runs.push([s.fromMs, s.toMs]);
+    if (last && s.fromMs - last.to <= 1000) {
+      last.to = Math.max(last.to, s.toMs);
+      if (sampled) last.sampledTo = Math.max(last.sampledTo, s.toMs);
+    } else runs.push({ from: s.fromMs, to: s.toMs, sampledTo: sampled ? s.toMs : s.fromMs });
   }
-  const run = runs.find((r) => nowMs >= r[0] && nowMs <= r[1]) ?? runs.find((r) => r[0] > nowMs) ?? runs[runs.length - 1];
-  return run && run[1] - run[0] <= FIXED_FRAME_MAX_WINDOW_MS ? { t0: run[0], t1: run[1] } : null;
+  const flights = runs.filter((r) => r.sampledTo > r.from);
+  const run = flights.find((r) => nowMs >= r.from && nowMs <= r.to) ?? flights.find((r) => r.from > nowMs) ?? flights[flights.length - 1];
+  if (!run || run.sampledTo - run.from > FIXED_FRAME_MAX_WINDOW_MS) return null;
+  return { t0: run.from, t1: Math.min(run.to, run.from + FIXED_FRAME_MAX_WINDOW_MS) };
 }
 
 /**
  * Time window to draw for a provider, or null when no path applies (SGP4 has its orbit line, geodetic points do not move).
  *  - sampled, long (>= 6 h, e.g. Horizons ephemerides): the whole valid range within -1 d .. +2 d;
- *  - composite of pad holds and sampled flight (launch ascent, booster return): the whole planned flight, whenever it is;
+ *  - composite of pad holds and sampled flight (launch ascent, booster return): the whole planned flight, whenever it is,
+ *    plus the first part of a keplerian orbit continuation (see `plannedFlight`);
  *  - sampled, short (landing arcs, trajectory samples) and other composites: -max(trail, 5 min) .. +10 min;
  *  - relative (drone near a rover): -max(trail, 3 min) .. +3 min;
  *  - keplerian: -1/4 .. +1 period.
@@ -253,7 +270,10 @@ export function samplePath(
   }
 
   const allFixed = !inFrame && states.length > 0 && states.every((x) => x.s.frame === 'EARTH:fixed');
-  const frame: 'fixed' | 'inertial' = allFixed && plan.t1 - plan.t0 <= FIXED_FRAME_MAX_WINDOW_MS ? 'fixed' : 'inertial';
+  // a planned flight (anchored) is body-fixed as a whole even where its orbit tail is natively inertial: the tail is converted
+  // sample by sample, so the line is continuous at SECO and glued to the ground like its ascent
+  const planned = !inFrame && !!plan.anchored && states.length > 0;
+  const frame: 'fixed' | 'inertial' = (allFixed || planned) && plan.t1 - plan.t0 <= FIXED_FRAME_MAX_WINDOW_MS ? 'fixed' : 'inertial';
 
   let n = 0;
   let compressed = false;
@@ -261,8 +281,17 @@ export function samplePath(
   let moving = false;
   for (const { t, s } of states) {
     let r: Vec3;
-    if (frame === 'fixed') r = liftNearSurface(s.r);
-    else {
+    let fixedR = s.r;
+    if (frame === 'fixed') {
+      if (s.frame !== 'EARTH:fixed') {
+        try {
+          fixedR = convert(s, 'EARTH:fixed' as FrameId, t).r;
+        } catch {
+          continue;
+        }
+      }
+      r = liftNearSurface(fixedR);
+    } else {
       let inertial = s;
       try {
         inertial = convert(s, 'EARTH:inertial' as FrameId, t);
@@ -286,7 +315,7 @@ export function samplePath(
     buf.times[n] = t;
     n++;
     // extent: in the native fixed frame when every sample is fixed (a landed booster is stationary there)
-    const e = allFixed ? s.r : r;
+    const e = allFixed || frame === 'fixed' ? fixedR : r;
     minX = Math.min(minX, e[0]); maxX = Math.max(maxX, e[0]);
     minY = Math.min(minY, e[1]); maxY = Math.max(maxY, e[1]);
     minZ = Math.min(minZ, e[2]); maxZ = Math.max(maxZ, e[2]);

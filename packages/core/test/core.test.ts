@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   Clock, CompositeProvider, EntityGraph, EARTH, GeodeticProvider, KeplerianProvider, RelativeProvider,
   SampledProvider, Sgp4Provider, DEG, convert, deriveMissionState, formatCountdown, fixedToGeodetic,
-  geodeticToFixed, gmstRad, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS, MOON,
+  geodeticToFixed, gmstRad, missionTimingFor, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS, MOON,
   type Omm, type Sample,
 } from '../src';
 
@@ -218,6 +218,22 @@ describe('mission FSM', () => {
     expect(at(LL2_STATUS.IN_FLIGHT, 700).phase).toBe('ORBIT_INSERTION');
     expect(at(LL2_STATUS.IN_FLIGHT, 5000).phase).toBe('ON_ORBIT');
     expect(at(LL2_STATUS.SUCCESS, 9000).phase).toBe('ON_ORBIT');
+  });
+
+  it('ends ORBIT_INSERTION with the modeled ascent (T+1110 s) and falls to ON_ORBIT for a late Go or unknown status', () => {
+    expect(at(LL2_STATUS.IN_FLIGHT, 1109).phase).toBe('ORBIT_INSERTION');
+    expect(at(LL2_STATUS.IN_FLIGHT, 1111).phase).toBe('ON_ORBIT');
+    expect(at(LL2_STATUS.GO, 120).phase).toBe('ACTIVE_ASCENT');
+    expect(at(LL2_STATUS.GO, 700).phase).toBe('ORBIT_INSERTION');
+    expect(at(LL2_STATUS.GO, 1200)).toMatchObject({ phase: 'ON_ORBIT', hold: false });
+    expect(at(LL2_STATUS.GO, 86_400).phase).toBe('ON_ORBIT');
+    expect(at(9, 1200).phase).toBe('ON_ORBIT'); // a status id this table does not know
+    // pre-launch statuses past NET stay scheduled: the launch has not happened
+    for (const s of [LL2_STATUS.TBD, LL2_STATUS.TBC, LL2_STATUS.HOLD]) expect(at(s, 1200).phase).toBe('SCHEDULED');
+    // vehicle timings come from the profile
+    expect(deriveMissionState({ statusId: LL2_STATUS.GO, netMs: net, nowMs: net + 1130_000, ...missionTimingFor({ vehicle: 'Electron', name: 'Electron | X' }) }).phase).toBe('ORBIT_INSERTION');
+    expect(deriveMissionState({ statusId: LL2_STATUS.GO, netMs: net, nowMs: net + 1130_000, ...missionTimingFor({ vehicle: 'Falcon 9 Block 5', name: 'Falcon 9 | X' }) }).phase).toBe('ON_ORBIT');
+    expect(missionTimingFor({ vehicle: 'Ariane 6', name: 'Ariane 6 | X' })).toEqual({});
   });
 
   it('reports holds and failures', () => {

@@ -1,6 +1,6 @@
 import {
   DEG, EARTH, LL2_STATUS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, convert, deriveMissionState,
-  modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, stateToGeodetic, sunDirectionEci,
+  missionTimingFor, modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, orbitSegmentsOf, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
 } from '@eio/core';
@@ -233,7 +233,8 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
   for (const d of LAUNCH_DEFS) {
     const net = nowMs + d.offsetMs;
     const pad = PADS[d.pad];
-    const state = deriveMissionState({ statusId: d.statusId, netMs: net, nowMs });
+    const timing = missionTimingFor({ vehicle: d.vehicle, name: d.name });
+    const state = deriveMissionState({ statusId: d.statusId, netMs: net, nowMs, ...timing });
     const streams = d.offsetMs < 12 * HOUR ? [NASA_LIVE, NASA_TV] : [NASA_TV];
     const id = `mock-${d.key}`;
     const entityId = `launch-${id}`;
@@ -242,12 +243,15 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
       net: new Date(net).toISOString(), windowStart: new Date(net).toISOString(), windowEnd: new Date(net + 30 * MIN).toISOString(),
       provider: d.provider, vehicle: d.vehicle, mission: d.mission, pad, streams, phase: state.phase, hold: state.hold, entityId,
     });
-    // Falcon 9 launches get the same MODELED nominal ascent the server attaches (composite: pad, then ascent samples)
+    // Falcon 9 launches get the same MODELED nominal ascent the server attaches (composite: pad, the ascent samples, then the
+    // modeled orbit and the pad marker); a failed flight skips the orbit
     const modeled = modeledAscentForLaunch(launches[launches.length - 1]);
+    const failed = d.statusId === LL2_STATUS.FAILURE || d.statusId === LL2_STATUS.PARTIAL_FAILURE;
+    const ascentSegments = modeled ? modeledAscentSegments(net, { latDeg: pad.latitude, lonDeg: pad.longitude }, modeled, { orbit: !failed }) : null;
     entities.push({
       id: entityId, name: d.name, kind: 'launch_vehicle', bodyId: 'EARTH', aliases: { ll2: id }, group: 'launch',
-      provider: modeled
-        ? { type: 'composite', segments: modeledAscentSegments(net, { latDeg: pad.latitude, lonDeg: pad.longitude }, modeled) }
+      provider: ascentSegments
+        ? { type: 'composite', segments: ascentSegments }
         : { type: 'geodetic', bodyId: 'EARTH', latDeg: pad.latitude, lonDeg: pad.longitude, altKm: 0.01 },
       phase: state.phase, links: { streams, newsQuery: d.mission?.name ?? d.name, launchId: id },
       events: modeled ? ascentEntityEvents(modeled.events, net) : undefined,
@@ -272,6 +276,23 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
         attrs: {
           launch: d.name, recovery: modeled.recovery, landingDownrangeKm: Math.round(modeled.booster.landingDownrangeKm),
           trajectorySource: 'modeled', trajectoryNote: 'MODELED booster return path through the event times, not measured',
+        },
+        updatedAt: nowMs,
+      });
+    }
+    // the payload as its own satellite, like the server's `launch-<id>-payload`: only for launches that are flying or flown
+    // (the mock's phases are fixed at load) and reached orbit; it follows the keplerian part of the vehicle's composite
+    const orbit = orbitSegmentsOf(ascentSegments ?? undefined);
+    if (orbit && ['ACTIVE_ASCENT', 'ORBIT_INSERTION', 'ON_ORBIT'].includes(state.phase)) {
+      entities.push({
+        id: `${entityId}-payload`, name: `${d.mission?.name ?? d.name} (payload)`, kind: 'satellite', bodyId: 'EARTH', parentId: entityId, aliases: {}, group: 'launch',
+        provider: { type: 'composite', segments: orbit },
+        render: { colorKey: 'satellite', label: true, orbitLine: true },
+        attrs: {
+          provider: d.provider, launch: d.name, mission: d.mission?.name ?? null, orbit: d.mission?.orbit ?? null,
+          ascentInclinationDeg: modeled?.inclinationDeg ?? null,
+          trajectorySource: 'modeled',
+          trajectoryNote: 'MODELED two-body orbit (no J2, no drag) from the end of the modeled ascent, about 12 h, until a TLE exists',
         },
         updatedAt: nowMs,
       });

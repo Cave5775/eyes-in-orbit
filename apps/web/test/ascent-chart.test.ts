@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { providerFromSpec, CompositeProvider, type AscentRow, type AscentSeries } from '@eio/core';
 import {
-  chartDomain, chartSeries, fmtAxisT, fmtTPlus, labelY, layoutLabels, linePath, linear, niceTicks, phaseNow, readingAt, timeTicks,
+  chartDomain, chartSeries, fmtAxisT, fmtTPlus, labelY, layoutLabels, linePath, linear, niceTicks, phaseNow, postAscentLabel, readingAt, timeTicks,
   timelineEvents, valueDomain, visibleRows,
 } from '../src/lib/ascent-chart';
 import { mockAscentSeries, mockLaunches } from '../src/mock/generators';
@@ -123,6 +123,21 @@ describe('cursor readings', () => {
     expect(phaseNow(s, 100)!.id).toBe('first-stage');
     expect(phaseNow(s, 300)!.id).toBe('second-stage');
     expect(phaseNow(s, -1)).toBeUndefined();
+  });
+
+  it('tolerates the modeled orbit after the last phase: no phase span, labelled by what the flight went on to', () => {
+    const s = modeledSeries();
+    const end = s.modeled!.phases[s.modeled!.phases.length - 1].toSec;
+    expect(end).toBe(1110);
+    expect(phaseNow(s, 1000)!.label).toBe('ORBIT (HELD)');
+    expect(phaseNow(s, end + 60)).toBeUndefined(); // the spans end with the held state; the orbit has no span
+    expect(postAscentLabel(s, end + 60, true)).toBe('ON ORBIT (MODELED)');
+    expect(postAscentLabel(s, end + 11.9 * 3600, true)).toBe('ON ORBIT (MODELED)');
+    expect(postAscentLabel(s, end + 12.1 * 3600, true)).toBe('ASCENT COMPLETE'); // back at the pad marker
+    expect(postAscentLabel(s, end + 60, false)).toBe('ASCENT COMPLETE'); // failed flight: no orbit
+    // the chart range and the readings still stop at SECO + margin
+    expect(chartDomain(s).tMax).toBe(570);
+    expect(readingAt(s, end + 3600)).not.toBeNull();
   });
 });
 
