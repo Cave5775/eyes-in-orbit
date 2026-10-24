@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Omm, StreamLink } from '@eio/core';
-import { clearBackoff, isBackedOff, readBackoff, recordFailure } from '../backoff';
+import { clearBackoff, isBackedOff, isBlockError, isConnectError, readBackoff, recordFailure } from '../backoff';
 import type { Connector, ConnectorContext } from '../connector';
 import type { NewEntity } from '../hub';
+import { isFresh } from '../store';
 
 /**
  * Fragmentation-event debris clouds. GROUP names verified against the CelesTrak index page
@@ -143,53 +144,92 @@ function localGroup(ctx: ConnectorContext, group: SatGroup): { omms: Omm[]; sour
 
 const hhmm = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
 
-export const celestrak: Connector = {
-  id: 'celestrak',
-  intervalMs: TTL_MS,
-  startDelayMs: 500,
-  async run(ctx) {
-    const groups: Partial<Record<SatGroup, Omm[]>> = {};
-    const failures: string[] = [];
-    const degraded: string[] = [];
-    let retryAt = Infinity;
-    for (const group of FETCH_ORDER) {
-      const source = `celestrak:${group}`;
-      const gate = readBackoff(ctx.store, source);
-      const give = (local: { omms: Omm[]; source: Source } | undefined, why: string): void => {
-        if (local) {
-          groups[group] = local.omms;
-          degraded.push(`${group}: ${why}, using ${local.source === 'file' ? 'data file' : 'cache'}`);
-        } else failures.push(`${group}: ${why}`);
-      };
-      if (isBackedOff(gate)) {
-        // CelesTrak 403s clients that re-download; stay off the network until the stored retry time, even across restarts
-        retryAt = Math.min(retryAt, gate.notBefore);
-        give(localGroup(ctx, group), `waiting until ${hhmm(gate.notBefore)} (${gate.message ?? 'earlier failure'})`);
-        continue;
-      }
-      try {
-        const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=json`;
-        const res = await ctx.cachedFetch(source, url, TTL_MS, parseOmmJson);
-        groups[group] = res.value;
-        if (res.stale) {
-          // cachedFetch fell back to an old entry because the download failed
-          const next = recordFailure(ctx.store, source, res.error ?? 'download failed');
+export interface CelestrakOptions {
+  /** pause before a download that follows another download in the same run (default 1 to 2 s) */
+  spacingMs?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const defaultSpacingMs = (): number => 1000 + Math.random() * 1000;
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** `spacingMs`/`sleep` are injectable so tests do not wait. */
+export function createCelestrak(opts: CelestrakOptions = {}): Connector {
+  const spacingMs = opts.spacingMs ?? defaultSpacingMs;
+  const sleep = opts.sleep ?? defaultSleep;
+  return {
+    id: 'celestrak',
+    intervalMs: TTL_MS,
+    startDelayMs: 500,
+    async run(ctx) {
+      const groups: Partial<Record<SatGroup, Omm[]>> = {};
+      const failures: string[] = [];
+      const degraded: string[] = [];
+      const skipped: string[] = [];
+      let retryAt = Infinity;
+      /** set by the first block or connect error (or a stored connect-error gate): the rest of the run stays off the network */
+      let halt: string | undefined;
+      /** a group was downloaded earlier in this run, so the next download waits a moment */
+      let downloaded = false;
+      for (const group of FETCH_ORDER) {
+        const source = `celestrak:${group}`;
+        if (halt) {
+          // one shared gate: no request, no failure counted for this group, one line in total
+          const local = localGroup(ctx, group);
+          if (local) groups[group] = local.omms;
+          skipped.push(`${group} (${local ? (local.source === 'file' ? 'data file' : 'cache') : 'no data'})`);
+          continue;
+        }
+        const gate = readBackoff(ctx.store, source);
+        const give = (local: { omms: Omm[]; source: Source } | undefined, why: string): void => {
+          if (local) {
+            groups[group] = local.omms;
+            degraded.push(`${group}: ${why}, using ${local.source === 'file' ? 'data file' : 'cache'}`);
+          } else failures.push(`${group}: ${why}`);
+        };
+        if (isBackedOff(gate)) {
+          // CelesTrak 403s clients that re-download; stay off the network until the stored retry time, even across restarts
+          retryAt = Math.min(retryAt, gate.notBefore);
+          give(localGroup(ctx, group), `waiting until ${hhmm(gate.notBefore)} (${gate.message ?? 'earlier failure'})`);
+          // an unreachable host stays unreachable for the other groups too; a 403 on one group says nothing about them
+          if (gate.message && isConnectError(gate.message)) halt = `${group} is waiting for its retry time`;
+          continue;
+        }
+        const row = ctx.store.get<Omm[]>(source);
+        const needsDownload = !(row && isFresh(row));
+        if (needsDownload && downloaded && !ctx.config.offline) await sleep(spacingMs());
+        if (needsDownload) downloaded = true;
+        // a stale copy with a fetch time lets CelesTrak answer 304 instead of resending an unchanged group
+        const headers = row?.fetchedAt ? { 'if-modified-since': new Date(row.fetchedAt).toUTCString() } : undefined;
+        try {
+          const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=json`;
+          const res = await ctx.cachedFetch(source, url, TTL_MS, parseOmmJson, headers);
+          groups[group] = res.value;
+          if (res.stale) {
+            // cachedFetch fell back to an old entry because the download failed
+            const next = recordFailure(ctx.store, source, res.error ?? 'download failed');
+            retryAt = Math.min(retryAt, next.notBefore);
+            degraded.push(`${group}: ${res.error ?? 'download failed'}, using cache`);
+            if (isBlockError(res.error ?? '')) halt = `${group} failed`;
+          } else clearBackoff(ctx.store, source);
+        } catch (err) {
+          const next = recordFailure(ctx.store, source, err);
           retryAt = Math.min(retryAt, next.notBefore);
-          degraded.push(`${group}: ${res.error ?? 'download failed'}, using cache`);
-        } else clearBackoff(ctx.store, source);
-      } catch (err) {
-        const next = recordFailure(ctx.store, source, err);
-        retryAt = Math.min(retryAt, next.notBefore);
-        give(localGroup(ctx, group), (err as Error).message);
+          give(localGroup(ctx, group), (err as Error).message);
+          if (isBlockError((err as Error).message ?? '')) halt = `${group} failed`;
+        }
       }
-    }
-    if (!Object.keys(groups).length) throw new Error(failures.join('; '));
-    const changed = ctx.hub.upsert(...normalizeCelestrak(groups));
-    const problems = [...failures, ...degraded];
-    ctx.log(`${ctx.hub.graph.size} entities, ${changed} changed${problems.length ? `; ${problems.join('; ')}` : ''}`);
-    if (problems.length) {
-      ctx.health.note = `partial: ${problems.join('; ')}`;
-      ctx.softFail(problems[0], Math.max(retryAt - Date.now(), 60_000));
-    }
-  },
-};
+      const skippedNote = skipped.length ? `skipped ${skipped.length} group${skipped.length === 1 ? '' : 's'} (${halt}): ${skipped.join(', ')}` : '';
+      if (!Object.keys(groups).length) throw new Error([...failures, skippedNote].filter(Boolean).join('; '));
+      const changed = ctx.hub.upsert(...normalizeCelestrak(groups));
+      const problems = [...failures, ...degraded, ...(skippedNote ? [skippedNote] : [])];
+      ctx.log(`${ctx.hub.graph.size} entities, ${changed} changed${problems.length ? `; ${problems.join('; ')}` : ''}`);
+      if (problems.length) {
+        ctx.health.note = `partial: ${problems.join('; ')}`;
+        ctx.softFail(problems[0], Math.max(retryAt - Date.now(), 60_000));
+      }
+    },
+  };
+}
+
+export const celestrak: Connector = createCelestrak();
