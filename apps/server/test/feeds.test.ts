@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { complexOfDish, parseDsn, probeAttrs } from '../src/connectors/dsn';
-import { horizonsUrl, parseHorizonsVectors } from '../src/connectors/horizons';
+import { HORIZONS_FUTURE_DAYS, HORIZONS_PAST_DAYS, horizonsUrl, parseHorizonsVectors } from '../src/connectors/horizons';
 import { decodeUpdate, issTimestampMs, telemetryPoint } from '../src/connectors/iss-live';
 import { normalizeIssFix } from '../src/connectors/iss-rest';
 import { newsUrl, normalizeArticle, parseArticles } from '../src/connectors/snapi';
@@ -90,9 +90,20 @@ describe('horizons', () => {
     expect(p.get('OUT_UNITS')).toBe('KM-S');
     expect(p.get('STEP_SIZE')).toBe("'30 m'");
     expect(p.get('CSV_FORMAT')).toBe('YES');
-    expect(p.get('START_TIME')).toBe("'2026-10-21 14:00'");
-    expect(p.get('STOP_TIME')).toBe("'2026-10-24 14:00'");
+    expect(p.get('START_TIME')).toBe("'2026-10-19 14:00'");
+    expect(p.get('STOP_TIME')).toBe("'2026-10-29 14:00'");
   });
+
+  it('covers -3 d to +7 d around the fetch hour in a few hundred rows', () => {
+    const now = Date.parse('2026-10-22T14:05:00Z');
+    const p = new URL(horizonsUrl('-31', now)).searchParams;
+    const parse = (s: string | null) => Date.parse(`${s!.replace(/'/g, '').replace(' ', 'T')}:00Z`);
+    const start = parse(p.get('START_TIME')), stop = parse(p.get('STOP_TIME'));
+    expect(now - start).toBeGreaterThanOrEqual(HORIZONS_PAST_DAYS * 86_400_000);
+    expect(stop - now).toBeGreaterThanOrEqual(HORIZONS_FUTURE_DAYS * 86_400_000 - 3_600_000);
+    expect((stop - start) / 1_800_000 + 1).toBe(481);
+  });
+
 
   it('parses the $$SOE table into [tMs, r, v] samples (TDB -> UTC)', () => {
     const samples = parseHorizonsVectors(fixture('horizons-vectors.json'));

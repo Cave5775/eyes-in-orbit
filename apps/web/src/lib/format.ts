@@ -69,6 +69,12 @@ export function fmtDays(d: number | undefined | null): string {
   return d == null || !Number.isFinite(d) ? DASH : `${fmtNum(d, 1)} d`;
 }
 
+/** Age of an element set at sim time: days, or `before epoch` (with how long before) when the sim is earlier than the epoch. */
+export function fmtElementAge(days: number | undefined | null): string {
+  if (days == null || !Number.isFinite(days)) return DASH;
+  return days < 0 ? `before epoch (${fmtNum(-days, 1)} d)` : fmtDays(days);
+}
+
 /** Distance: AU / million km / km, with a fixed number of decimals per band. */
 export function fmtDist(km: number | undefined | null): string {
   if (km == null || !Number.isFinite(km)) return DASH;

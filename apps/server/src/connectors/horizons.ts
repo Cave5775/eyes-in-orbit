@@ -12,7 +12,16 @@ const JD_UNIX_EPOCH = 2440587.5;
 /** Horizons tags rows in TDB; TDB - UTC is TAI-UTC (37 s) + 32.184 s */
 const TDB_MINUS_UTC_MS = 69_184;
 
-/** Horizons API query: geocentric ICRF vectors (km, km/s), CSV, 30 min steps over [now-1d, now+2d]. */
+/**
+ * Data window around the fetch time, in days. The top bar's time fields reach days away from now, so the
+ * window is wider than the default view needs: 481 rows per target at 30 min steps, still a small payload.
+ */
+export const HORIZONS_PAST_DAYS = 3;
+export const HORIZONS_FUTURE_DAYS = 7;
+/** Part of the cache key: bump when the window changes so older, narrower cache entries are not reused. */
+const CACHE_VERSION = 'w3-7';
+
+/** Horizons API query: geocentric ICRF vectors (km, km/s), CSV, 30 min steps over [hour-3d, hour+7d]. */
 export function horizonsUrl(horizonsId: string, nowMs: number): string {
   const hour = Math.floor(nowMs / HOUR_MS) * HOUR_MS;
   const fmt = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
@@ -24,8 +33,8 @@ export function horizonsUrl(horizonsId: string, nowMs: number): string {
     EPHEM_TYPE: 'VECTORS',
     CENTER: `'500@399'`,
     REF_PLANE: 'FRAME',
-    START_TIME: `'${fmt(hour - DAY_MS)}'`,
-    STOP_TIME: `'${fmt(hour + 2 * DAY_MS)}'`,
+    START_TIME: `'${fmt(hour - HORIZONS_PAST_DAYS * DAY_MS)}'`,
+    STOP_TIME: `'${fmt(hour + HORIZONS_FUTURE_DAYS * DAY_MS)}'`,
     STEP_SIZE: `'30 m'`,
     VEC_TABLE: '2',
     CSV_FORMAT: 'YES',
@@ -62,7 +71,7 @@ export const horizons: Connector = {
     let cached = 0, n = 0;
     for (const [code, target] of Object.entries(DSN_TARGETS)) {
       try {
-        const res = await ctx.cachedFetch(`horizons:${target.horizons}`, horizonsUrl(target.horizons, Date.now()), TTL_MS, parseHorizonsVectors);
+        const res = await ctx.cachedFetch(`horizons:${CACHE_VERSION}:${target.horizons}`, horizonsUrl(target.horizons, Date.now()), TTL_MS, parseHorizonsVectors);
         const prev = ctx.hub.graph.get(probeId(code)) ?? probeEntity(code);
         ctx.hub.upsert({ ...prev, provider: { type: 'sampled', frame: 'EARTH:inertial', samples: res.value } });
         n++;

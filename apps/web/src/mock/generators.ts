@@ -298,10 +298,10 @@ const unitFromRaDec = (raDeg: number, decDeg: number): Vec3 => [
   Math.cos(decDeg * DEG) * Math.cos(raDeg * DEG), Math.cos(decDeg * DEG) * Math.sin(raDeg * DEG), Math.sin(decDeg * DEG),
 ];
 
-/** Geocentric samples over [now-1d, now+2d] in 30 minute steps, as the server's Horizons connector produces. */
+/** Geocentric samples over [now-3d, now+7d] in 30 minute steps, as the server's Horizons connector produces. */
 function probeSamples(nowMs: number, at: (t: number) => Vec3): Sample[] {
   const out: Sample[] = [];
-  for (let t = nowMs - DAY; t <= nowMs + 2 * DAY; t += 30 * MIN) out.push([t, ...at(t)]);
+  for (let t = nowMs - 3 * DAY; t <= nowMs + 7 * DAY; t += 30 * MIN) out.push([t, ...at(t)]);
   return out;
 }
 

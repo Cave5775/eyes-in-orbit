@@ -1,7 +1,7 @@
 import type { EntityRecord } from '@eio/core';
 import { isIss } from '../../lib/entity';
 import {
-  fmtAgo, fmtAttr, fmtBitrate, fmtDays, fmtDeg, fmtDist, fmtKm, fmtLat, fmtLightTime, fmtLon, fmtPercent, fmtPeriod,
+  fmtAgo, fmtAttr, fmtBitrate, fmtDeg, fmtDist, fmtElementAge, fmtKm, fmtLat, fmtLightTime, fmtLon, fmtPercent, fmtPeriod, fmtShortUtc,
   fmtSpeedKmS, fmtSpeedKmh, fmtTelemetryValue, humanize,
 } from '../../lib/format';
 import { computeTelemetry } from '../../lib/telemetry';
@@ -25,6 +25,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
   const refBody = useStore((s) => s.refBody);
   ensureInGraph(rec);
   const tel = computeTelemetry(graph, rec, now, refBody);
+  const range = tel ? undefined : graph.provider(rec.id)?.validRange;
   const conf = confidenceLabel(tel?.confidence);
   const code = rec.aliases.dsn;
   const link = code ? dsn?.links.find((l) => l.spacecraft.includes(code)) : undefined;
@@ -37,7 +38,10 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
     <div>
       <div className="section-title">STATE @ SIM TIME</div>
       {!tel ? (
-        <div className="empty">No state available at this time (outside the provider's valid range).</div>
+        <div className="empty">
+          No state available at this time (outside the provider's valid range).
+          {range && <div className="mono dim">Data covers {fmtShortUtc(range[0])} to {fmtShortUtc(range[1])}</div>}
+        </div>
       ) : (
         <dl className="kv">
           {tel.latDeg !== undefined && <Field label="Latitude" value={fmtLat(tel.latDeg)} mono />}
@@ -50,7 +54,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
           <Field label="Period" value={tel.periodSec ? fmtPeriod(tel.periodSec) : undefined} mono />
           <Field label="Phase" value={tel.phase?.replace(/_/g, ' ')} />
           <Field label="Confidence" value={conf?.text} mono tone={conf?.tone} />
-          <Field label="Element age" value={tel.elementAgeDays !== undefined ? fmtDays(tel.elementAgeDays) : undefined} mono />
+          <Field label="Element age" value={tel.elementAgeDays !== undefined ? fmtElementAge(tel.elementAgeDays) : undefined} mono />
           {tel.shell && <Field label="Display" value="Compressed deep-space shell (distance not to scale)" tone="warn" />}
         </dl>
       )}
