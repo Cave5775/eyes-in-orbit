@@ -1,14 +1,14 @@
 import { bodyEntityId, defaultBodies } from '@eio/core';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { BODY_KINDS, GROUP_CHIP_CAP, KIND_CHIP_CAP, capChips } from '../lib/browser-ui';
-import { buildTreeRows, type TreeBody } from '../lib/entity-tree';
+import { buildTreeRows, revealKeys, revealRowIndex, type TreeBody } from '../lib/entity-tree';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { browseOrder, buildLaunchGroups, facetCounts, filtersActive, matchesFilters, rankEntities, type SearchHit } from '../lib/filters';
 import { bodyCentre, sameCentre } from '../lib/frame';
 import { useStore } from '../state/store';
 import { LaunchFilter } from './LaunchFilter';
-import { VirtualList } from './VirtualList';
+import { VirtualList, type VirtualListHandle } from './VirtualList';
 
 const ROW_H = 28;
 const SEARCH_LIMIT = 60;
@@ -50,6 +50,12 @@ export function EntityBrowser() {
   const setOpen = useCallback((key: string, open: boolean) => setOverrides((o) => new Map(o).set(key, open)), []);
   // a new query or filter starts from the defaults again (everything with a hit open)
   useEffect(() => setOverrides((o) => (o.size ? new Map() : o)), [query, filters]);
+  // reveal: a selection that did not come from a click in this browser opens the path to its row and scrolls to it
+  const listRef = useRef<VirtualListHandle>(null);
+  /** the id a row click here just selected: the effect below skips it, so the list never moves under the cursor */
+  const ownSelect = useRef<string | null>(null);
+  /** the entity whose row is still to be scrolled to once the expansion has reached the list */
+  const [revealId, setRevealId] = useState<string | null>(null);
 
   useEffect(() => {
     const h = setTimeout(() => setQuery(input.trim()), DEBOUNCE_MS);
@@ -90,6 +96,11 @@ export function EntityBrowser() {
 
   // the tree: the same filtered, ordered rows, nested under their primary body and flattened to the rows that are open
   const filtering = !!query || filtersActive(filters);
+  const pick = (id: string) => {
+    ownSelect.current = id;
+    select(id);
+  };
+
   const treeRows = useMemo(() => {
     if (mode !== 'tree') return [];
     // a body that has an entity in the catalog carries it, so the node can select it even when a filter hides its row
@@ -110,8 +121,34 @@ export function EntityBrowser() {
   const chooseBody = (bodyId: string, key: string, entityId?: string) => {
     setOpen(key, true);
     setFrame(bodyCentre(bodyId), { fly: true });
-    if (entityId && useStore.getState().entities.has(entityId)) select(entityId);
+    if (entityId && useStore.getState().entities.has(entityId)) pick(entityId);
   };
+
+  useEffect(() => {
+    const own = ownSelect.current === selectedId;
+    ownSelect.current = null;
+    const rec = selectedId && !own ? entities.get(selectedId) : undefined;
+    // a search or filter that hides the entity is never cleared: then there is nothing to reveal and the list stays as it is
+    if (!rec || !rows.some((r) => r.id === rec.id)) {
+      setRevealId(null);
+      return;
+    }
+    if (mode === 'tree') {
+      const keys = revealKeys(rec, { bodies: TREE_BODIES });
+      setOverrides((o) => (keys.every((k) => o.get(k) === true) ? o : new Map([...o, ...keys.map((k): [string, boolean] => [k, true])])));
+    }
+    setRevealId(rec.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a change of the selection reveals
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (revealId === null) return;
+    const i = mode === 'tree' ? revealRowIndex(treeRows, revealId) : rows.findIndex((r) => r.id === revealId);
+    if (i < 0) return; // the expansion has not reached the list yet
+    listRef.current?.reveal(i);
+    setRevealId(null);
+  }, [revealId, mode, treeRows, rows]);
+  useEffect(() => setRevealId(null), [query, filters]);
 
   const entityRow = (id: string, name: string, kind: string, depth: number, key: string) => {
     const rec = entities.get(id);
@@ -119,7 +156,7 @@ export function EntityBrowser() {
     return (
       <button
         key={key} className={id === selectedId ? 'row sel' : 'row'} style={{ height: ROW_H, paddingLeft: mode === 'tree' ? 10 + depth * INDENT_PX : undefined }}
-        onClick={() => select(id)}>
+        onClick={() => pick(id)}>
         <i className="swatch" style={{ background: `var(--c-${rec ? colorKeyOf(rec) : 'satellite'}, var(--c-satellite))` }} />
         <span className="row-name">{name}</span>
         {isFrame && <span className="row-frame" title="The frame of reference is centred on this object">FRAME</span>}
@@ -204,10 +241,11 @@ export function EntityBrowser() {
         <div className="empty">{query && results === null ? 'Searching...' : 'No matching entities.'}</div>
       ) : (
         mode === 'tree' ? (
-          <VirtualList key="tree" count={treeRows.length} rowHeight={ROW_H} render={renderTree} />
+          <VirtualList key="tree" ref={listRef} count={treeRows.length} rowHeight={ROW_H} render={renderTree} />
         ) : (
           <VirtualList
             key="list"
+            ref={listRef}
             count={rows.length}
             rowHeight={ROW_H}
             render={(i) => {

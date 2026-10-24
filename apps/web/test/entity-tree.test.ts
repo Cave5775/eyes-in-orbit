@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords, defaultBodies } from '@eio/core';
 import { bodyCentre, entityCentre } from '../src/lib/frame';
-import { bodyKey, bodyPathKeys, buildTreeRows, entityKey, groupKey, type TreeBody, type TreeItem, type TreeRow } from '../src/lib/entity-tree';
+import { bodyKey, bodyPathKeys, buildTreeRows, entityKey, groupKey, revealKeys, revealRowIndex, scrollTopToReveal, type TreeBody, type TreeItem, type TreeRow } from '../src/lib/entity-tree';
 
 const BODIES: TreeBody[] = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId }));
 const item = (id: string, kind: string, bodyId: string): TreeItem => ({ id, kind, bodyId });
@@ -168,5 +168,75 @@ describe('entity tree rows', () => {
     const opened = buildTreeRows(big, { ...base, openAll: true });
     expect(opened.length).toBe(12_000 + 2 + 2); // SUN, EARTH, two kind groups
     expect(tClosed).toBeLessThan(200);
+  });
+});
+
+describe('reveal a selected entity', () => {
+  const bodyItems: TreeItem[] = bodyEntityRecords().map((r) => ({ id: r.id, kind: r.kind, bodyId: r.bodyId, provider: r.provider }));
+  const all = [...bodyItems, ...CATALOG];
+  const opts = { bodies: BODIES };
+  const find = (id: string) => all.find((i) => i.id === id)!;
+  /** rows after opening the revealed keys on top of the defaults */
+  const rowsWith = (keys: string[], frame = base.frame) =>
+    buildTreeRows(all, { bodies: BODIES, frame, overrides: new Map(keys.map((k) => [k, true])) });
+
+  it('opens the body chain and the kind group of an Earth satellite so its row appears', () => {
+    const keys = revealKeys(find('sat-3'), opts);
+    expect(keys).toEqual([bodyKey('SUN'), bodyKey('EARTH'), groupKey('EARTH', 'satellite')]);
+    expect(revealRowIndex(buildTreeRows(all, base), 'sat-3')).toBe(-1);
+    const rows = rowsWith(keys);
+    const i = revealRowIndex(rows, 'sat-3');
+    expect(rows[i]).toMatchObject({ type: 'entity', id: 'sat-3', depth: 3 });
+  });
+
+  it('opens Mars and the Moon chain from a frame elsewhere (nothing else changes)', () => {
+    const keys = revealKeys(find('mars-probe-1'), opts);
+    expect(keys).toEqual([bodyKey('SUN'), bodyKey('MARS'), groupKey('MARS', 'rover')]);
+    expect(revealRowIndex(rowsWith(keys), 'mars-probe-1')).toBeGreaterThan(0);
+    const moon = revealKeys(find('dsn-LRO'), opts);
+    expect(moon.slice(0, 3)).toEqual([bodyKey('SUN'), bodyKey('EARTH'), bodyKey('MOON')]);
+    expect(revealRowIndex(rowsWith(moon, bodyCentre('MARS')), 'dsn-LRO')).toBeGreaterThan(0);
+  });
+
+  it('a body entity reveals its own node: only the nodes above it open', () => {
+    expect(revealKeys(find('body-moon'), opts)).toEqual([bodyKey('SUN'), bodyKey('EARTH')]);
+    expect(revealKeys(find('body-sun'), opts)).toEqual([]);
+    const rows = rowsWith(revealKeys(find('body-moon'), opts), bodyCentre('MARS'));
+    expect(revealRowIndex(rows, 'body-moon')).toBeGreaterThan(0);
+    // a search hit that stands for a body (no provider) is the same
+    expect(revealKeys({ id: 'hit', kind: 'moon' }, { ...opts, standsForBody: () => 'MOON' })).toEqual([bodyKey('SUN'), bodyKey('EARTH')]);
+  });
+
+  it('uses bodyOf for search hits and hangs an unknown body off the root', () => {
+    expect(revealKeys({ id: 'x', kind: 'probe' }, { ...opts, bodyOf: () => 'MOON' }).slice(0, 3)).toEqual([bodyKey('SUN'), bodyKey('EARTH'), bodyKey('MOON')]);
+    expect(revealKeys({ id: 'y', kind: 'probe', bodyId: 'CERES' }, opts)).toEqual([bodyKey('SUN'), bodyKey('CERES'), groupKey('CERES', 'probe')]);
+    expect(revealKeys({ id: 'z', kind: 'probe' }, opts).slice(0, 2)).toEqual([bodyKey('SUN'), bodyKey('EARTH')]);
+  });
+
+  it('finds the row of an entity row or of a body node, -1 when it is hidden', () => {
+    const rows = buildTreeRows(all, { ...base, openAll: true });
+    expect(rows[revealRowIndex(rows, 'stn-1')]).toMatchObject({ type: 'entity', id: 'stn-1' });
+    expect(rows[revealRowIndex(rows, 'body-mars')]).toMatchObject({ type: 'body', bodyId: 'MARS' });
+    expect(revealRowIndex(rows, 'nope')).toBe(-1);
+  });
+
+  describe('scrollTopToReveal', () => {
+    const H = 28;
+    it('does not move when the row is fully visible', () => {
+      expect(scrollTopToReveal(5, H, 0, 280, 100)).toBeNull();
+      expect(scrollTopToReveal(9, H, 0, 280, 100)).toBeNull(); // last fully visible row
+      expect(scrollTopToReveal(30, H, 28 * 25, 280, 100)).toBeNull();
+    });
+    it('centres a row that is out of view or cut off', () => {
+      expect(scrollTopToReveal(50, H, 0, 280, 100)).toBe(50 * H - (280 - H) / 2);
+      expect(scrollTopToReveal(10, H, 0, 280, 100)).toBe(10 * H - (280 - H) / 2); // just below
+      expect(scrollTopToReveal(2, H, 28 * 40, 280, 100)).toBe(0); // clamped at the top
+    });
+    it('clamps at the end of the list and ignores a bad index', () => {
+      expect(scrollTopToReveal(99, H, 0, 280, 100)).toBe(100 * H - 280);
+      expect(scrollTopToReveal(3, H, 0, 280, 5)).toBeNull();
+      expect(scrollTopToReveal(-1, H, 0, 280, 100)).toBeNull();
+      expect(scrollTopToReveal(100, H, 0, 280, 100)).toBeNull();
+    });
   });
 });

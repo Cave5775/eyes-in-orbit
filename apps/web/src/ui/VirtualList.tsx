@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
+import { scrollTopToReveal } from '../lib/entity-tree';
 
 interface Props {
   count: number;
@@ -7,8 +8,13 @@ interface Props {
   render(index: number): ReactNode;
 }
 
+export interface VirtualListHandle {
+  /** scroll so row `index` is visible: no movement when it already is, else it is centred */
+  reveal(index: number): void;
+}
+
 /** Fixed-row-height windowed list: only the visible rows are in the DOM. */
-export function VirtualList({ count, rowHeight, overscan = 8, render }: Props) {
+export const VirtualList = forwardRef<VirtualListHandle, Props>(function VirtualList({ count, rowHeight, overscan = 8, render }, handle) {
   const ref = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(0);
   const [height, setHeight] = useState(400);
@@ -20,6 +26,15 @@ export function VirtualList({ count, rowHeight, overscan = 8, render }: Props) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  useImperativeHandle(handle, () => ({
+    reveal(index) {
+      const el = ref.current;
+      if (!el) return;
+      const to = scrollTopToReveal(index, rowHeight, el.scrollTop, el.clientHeight, count);
+      if (to !== null) el.scrollTop = to;
+    },
+  }), [rowHeight, count]);
 
   const first = Math.max(0, Math.floor(top / rowHeight) - overscan);
   const last = Math.min(count, Math.ceil((top + height) / rowHeight) + overscan);
@@ -33,4 +48,4 @@ export function VirtualList({ count, rowHeight, overscan = 8, render }: Props) {
       </div>
     </div>
   );
-}
+});

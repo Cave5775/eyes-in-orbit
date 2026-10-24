@@ -191,3 +191,46 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
   for (const r of roots) emit(r, 0);
   return rows;
 }
+
+// ---------------------------------------------------------------- reveal (selection -> open the path, scroll to the row)
+
+export interface RevealOptions<T extends TreeItem> {
+  bodies: readonly TreeBody[];
+  /** same meaning as in `TreeOptions`: a body is where `buildTreeRows` would list the item */
+  groupMin?: number;
+  bodyOf?: (item: T) => string | undefined;
+  standsForBody?: (item: T) => string | undefined;
+}
+
+/**
+ * The node keys to open so that the row of `item` is in the flattened list: the chain of body nodes from the root down to the
+ * body it is listed under, plus the kind group it sits in (a group key is harmless when the body is not grouped). A body
+ * entity is a node itself: only the nodes above it are opened. Opening is additive; the caller only sets these keys to open.
+ */
+export function revealKeys<T extends TreeItem>(item: T, opts: RevealOptions<T>): string[] {
+  const own = item.provider?.type === 'body' ? item.provider.bodyId : opts.standsForBody?.(item);
+  if (own) return bodyPathKeys(opts.bodies, own).slice(0, -1);
+  const bodyId = item.bodyId ?? opts.bodyOf?.(item) ?? 'EARTH';
+  const known = opts.bodies.some((b) => b.id === bodyId);
+  // a body the registry does not know hangs off the first root (as in buildTreeRows)
+  const root = opts.bodies.find((b) => !b.parentId || !opts.bodies.some((p) => p.id === b.parentId));
+  const path = known || !root ? bodyPathKeys(opts.bodies, bodyId) : [...bodyPathKeys(opts.bodies, root.id), bodyKey(bodyId)];
+  return [...path, groupKey(bodyId, item.kind)];
+}
+
+/** Index of the row that shows entity `id` (an entity row, or the body node that entity backs), or -1. */
+export function revealRowIndex(rows: readonly TreeRow[], id: string): number {
+  return rows.findIndex((r) => (r.type === 'entity' && r.id === id) || (r.type === 'body' && r.entityId === id));
+}
+
+/**
+ * The scrollTop that brings row `index` into view in a fixed-row-height list: null when the row is already fully visible (no
+ * movement), else the row centred in the viewport, clamped to the scrollable range.
+ */
+export function scrollTopToReveal(index: number, rowHeight: number, scrollTop: number, viewHeight: number, count: number): number | null {
+  if (index < 0 || index >= count) return null;
+  const top = index * rowHeight;
+  if (top >= scrollTop && top + rowHeight <= scrollTop + viewHeight) return null;
+  const max = Math.max(0, count * rowHeight - viewHeight);
+  return Math.min(max, Math.max(0, Math.round(top - (viewHeight - rowHeight) / 2)));
+}
