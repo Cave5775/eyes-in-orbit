@@ -1,5 +1,5 @@
 import {
-  DEG, EARTH, LL2_STATUS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, convert, deriveMissionState,
+  DEG, EARTH, LL2_STATUS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, convert, deriveMissionState,
   modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
@@ -318,6 +318,9 @@ const LRO_ORBIT = (nowMs: number) => {
   return { a, e, i: 90 * DEG, raan: 270 * DEG, argp: 270 * DEG, m0: 0, epochMs: nowMs };
 };
 
+/** The body entities, built by the same core function as the server's `bodies` connector so the mock cannot drift. */
+export const mockBodies = (nowMs: number): EntityRecord[] => bodyEntityRecords(undefined, nowMs);
+
 export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
   const out: EntityRecord[] = STATIONS.map((s) => ({
     id: s.id, name: s.name, kind: 'ground_station', bodyId: 'EARTH', aliases: { dsn: s.code }, group: 'dsn',
@@ -412,6 +415,7 @@ export function mockHealth(nowMs: number): ConnectorHealth[] {
     ok('spaceflight-news', 95, 31, 'mock'),
     ok('dsn-now', 12, 340, 'mock'),
     ok('horizons', 7200, 2, 'mock'),
+    { id: 'bodies', status: 'ok', lastOkAt: nowMs, runs: 1, note: '4 bodies (mock)' },
     { id: 'iss-live', status: 'stub', runs: 0, note: 'mock' },
   ];
 }

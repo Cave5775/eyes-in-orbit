@@ -7,6 +7,7 @@ import { ImageryCache } from './imagery';
 import { loadConfig, loadDotEnv } from './config';
 import { Scheduler, type Connector } from './connector';
 import { Credentials } from './credentials';
+import { bodies } from './connectors/bodies';
 import { celestrak } from './connectors/celestrak';
 import { dsn } from './connectors/dsn';
 import { flightclub } from './connectors/flightclub';
@@ -23,7 +24,7 @@ import { Store } from './store';
 import { registerStream } from './ws';
 
 const CONNECTORS: Connector[] = [
-  flightclub, celestrak, launchlibrary, snapi, dsn, horizons, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
+  bodies, flightclub, celestrak, launchlibrary, snapi, dsn, horizons, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
 ];
 
 async function main(): Promise<void> {

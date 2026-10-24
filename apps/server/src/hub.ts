@@ -35,14 +35,17 @@ export class Hub extends EventEmitter {
     super();
   }
 
-  /** Insert or replace entities, stamping `updatedAt`. Unchanged records are ignored. Returns the changed count. */
+  /**
+   * Insert or replace entities, stamping `updatedAt`. `createdAt` is set on the first insert of an id (from the record
+   * if it carries one, else now) and kept afterwards. Unchanged records are ignored. Returns the changed count.
+   */
   upsert(...recs: (NewEntity & { updatedAt?: number })[]): number {
     const now = Date.now();
     let n = 0;
     for (const { updatedAt: _, ...rec } of recs) {
       const prev = this.graph.get(rec.id);
       if (prev && sameRecord(prev, rec)) continue;
-      this.graph.upsert({ ...rec, updatedAt: now });
+      this.graph.upsert({ ...rec, createdAt: prev?.createdAt ?? rec.createdAt ?? now, updatedAt: now });
       this.changed.add(rec.id);
       n++;
     }
@@ -119,7 +122,9 @@ export class Hub extends EventEmitter {
   }
 }
 
+/** Equal ignoring the hub-stamped times (`updatedAt`, `createdAt`). */
 function sameRecord(a: EntityRecord, b: NewEntity): boolean {
-  const { updatedAt: _, ...rest } = a;
-  return JSON.stringify(rest) === JSON.stringify(b);
+  const { updatedAt: _, createdAt: __, ...rest } = a;
+  const { createdAt: ___, ...other } = b;
+  return JSON.stringify(rest) === JSON.stringify(other);
 }
