@@ -21,8 +21,10 @@
   - Delivered for recovered Falcon 9 boosters: a modeled return path (coast, boostback or trim, entry burn, landing burn, touchdown on the landing zone or 600 km downrange) as its own `launch-<id>-booster` entity, built from the event times; not measured, droneship position is a typical distance and "similar" vehicles (Falcon Heavy side boosters, New Glenn, Neutron) are not modeled yet. The horizontal-speed decay is derived from drag and entry-burn thrust (rough Falcon 9 mass, area and Cd in `FALCON9_BOOSTER`), not a chosen curve
 - [ ] Trajectories for rockets other than Falcon 9
   - Started: modeled ascents now go through a `VehicleProfile` registry (`VEHICLES`); Electron is the first non-Falcon profile with rough, unverified timeline figures. Vehicles with very different ascents (Falcon Heavy, Ariane 6, Atlas V, Vulcan, Starship) are deliberately not modeled; each needs its own profile with figures you trust
-  - [x] what other sources are there for launch trajectories? Answered in the README table "Where launch trajectories can come from"
-- [ ] trajectory data OCR using the existing livestream embedding?
+- [ ] trajectory data OCR using the existing livestream embedding
+- [ ] When multiple objects are very close together where it becomes difficult to select a particular one, a popup appears by the cursor that shows all the objects and the scroll wheel can be used to select an option which is chosen by clicking.
+- [ ] Restructure the scene to change the frame of reference to the selected celestial body in a hierarchal system. For example, Sun -> Earth -> Moon -> Lunar Reconaissance Orbiter. Such selection of objects becomes hierarchal at the UI/UX level. Selecting an object that can reasonably be orbited (like a moon or large asteroid) changes the frame of reference. Frame of reference can be locked to the object to select others and view relative motion.
+- [ ] Add more advanced time controls and make the existing more compact. Make time rewind at the selected speed with a toggle. Replace the time slider with 4 numeric text fields to enter ±dd:hh:mm:ss which updates currectly if time is not 1x speed.
 
 # Feature issues
 - [x] Surface mode does not vertically fit an object, only tracks its surface position. When toggled without a focused object, locks to a specific point on Earth and cannot pan
