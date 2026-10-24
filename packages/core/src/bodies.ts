@@ -106,3 +106,13 @@ export class BodyRegistry {
 }
 
 export const defaultBodies = new BodyRegistry();
+
+/**
+ * Orbital period of `body` around its parent, seconds: 2 pi sqrt(a^3 / gm_parent) from `Body.orbit`. Undefined for the
+ * root (the Sun) and for a body without Kepler elements. The elements are approximate (the Moon comes out at about 27.4 d).
+ */
+export function bodyPeriodSec(body: Body, registry: BodyRegistry = defaultBodies): number | undefined {
+  if (!body.parentId || !body.orbit) return undefined;
+  const gm = registry.get(body.parentId).gm;
+  return 2 * Math.PI * Math.sqrt(body.orbit.a ** 3 / gm);
+}

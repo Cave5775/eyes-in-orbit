@@ -1,4 +1,5 @@
 import type { ProviderSpec, StateProvider } from '../types';
+import { BodyProvider } from './body';
 import { CompositeProvider } from './composite';
 import { GeodeticProvider } from './geodetic';
 import { KeplerianProvider } from './keplerian';
@@ -21,7 +22,9 @@ export function providerFromSpec(spec: ProviderSpec): StateProvider {
       return new RelativeProvider(spec.parentId, spec.mode, spec.offsetKm, spec.samples);
     case 'composite':
       return new CompositeProvider(spec.segments);
+    case 'body':
+      return new BodyProvider(spec.bodyId);
   }
 }
 
-export { CompositeProvider, GeodeticProvider, KeplerianProvider, RelativeProvider, SampledProvider, Sgp4Provider };
+export { BodyProvider, CompositeProvider, GeodeticProvider, KeplerianProvider, RelativeProvider, SampledProvider, Sgp4Provider };

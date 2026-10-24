@@ -8,6 +8,7 @@ export * from './clock';
 export * from './mission-fsm';
 export * from './entity-graph';
 export * from './providers';
+export * from './hierarchy';
 export * from './feeds';
 export * from './ascent';
 export * from './ascent-model';
