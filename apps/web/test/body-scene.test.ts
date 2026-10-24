@@ -134,4 +134,46 @@ describe('gatherWithBodies', () => {
   it('finds nothing when there is neither', () => {
     expect(run([], []).items).toEqual([]);
   });
+
+  // two satellites 4 and 6 px from the cursor, drawn over the Earth's disc
+  const two: PickSource = {
+    ids: ['old', 'new'], rel: new Float32Array([0.04, 0, 0, 0, 0.06, 0]), world: new Float32Array([7000, 0, 0, 7000, 0, 0]),
+    size: new Float32Array([4, 4]), show: new Float32Array([1, 1]), bias: 0,
+  };
+  const earthAt = (discPx: number): PickExtra => ({ id: 'body-earth', d2: 1, discPx });
+  const withMeta = { ...opts, ranks: new Map([['body-earth', 1000], ['old', 1e6 + 2], ['new', 1e6 + 2]]), created: new Map([['old', 1], ['new', 2]]) };
+
+  it('zoomed in (big Earth disc) a click on overlapping satellites lists only them, newest first; the Earth is not in the list', () => {
+    const r = gatherWithBodies([two], [], () => [earthAt(250)], M, 200, 200, 100, 100, withMeta);
+    expect(r.items.map((h) => h.id)).toEqual(['new', 'old']);
+    expect(r.grouped).toEqual([]);
+    expect(r.total).toBe(2);
+  });
+
+  it('zoomed out (small Earth disc) the satellites collapse into the Earth and wait behind the "+ N objects" entry', () => {
+    const r = gatherWithBodies([two], [], () => [earthAt(20)], M, 200, 200, 100, 100, withMeta);
+    expect(r.items.map((h) => h.id)).toEqual(['body-earth']);
+    expect(r.grouped.map((h) => h.id)).toEqual(['new', 'old']);
+    expect(r.groupedTotal).toBe(2);
+  });
+
+  it('a single satellite over a small Earth is still selected, and the body lookup is skipped', () => {
+    let called = false;
+    const r = gatherWithBodies([sat], [], () => ((called = true), [earthAt(20)]), M, 200, 200, 100, 100, withMeta);
+    expect(r.items.map((h) => h.id)).toEqual(['sat']);
+    expect(called).toBe(false);
+  });
+
+  it('hover (nearestFirst) names the nearest satellite zoomed in and the body when grouped', () => {
+    const hover = { ...withMeta, max: 1, wantTotal: false, nearestFirst: true };
+    expect(gatherWithBodies([two], [], () => [earthAt(250)], M, 200, 200, 100, 100, hover).items.map((h) => h.id)).toEqual(['old']);
+    expect(gatherWithBodies([two], [], () => [earthAt(20)], M, 200, 200, 100, 100, hover).items.map((h) => h.id)).toEqual(['body-earth']);
+  });
+
+  it('bodies under the cursor list in hierarchy order, not by distance', () => {
+    const moonNear: PickExtra = { id: 'body-moon', d2: 1, discPx: 3 };
+    const earthFar: PickExtra = { id: 'body-earth', d2: 100, discPx: 3 };
+    const r = gatherWithBodies([], [], () => [moonNear, earthFar], M, 200, 200, 100, 100, { ...opts, ranks: new Map([['body-earth', 1000], ['body-moon', 2000]]) });
+    expect(r.items.map((h) => h.id)).toEqual(['body-earth', 'body-moon']);
+  });
 });

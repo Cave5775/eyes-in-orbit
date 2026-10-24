@@ -14,7 +14,7 @@ import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filter
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
-import { POPUP_MAX, type PickExtra, type PickSource } from '../lib/pick';
+import { POPUP_MAX, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
@@ -55,11 +55,13 @@ export interface SceneCallbacks {
   onPick(id: string): void;
   onHover(h: { id: string; x: number; y: number } | null): void;
   /**
-   * A click found more than one object within the cluster radius (lib/pick.ts): ids nearest first (the first is what a
-   * plain click would have selected), `total` counts all of them (the list is capped), x/y are the cursor in CSS px
-   * inside the scene container. onPick is not called for that click.
+   * A click found more than one object within the cluster radius (lib/pick.ts): ids highest in the hierarchy first, then
+   * newest (the first is what a plain click would have selected), `total` counts all of them (the list is capped), x/y are
+   * the cursor in CSS px inside the scene container. `grouped` is set when zoomed out: `ids` are then the bodies the objects
+   * overlap and `grouped` those objects (the popup's "+ N objects", listed when expanded); it also opens the popup for a
+   * single body. onPick is not called for that click.
    */
-  onPickMany?(ids: string[], total: number, x: number, y: number): void;
+  onPickMany?(ids: string[], total: number, x: number, y: number, grouped?: { ids: string[]; total: number }): void;
   /** Screen positions of the selected path's phase boundaries (called each frame while there are any, once more to clear). */
   onPathLabels?(labels: PathLabel[]): void;
   /** The scene changed follow mode by itself (FIT leaves the followed object). */
@@ -389,6 +391,7 @@ export class SceneController {
       else if (this.bodyRegId.delete(id)) bodiesChanged = true;
       else dynChanged = true;
     }
+    this.pickMetaCache = null; // ranks and creation times for picking, rebuilt on the next click
     if (bodiesChanged) this.celestial.setBodies([...this.recs.values()].filter(isBodyEntity));
     this.propagator.remove(gone);
     this.propagator.upsert(upserts);
@@ -1152,11 +1155,16 @@ export class SceneController {
   }
 
   /**
-   * Every visible object near a screen point, nearest first (lib/pick.ts does the scan). Points hidden behind the Earth
-   * (or the Moon and Sun, through `occ`), filtered out or out of scope are skipped. Hover and a plain click use the
-   * first entry, so they always agree with the popup's list.
+   * Every visible object near a screen point, highest in the hierarchy first, then newest (lib/pick.ts does the scan).
+   * Points hidden behind the Earth (or the Moon and Sun, through `occ`), filtered out or out of scope are skipped. Zoomed
+   * out, objects over a far body's disc are grouped into that body (`grouped`). A plain click uses the first entry, so it
+   * agrees with the popup's list; hover takes the nearest object (`nearestFirst`).
    */
-  private pickAll(px: number, py: number, max: number, wantTotal = false): { ids: string[]; total: number } {
+  private pickMetaCache: ReturnType<typeof pickMeta> | null = null; // rank and creation time by id, rebuilt after a catalog change
+  private pickAll(
+    px: number, py: number, max: number, wantTotal = false, nearestFirst = false,
+  ): { ids: string[]; total: number; grouped: { ids: string[]; total: number } } {
+    const meta = (this.pickMetaCache ??= pickMeta(this.recs.values()));
     const w = this.container.clientWidth, h = this.container.clientHeight;
     const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
     const source = (set: PointSet, ids: readonly string[], bias: number): PickSource => ({
@@ -1175,19 +1183,20 @@ export class SceneController {
       const dx = (p.x * 0.5 + 0.5) * w - px, dy = (1 - (p.y * 0.5 + 0.5)) * h - py;
       if (p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) extras.push({ id: this.selectedId, d2: dx * dx + dy * dy, rel });
     }
-    // the drawn bodies (Earth, Moon, Sun, Mars) are candidates only where nothing else is: no ranks yet (the hierarchy
-    // ordering comes with the popup), and the Earth's disc must not turn a click on a satellite into a choice popup
+    // the drawn bodies (Earth, Moon, Sun, Mars) join only when zoomed out far enough to group the objects over them, or
+    // where nothing else is (lib/pick.ts `resolvePick`): the Earth's disc must not turn a click on a satellite drawn over it
+    // into a choice popup when zoomed in
     const bodies = () => bodyPickExtras(this.celestial.bodies(), { origin: this.frameInfo.originV3, m, w, h, px, py, fovDeg: this.camera.fov });
     const r = gatherWithBodies(
       [source(this.sats, this.propagator.ids, 0), source(this.dyn, this.dynIds, 60)], extras, bodies, m, w, h, px, py,
-      { max, wantTotal, occluded: (x, y, z) => this.occludedRel(x, y, z) },
+      { max, wantTotal, nearestFirst, ranks: meta.ranks, created: meta.created, occluded: (x, y, z) => this.occludedRel(x, y, z) },
     );
-    return { ids: r.items.map((i) => i.id), total: r.total };
+    return { ids: r.items.map((i) => i.id), total: r.total, grouped: { ids: r.grouped.map((i) => i.id), total: r.groupedTotal } };
   }
 
-  /** The object a plain click or hover lands on: the nearest visible one. */
+  /** What hover lands on: the nearest visible object, or the body a far crowd is grouped into. */
   private pick(px: number, py: number): string | null {
-    return this.pickAll(px, py, 1).ids[0] ?? null;
+    return this.pickAll(px, py, 1, false, true).ids[0] ?? null;
   }
 
   /**
@@ -1223,12 +1232,13 @@ export class SceneController {
       if (!d || e.button !== 0) return;
       const p = rel(e);
       if (Math.hypot(p.x - d.x, p.y - d.y) > 4 || performance.now() - d.t > 600) return;
-      // one candidate selects it; several open the choice popup (its first entry is what pick() returns)
-      const { ids, total } = this.pickAll(p.x, p.y, POPUP_MAX, true);
-      if (ids.length === 1 || (ids.length > 1 && !this.cb.onPickMany)) this.cb.onPick(ids[0]);
-      else if (ids.length > 1) {
+      // one candidate selects it; several (or a body that groups far objects) open the choice popup
+      const { ids, total, grouped } = this.pickAll(p.x, p.y, POPUP_MAX, true);
+      const group = grouped.ids.length > 0 && this.cb.onPickMany;
+      if (!group && (ids.length === 1 || (ids.length > 1 && !this.cb.onPickMany))) this.cb.onPick(ids[0]);
+      else if (ids.length > 1 || group) {
         this.setHover(null);
-        this.cb.onPickMany?.(ids, total, p.x, p.y);
+        this.cb.onPickMany?.(ids, total, p.x, p.y, grouped.ids.length ? grouped : undefined);
       }
     };
     const onLeave = () => {

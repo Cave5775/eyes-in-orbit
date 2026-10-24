@@ -1,9 +1,12 @@
 /**
  * Screen-space picking, split from three.js so it can be tested: given the point sets (camera-relative positions, sizes,
- * show flags) and a projection * view matrix, list every visible object near a screen point, nearest first.
+ * show flags) and a projection * view matrix, list every visible object near a screen point: highest in the hierarchy
+ * first, then the most recently created, then the nearest to the cursor (`resolvePick` adds the zoomed-out grouping of
+ * objects into the body they overlap).
  *
- * One scan serves three callers so they cannot disagree: hover and a plain click take the first entry, and a click with
- * more than one entry opens the choice popup (ui/PickPopup.tsx) with the whole list.
+ * One scan serves the callers so they cannot disagree: a plain click takes the first entry and a click with more than one
+ * entry opens the choice popup (ui/PickPopup.tsx) with the whole list; hover asks for `nearestFirst` so the tooltip names
+ * the object under the pointer rather than the newest one near it.
  */
 import { entityRank, type BodyRegistry, type EntityRecord } from '@eio/core';
 
@@ -39,6 +42,10 @@ export interface PickExtra {
   rel?: readonly [number, number, number];
   /** hierarchy rank (`entityRank`, smaller = listed first); missing ranks last */
   rank?: number;
+  /** a drawn body: the projected radius of its disc, px (see `bodyDiscRadiusPx`); decides whether objects over it are grouped */
+  discPx?: number;
+  /** ms the entity was created (newer first among equal ranks); missing = oldest */
+  created?: number;
 }
 
 /** Rank of a candidate without one: after every body and every object ranked by `entityRank` (those are below 2e6). */
@@ -48,6 +55,8 @@ export interface PickHit {
   id: string;
   /** px from the cursor */
   dist: number;
+  /** a drawn body: the projected radius of its disc, px */
+  discPx?: number;
 }
 
 export interface PickOptions {
@@ -60,11 +69,18 @@ export interface PickOptions {
   occluded: (x: number, y: number, z: number) => boolean;
   /** hierarchy rank by entity id for points and extras that carry none of their own (see `rankMap`) */
   ranks?: ReadonlyMap<string, number>;
+  /** creation time by entity id (see `pickMeta`): among equal ranks the newest is listed first, before distance */
+  created?: ReadonlyMap<string, number>;
+  /** list purely by distance to the cursor (hover: the object under the pointer, not the newest one near it) */
+  nearestFirst?: boolean;
 }
 
 interface Raw {
   /** hierarchy rank: candidates sort by it first */
   hier: number;
+  /** creation time, ms: newest first among equal ranks */
+  created: number;
+  discPx?: number;
   rank: number;
   d2: number;
   id: string;
@@ -108,15 +124,20 @@ export function gatherCandidates(
       const d2 = dx * dx + dy * dy;
       if (d2 <= r * r) {
         const hier = src.rank?.[i] ?? opts.ranks?.get(ids[i]) ?? DEFAULT_RANK;
-        raws.push({ hier, rank: d2 - src.bias, d2, id: ids[i], x, y, z, checkOcc: true });
+        raws.push({ hier, created: opts.created?.get(ids[i]) ?? 0, rank: d2 - src.bias, d2, id: ids[i], x, y, z, checkOcc: true });
       }
     }
   }
   for (const e of extras) {
     const hier = e.rank ?? opts.ranks?.get(e.id) ?? DEFAULT_RANK;
-    raws.push({ hier, rank: e.d2, d2: e.d2, id: e.id, x: e.rel?.[0] ?? 0, y: e.rel?.[1] ?? 0, z: e.rel?.[2] ?? 0, checkOcc: !!e.rel });
+    raws.push({
+      hier, created: e.created ?? opts.created?.get(e.id) ?? 0, discPx: e.discPx, rank: e.d2, d2: e.d2, id: e.id,
+      x: e.rel?.[0] ?? 0, y: e.rel?.[1] ?? 0, z: e.rel?.[2] ?? 0, checkOcc: !!e.rel,
+    });
   }
-  raws.sort((a, b) => a.hier - b.hier || a.rank - b.rank);
+  // highest in the hierarchy first, then the most recently created, then the nearest to the cursor
+  if (opts.nearestFirst) raws.sort((a, b) => a.rank - b.rank);
+  else raws.sort((a, b) => a.hier - b.hier || b.created - a.created || a.rank - b.rank);
 
   const items: PickHit[] = [];
   const seen = new Set<string>();
@@ -126,7 +147,7 @@ export function gatherCandidates(
     if (r.checkOcc && opts.occluded(r.x, r.y, r.z)) continue;
     seen.add(r.id);
     total++;
-    if (items.length < opts.max) items.push({ id: r.id, dist: Math.sqrt(r.d2) });
+    if (items.length < opts.max) items.push(r.discPx === undefined ? { id: r.id, dist: Math.sqrt(r.d2) } : { id: r.id, dist: Math.sqrt(r.d2), discPx: r.discPx });
     else if (!opts.wantTotal) break;
   }
   return { items, total };
@@ -142,12 +163,17 @@ export const BODY_MIN_HIT_PX = 14;
  * vertical field of view and `viewportPx` the viewport height. Inside the sphere the disc covers the view.
  */
 export function bodyHitRadiusPx(radiusKm: number, k: number, distKm: number, fovDeg: number, viewportPx: number, minPx = BODY_MIN_HIT_PX): number {
+  const disc = bodyDiscRadiusPx(radiusKm, k, distKm, fovDeg, viewportPx);
+  return disc === Infinity ? Math.max(minPx, viewportPx) : Math.max(minPx, disc + 3);
+}
+
+/** Projected radius (CSS px) of a body's disc: `bodyHitRadiusPx` without the margin and the floor. Infinity inside the sphere. */
+export function bodyDiscRadiusPx(radiusKm: number, k: number, distKm: number, fovDeg: number, viewportPx: number): number {
   const r = radiusKm * k;
-  if (!(distKm > r)) return Math.max(minPx, viewportPx);
+  if (!(distKm > r)) return Infinity;
   const focalPx = viewportPx / (2 * Math.tan((fovDeg * Math.PI) / 360));
   // tangent half-angle of the silhouette: r / sqrt(d^2 - r^2)
-  const px = (r / Math.sqrt(distKm * distKm - r * r)) * focalPx;
-  return Math.max(minPx, px + 3);
+  return (r / Math.sqrt(distKm * distKm - r * r)) * focalPx;
 }
 
 export interface BodyPickInput {
@@ -187,7 +213,7 @@ export function bodyPickExtra(b: BodyPickInput): PickExtra | null {
   const d2 = dx * dx + dy * dy;
   const R = bodyHitRadiusPx(b.radiusKm, b.k, Math.hypot(x, y, z), b.fovDeg, b.h, b.minPx);
   if (d2 > R * R) return null;
-  const extra: PickExtra = { id: b.id, d2 };
+  const extra: PickExtra = { id: b.id, d2, discPx: bodyDiscRadiusPx(b.radiusKm, b.k, Math.hypot(x, y, z), b.fovDeg, b.h) };
   if (b.rank !== undefined) extra.rank = b.rank;
   if (b.checkOcclusion) extra.rel = [x, y, z];
   return extra;
@@ -198,6 +224,65 @@ export function rankMap(entities: Iterable<Pick<EntityRecord, 'id' | 'provider' 
   const out = new Map<string, number>();
   for (const e of entities) out.set(e.id, entityRank(e, registry));
   return out;
+}
+
+/** Hierarchy rank and creation time of every entity by id, for `PickOptions.ranks` and `.created`; built once per catalog change. */
+export function pickMeta(
+  entities: Iterable<Pick<EntityRecord, 'id' | 'provider' | 'bodyId' | 'createdAt' | 'updatedAt'>>,
+  registry?: BodyRegistry,
+): { ranks: Map<string, number>; created: Map<string, number> } {
+  const ranks = new Map<string, number>(), created = new Map<string, number>();
+  for (const e of entities) {
+    ranks.set(e.id, entityRank(e, registry));
+    created.set(e.id, e.createdAt ?? e.updatedAt);
+  }
+  return { ranks, created };
+}
+
+/**
+ * Zoomed-out grouping: a body whose disc is at most this many px in radius (an Earth about 80 px across or smaller) is
+ * "far away", and two or more objects under the cursor in its hit area are not worth telling apart: they collapse into the
+ * body. Bigger than that the objects are drawn apart enough to aim at and stay individually selectable.
+ */
+export const GROUP_DISC_PX = 40;
+/** Objects under the cursor (visible, after the cluster radius) from which a far body groups them; one object is always aimed at. */
+export const GROUP_MIN_OBJECTS = 2;
+
+export interface PickResolution {
+  /** what the click lists, primary entry first (hierarchy order: bodies, then objects by rank and recency) */
+  items: PickHit[];
+  /** candidates counted, `items` may be capped */
+  total: number;
+  /** objects hidden behind a grouping body (empty: nothing was grouped); the popup lists them when the user expands */
+  grouped: PickHit[];
+  groupedTotal: number;
+}
+
+/**
+ * Decides what a click on `objects` (visible objects under the cursor, hierarchy ordered) and `bodies` (drawn bodies whose
+ * hit area holds the cursor, with `discPx`) lists:
+ *
+ * - far away (some body under the cursor has a disc of at most `discPx` px) and at least `minObjects` objects there: the
+ *   bodies, in hierarchy order, with the objects as `grouped` (the "+ N objects" entry). Every body under the cursor is
+ *   listed, so a big Earth disc with a far Moon dot in front of it still offers both.
+ * - otherwise any object: the objects only. A body is never listed beside objects, because the Earth's disc covers most
+ *   of the screen when zoomed in and would join every click on a satellite drawn over it.
+ * - no object: the bodies.
+ *
+ * Pass `bodies` as null when the objects alone decide (exactly one object: it is aimed at, so nothing is looked up).
+ */
+export function resolvePick(
+  objects: { items: PickHit[]; total: number },
+  bodies: { items: PickHit[]; total: number } | null,
+  discPx = GROUP_DISC_PX,
+  minObjects = GROUP_MIN_OBJECTS,
+): PickResolution {
+  const none: PickHit[] = [];
+  if (bodies && bodies.items.length > 0 && objects.total >= minObjects && bodies.items.some((b) => (b.discPx ?? Infinity) <= discPx)) {
+    return { items: bodies.items, total: bodies.total, grouped: objects.items, groupedTotal: objects.total };
+  }
+  if (objects.items.length > 0 || !bodies) return { items: objects.items, total: objects.total, grouped: none, groupedTotal: 0 };
+  return { items: bodies.items, total: bodies.total, grouped: none, groupedTotal: 0 };
 }
 
 /** Wheel pixels that make one step of the popup highlight (a mouse notch is 100, so one notch = one row). */

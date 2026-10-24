@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords, entityRank } from '@eio/core';
 import {
-  CLUSTER_PX, bodyHitRadiusPx, bodyPickExtra, gatherCandidates, moveIndex, popupPlacement, rankMap, wheelSteps, type PickSource,
+  CLUSTER_PX, GROUP_DISC_PX, bodyDiscRadiusPx, bodyHitRadiusPx, bodyPickExtra, gatherCandidates, moveIndex, pickMeta, popupPlacement,
+  rankMap, resolvePick, wheelSteps, type PickHit, type PickSource,
 } from '../src/lib/pick';
 
 // Identity projection-view: ndc = (x, y), w = h = 200, so screen x = 100 + 100 x and screen y = 100 - 100 y.
@@ -143,6 +144,109 @@ describe('hierarchy rank', () => {
   });
 });
 
+describe('recency among equal ranks', () => {
+  const pts = [{ id: 'old', x: 101, y: 100 }, { id: 'new', x: 108, y: 100 }, { id: 'mid', x: 104, y: 100 }];
+  const created = new Map([['old', 100], ['new', 300], ['mid', 200]]);
+  const ranks = new Map([['old', 1e6 + 2], ['new', 1e6 + 2], ['mid', 1e6 + 2]]);
+  const go = (extra: object) => gatherCandidates([source(pts)], [], M, W, H, 100, 100, { max: 12, occluded: never, ranks, ...extra }).items.map((h) => h.id);
+
+  it('lists the most recently created first, although it is farther from the cursor', () => {
+    expect(go({ created })).toEqual(['new', 'mid', 'old']);
+  });
+
+  it('rank still beats recency, and distance breaks a tie in both', () => {
+    expect(go({ created, ranks: new Map([...ranks, ['old', 1e6 + 1]]) })).toEqual(['old', 'new', 'mid']);
+    expect(go({ created: new Map([['old', 5], ['new', 5], ['mid', 5]]) })).toEqual(['old', 'mid', 'new']);
+    expect(go({})).toEqual(['old', 'mid', 'new']); // no creation times: nearest first as before
+  });
+
+  it('an object without a creation time counts as the oldest', () => {
+    expect(go({ created: new Map([['mid', 1]]) })).toEqual(['mid', 'old', 'new']);
+  });
+
+  it('nearestFirst ignores rank and recency (hover names the object under the pointer)', () => {
+    expect(go({ created, nearestFirst: true })).toEqual(['old', 'mid', 'new']);
+  });
+
+  it('builds ranks and creation times from the records (updatedAt when there is no createdAt)', () => {
+    const { ranks: r, created: c } = pickMeta([
+      { id: 'a', bodyId: 'EARTH', createdAt: 10, updatedAt: 99 }, { id: 'b', bodyId: 'EARTH', updatedAt: 50 },
+      ...bodyEntityRecords(),
+    ]);
+    expect(c.get('a')).toBe(10);
+    expect(c.get('b')).toBe(50);
+    expect(r.get('a')).toBe(r.get('b'));
+    expect(r.get('body-earth')!).toBeLessThan(r.get('a')!);
+  });
+});
+
+describe('resolvePick (zoomed-out grouping)', () => {
+  const hit = (id: string, discPx?: number): PickHit => (discPx === undefined ? { id, dist: 1 } : { id, dist: 1, discPx });
+  const objs = (n: number) => ({ items: Array.from({ length: n }, (_, i) => hit(`o${i}`)), total: n });
+  const earth = (disc: number) => ({ items: [hit('body-earth', disc)], total: 1 });
+
+  it('groups two or more objects into a body whose disc is small, keeping the objects as the expandable list', () => {
+    const r = resolvePick(objs(3), earth(30));
+    expect(r.items.map((h) => h.id)).toEqual(['body-earth']);
+    expect(r.grouped.map((h) => h.id)).toEqual(['o0', 'o1', 'o2']);
+    expect(r.groupedTotal).toBe(3);
+  });
+
+  it('threshold: a disc of exactly GROUP_DISC_PX groups, anything bigger does not', () => {
+    expect(resolvePick(objs(2), earth(GROUP_DISC_PX)).grouped).toHaveLength(2);
+    const zoomedIn = resolvePick(objs(2), earth(GROUP_DISC_PX + 0.5));
+    expect(zoomedIn.items.map((h) => h.id)).toEqual(['o0', 'o1']);
+    expect(zoomedIn.grouped).toEqual([]);
+    // a custom threshold
+    expect(resolvePick(objs(2), earth(100), 120).grouped).toHaveLength(2);
+  });
+
+  it('threshold: one object is never grouped (it is aimed at), two are', () => {
+    const one = resolvePick(objs(1), earth(10));
+    expect(one.items.map((h) => h.id)).toEqual(['o0']);
+    expect(one.grouped).toEqual([]);
+    expect(resolvePick(objs(2), earth(10)).items.map((h) => h.id)).toEqual(['body-earth']);
+    // the count is the total, so a capped list still groups
+    expect(resolvePick({ items: [hit('o0')], total: 2 }, earth(10)).groupedTotal).toBe(2);
+    expect(resolvePick(objs(2), earth(10), 40, 3).grouped).toEqual([]);
+  });
+
+  it('zoomed in (the disc covers the view, or it has no disc size) bodies never join the objects', () => {
+    expect(resolvePick(objs(2), earth(Infinity)).items.map((h) => h.id)).toEqual(['o0', 'o1']);
+    expect(resolvePick(objs(1), earth(300)).items.map((h) => h.id)).toEqual(['o0']);
+    expect(resolvePick(objs(2), { items: [hit('body-earth')], total: 1 }).grouped).toEqual([]);
+    expect(resolvePick(objs(2), null).items).toHaveLength(2);
+  });
+
+  it('with no object under the cursor the bodies are the result', () => {
+    expect(resolvePick(objs(0), earth(300)).items.map((h) => h.id)).toEqual(['body-earth']);
+    expect(resolvePick(objs(0), earth(300)).grouped).toEqual([]);
+    expect(resolvePick(objs(0), { items: [], total: 0 }).items).toEqual([]);
+  });
+
+  it('lists every body under the cursor, in the order given, when grouping', () => {
+    const both = { items: [hit('body-earth', 300), hit('body-moon', 5)], total: 2 };
+    const r = resolvePick(objs(2), both);
+    expect(r.items.map((h) => h.id)).toEqual(['body-earth', 'body-moon']);
+    expect(r.grouped).toHaveLength(2);
+  });
+});
+
+describe('body disc size', () => {
+  it('is the silhouette radius without margin or floor, infinite inside the sphere', () => {
+    const f = 600 / (2 * Math.tan(Math.PI / 6));
+    expect(bodyDiscRadiusPx(6378.137, 1, 24_000, 60, 600)).toBeCloseTo((6378.137 / Math.sqrt(24_000 ** 2 - 6378.137 ** 2)) * f, 9);
+    expect(bodyDiscRadiusPx(6378.137, 1, 5000, 60, 600)).toBe(Infinity);
+    expect(bodyHitRadiusPx(6378.137, 1, 24_000, 60, 600)).toBeCloseTo(bodyDiscRadiusPx(6378.137, 1, 24_000, 60, 600) + 3, 9);
+  });
+
+  it('the Earth falls under the grouping threshold from about 13 Earth radii in a 60 degree, 600 px view', () => {
+    // disc <= 40 px  <=>  dist >= ~83,000 km here (a taller viewport pushes it further out)
+    expect(bodyDiscRadiusPx(6378.137, 1, 60_000, 60, 600)).toBeGreaterThan(GROUP_DISC_PX);
+    expect(bodyDiscRadiusPx(6378.137, 1, 100_000, 60, 600)).toBeLessThan(GROUP_DISC_PX);
+  });
+});
+
 describe('body picking', () => {
   // fov 60 degrees, viewport 600 px high: 520.8 px focal length
   const hit = (radiusKm: number, k: number, dist: number) => bodyHitRadiusPx(radiusKm, k, dist, 60, 600);
@@ -168,7 +272,9 @@ describe('body picking', () => {
     // identity matrix: ndc = (x, y), the screen centre is (100, 100) of 200 x 200
     const base = { id: 'body-moon', radiusKm: 1737.4, k: 1, fovDeg: 60, m: M, w: W, h: H, px: 100, py: 100, rank: 2000 };
     // on the disc's centre
-    expect(bodyPickExtra({ ...base, rel: [0, 0, 5000] })).toEqual({ id: 'body-moon', d2: 0, rank: 2000 });
+    const centre = bodyPickExtra({ ...base, rel: [0, 0, 5000] })!;
+    expect(centre).toMatchObject({ id: 'body-moon', d2: 0, rank: 2000 });
+    expect(centre.discPx).toBeCloseTo(bodyDiscRadiusPx(1737.4, 1, 5000, 60, H), 9);
     // 10 px off, inside the 14 px floor
     const near = bodyPickExtra({ ...base, rel: [sx(110), 0, 1e6] })!;
     expect(near.d2).toBeCloseTo(100, 5);

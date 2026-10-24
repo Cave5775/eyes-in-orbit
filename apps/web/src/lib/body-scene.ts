@@ -1,13 +1,14 @@
 /**
  * Pure parts of the scene's handling of body entities (docs/frames.md, "Scene"): which body orbit lines to draw, the pick
- * extras of the drawn bodies and the rule that a body is only picked where no other object is. No three.js.
+ * extras of the drawn bodies and the rule that decides when a body is listed with the objects under the cursor
+ * (`resolvePick`: grouping when zoomed out, only where no object is otherwise). No three.js.
  */
 import { orbitableBodyId, type EntityRecord } from '@eio/core';
 import type { V3 } from './camera';
 import type { DistanceScale } from './deepspace';
 import { isEarthCentre, type Centre } from './frame';
 import { earthOccludes, sphereOccludes, sphereView } from './occlusion';
-import { gatherCandidates, bodyPickExtra, type PickExtra, type PickHit, type PickOptions, type PickSource } from './pick';
+import { gatherCandidates, bodyPickExtra, resolvePick, type PickExtra, type PickOptions, type PickResolution, type PickSource } from './pick';
 
 /** A body as the scene draws it this frame (display space: shell-compressed in the compressed distance scale). */
 export interface DrawnBody {
@@ -105,10 +106,10 @@ export function bodyPickExtras(bodies: readonly DrawnBody[], ctx: BodyPickContex
 }
 
 /**
- * Candidates near the cursor: the objects first (points, models, the selection, as `gatherCandidates`), and only when there
- * are none the drawn bodies. The Earth's disc covers most of the screen, so a body that joined the object candidates would
- * turn every click on a satellite drawn over the disc into a choice popup. (The hierarchy ordering and the zoomed-out
- * aggregation replace this rule later.)
+ * Candidates near the cursor, as `resolvePick` decides: the objects (points, models, the selection, as `gatherCandidates`,
+ * highest in the hierarchy first, then newest) when zoomed in, and the drawn bodies, with the objects as `grouped`, when the
+ * body they overlap is far away (small disc). A body never joins the objects of a zoomed-in click: the Earth's disc covers
+ * most of the screen and would turn every click on a satellite drawn over it into a choice popup.
  */
 export function gatherWithBodies(
   sources: readonly PickSource[],
@@ -120,9 +121,10 @@ export function gatherWithBodies(
   px: number,
   py: number,
   opts: PickOptions,
-): { items: PickHit[]; total: number } {
-  const r = gatherCandidates(sources, extras, m, w, h, px, py, opts);
-  if (r.items.length > 0) return r;
-  const bodies = bodyExtras();
-  return bodies.length ? gatherCandidates([], bodies, m, w, h, px, py, opts) : r;
+): PickResolution {
+  const objects = gatherCandidates(sources, extras, m, w, h, px, py, opts);
+  // exactly one object is aimed at, whatever is behind it: the body lookup is skipped
+  if (objects.total === 1) return resolvePick(objects, null);
+  const list = bodyExtras();
+  return resolvePick(objects, list.length ? gatherCandidates([], list, m, w, h, px, py, opts) : { items: [], total: 0 });
 }
