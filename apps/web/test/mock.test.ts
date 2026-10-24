@@ -91,7 +91,6 @@ describe('mock non-SGP4 entities', () => {
     expect(range('dsn-VGR1')).toBeGreaterThan(1e10);
     expect(range('dsn-JWST')).toBeLessThan(2e6);
     expect(range('dsn-MRO')).toBeGreaterThan(5e7);
-    expect(range('demo-rover')).toBeGreaterThan(5e7);
   });
 
   it('mock LRO orbits the Moon: MOON body, Moon-inertial samples, 50 x 150 km polar orbit of about 2 h', () => {

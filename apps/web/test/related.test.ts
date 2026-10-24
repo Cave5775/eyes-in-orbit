@@ -38,21 +38,21 @@ describe('relatedFor', () => {
   });
 
   it('follows the relative parents and the pad of a composite booster', () => {
-    const lz = rec({ id: 'demo-lz', kind: 'pad', provider: geo(28.5, -80.55) });
-    const pad = rec({ id: 'demo-pad', kind: 'pad', provider: geo(28.6082, -80.6041) });
+    const lz = rec({ id: 'lz-1', kind: 'pad', provider: geo(28.5, -80.55) });
+    const pad = rec({ id: 'pad-1', kind: 'pad', provider: geo(28.6082, -80.6041) });
     const booster = rec({
-      id: 'demo-booster', kind: 'stage',
+      id: 'booster-1', kind: 'stage',
       provider: {
         type: 'composite',
         segments: [
           { fromMs: 0, toMs: 9, phase: 'pad', spec: geo(28.6082, -80.6041) },
-          { fromMs: 10, toMs: 19, phase: 'landing', spec: { type: 'relative', parentId: 'demo-lz', mode: 'enu', offsetKm: [0, 0, 1] } },
+          { fromMs: 10, toMs: 19, phase: 'landing', spec: { type: 'relative', parentId: 'lz-1', mode: 'enu', offsetKm: [0, 0, 1] } },
         ],
       },
     });
-    const drone = rec({ id: 'demo-drone', kind: 'drone', parentId: 'demo-booster' });
+    const drone = rec({ id: 'drone-1', kind: 'drone', parentId: 'booster-1' });
     const r = relatedFor(booster, { entities: mapOf(lz, pad, booster, drone), launches: [], dsn: null });
-    expect(r.ids.sort()).toEqual(['demo-booster', 'demo-drone', 'demo-lz', 'demo-pad']);
+    expect(r.ids.sort()).toEqual(['booster-1', 'drone-1', 'lz-1', 'pad-1']);
     expect(r.points).toEqual([{ latDeg: 28.6082, lonDeg: -80.6041 }]);
   });
 

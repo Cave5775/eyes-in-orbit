@@ -11,7 +11,7 @@ const CATALOG: TreeItem[] = [
   ...Array.from({ length: 20 }, (_, i) => item(`sat-${i}`, 'satellite', 'EARTH')),
   ...Array.from({ length: 3 }, (_, i) => item(`stn-${i}`, 'station', 'EARTH')),
   item('dsn-LRO', 'probe', 'MOON'),
-  item('demo-rover', 'rover', 'MARS'),
+  item('mars-probe-1', 'rover', 'MARS'),
 ];
 
 const base = { bodies: BODIES, frame: bodyCentre('EARTH') };
@@ -81,7 +81,7 @@ describe('entity tree rows', () => {
   it('explicit choices win over the defaults', () => {
     const overrides = new Map([[bodyKey('EARTH'), false], [bodyKey('MARS'), true]]);
     const rows = buildTreeRows(CATALOG, { ...base, overrides });
-    expect(types(rows)).toEqual(['B:SUN', 'B:EARTH', 'B:MARS', 'E:demo-rover']);
+    expect(types(rows)).toEqual(['B:SUN', 'B:EARTH', 'B:MARS', 'E:mars-probe-1']);
     const rows2 = buildTreeRows(CATALOG, { ...base, overrides: new Map([[groupKey('EARTH', 'station'), true]]) });
     expect(types(rows2).filter((t) => t.startsWith('E:'))).toEqual(['E:stn-0', 'E:stn-1', 'E:stn-2']);
   });

@@ -1,5 +1,5 @@
 import {
-  DEG, EARTH, LL2_STATUS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, convert, deriveMissionState, enuBasis, geodeticToFixed,
+  DEG, EARTH, LL2_STATUS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, convert, deriveMissionState,
   modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
@@ -286,7 +286,7 @@ export function mockAscentSeries(launch: Launch): AscentSeries | null {
   };
 }
 
-// ---------------------------------------------------------------- deep space / ground / demo
+// ---------------------------------------------------------------- deep space / ground
 
 const STATIONS = [
   { id: 'dsn-goldstone', name: 'Goldstone DSN Complex', lat: 35.4267, lon: -116.89, code: 'GDSCC' },
@@ -364,40 +364,6 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
     links: { newsQuery: 'Lunar Reconnaissance Orbiter' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
     attrs: { trackCentre: 'Moon', trackNote: 'Track is Moon-centred (Horizons 500@301, 5 min steps, -1 d to +3 d), not Earth-centred' },
     updatedAt: nowMs,
-  });
-
-  // demo: booster arc loop, drone orbiting it, rover on Mars
-  const LZ = { lat: 28.4858, lon: -80.5444 };
-  const pad = geodeticToFixed({ lat: LZ.lat * DEG, lon: LZ.lon * DEG, alt: 0.01 }, EARTH);
-  const { e, u } = enuBasis(LZ.lat * DEG, LZ.lon * DEG);
-  const CYCLE = 8 * MIN;
-  const start = nowMs - 30 * MIN;
-  const boosterSamples: Sample[] = [];
-  for (let t = start; t <= nowMs + 3 * HOUR; t += 10_000) {
-    const x = ((t - start) % CYCLE) / CYCLE;
-    const alt = 90 * 4 * x * (1 - x);
-    const east = 60 * Math.sin(Math.PI * x);
-    boosterSamples.push([t, ...([0, 1, 2].map((k) => pad[k] + e[k] * east + u[k] * alt) as Vec3)]);
-  }
-  out.push({
-    id: 'demo-booster', name: 'Demo Booster (boostback arc)', kind: 'stage', bodyId: 'EARTH', aliases: {}, group: 'demo',
-    provider: { type: 'sampled', frame: 'EARTH:fixed', samples: boosterSamples, holdEnds: true },
-    render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 240, model: 'rocket-stage' }, updatedAt: nowMs,
-  });
-  const droneSamples: Sample[] = [];
-  for (let t = start; t <= nowMs + 3 * HOUR; t += 5_000) {
-    const a = ((t - start) / 40_000) * 2 * Math.PI;
-    droneSamples.push([t, 1.2 * Math.cos(a), 1.2 * Math.sin(a), 0.4]);
-  }
-  out.push({
-    id: 'demo-drone', name: 'Demo Drone (orbits booster)', kind: 'drone', bodyId: 'EARTH', parentId: 'demo-booster', aliases: {}, group: 'demo',
-    provider: { type: 'relative', parentId: 'demo-booster', mode: 'enu', samples: droneSamples },
-    render: { colorKey: 'aircraft', glyph: 'ring' }, updatedAt: nowMs,
-  });
-  out.push({
-    id: 'demo-rover', name: 'Demo Rover (Jezero)', kind: 'rover', bodyId: 'MARS', aliases: {}, group: 'demo',
-    provider: { type: 'geodetic', bodyId: 'MARS', latDeg: 18.44, lonDeg: 77.45, altKm: -2.6 },
-    render: { colorKey: 'rover', glyph: 'square' }, updatedAt: nowMs,
   });
   return out;
 }

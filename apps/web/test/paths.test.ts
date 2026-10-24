@@ -14,7 +14,7 @@ const NOW = Date.UTC(2026, 5, 1, 12, 0, 0);
 const MIN = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
 const RE = EARTH.radiusKm;
 
-/** Same shape as the server's demo booster: pad, sampled ascent in EARTH:fixed, relative landing arc, landed. */
+/** A self-contained landing-booster composite: pad, sampled ascent in EARTH:fixed, relative landing arc, landed. */
 function demoBooster(t0: number): { rec: EntityRecord; recs: EntityRecord[] } {
   const PAD = { latDeg: 28.6082, lonDeg: -80.6041 };
   const lz = destinationPoint(PAD.latDeg, PAD.lonDeg, 90, 8, RE);
@@ -33,12 +33,12 @@ function demoBooster(t0: number): { rec: EntityRecord; recs: EntityRecord[] } {
   const segments: CompositeSegment[] = [
     { fromMs: t0, toMs: liftoff - 1, phase: 'pad', spec: padSpec },
     { fromMs: liftoff, toMs: landingStart - 1, phase: 'ascent', spec: { type: 'sampled', frame: 'EARTH:fixed', samples: profileToFixedSamples(defaultBodies.get('EARTH'), PAD, 90, liftoff, rows) } },
-    { fromMs: landingStart, toMs: landed - 1, phase: 'landing', spec: { type: 'relative', parentId: 'demo-lz', mode: 'enu', samples: landing } },
+    { fromMs: landingStart, toMs: landed - 1, phase: 'landing', spec: { type: 'relative', parentId: 'lz-1', mode: 'enu', samples: landing } },
     { fromMs: landed, toMs: t0 + 600_000 - 1, phase: 'landed', spec: lzSpec },
   ];
   const recs: EntityRecord[] = [
-    { id: 'demo-lz', name: 'LZ', kind: 'pad', bodyId: 'EARTH', aliases: {}, provider: lzSpec, updatedAt: 0 },
-    { id: 'demo-booster', name: 'Booster', kind: 'stage', bodyId: 'EARTH', aliases: {}, provider: { type: 'composite', segments }, updatedAt: 0 },
+    { id: 'lz-1', name: 'LZ', kind: 'pad', bodyId: 'EARTH', aliases: {}, provider: lzSpec, updatedAt: 0 },
+    { id: 'booster-1', name: 'Booster', kind: 'stage', bodyId: 'EARTH', aliases: {}, provider: { type: 'composite', segments }, updatedAt: 0 },
   ];
   return { rec: recs[1], recs };
 }
@@ -186,15 +186,6 @@ describe('samplePath: mock data', () => {
   const recs = mockGroundAndProbes(NOW);
   const graph = graphOf(recs);
   const get = (id: string) => recs.find((r) => r.id === id)!;
-
-  it('mock demo booster (plain sampled arc) is drawn fixed, with the arc apex', () => {
-    const rec = get('demo-booster');
-    const plan = planPathWindow(rec.provider, NOW, { trailSeconds: rec.render?.trailSeconds })!;
-    const res = samplePath(graph, rec.id, plan, rec.provider, makePathBuffers());
-    expect(res.frame).toBe('fixed');
-    expect(res.moving).toBe(true);
-    expect(res.phases).toEqual([]);
-  });
 
   it('Voyager 1 path stays on the compressed shell, same as its marker', () => {
     const rec = get('dsn-VGR1');

@@ -8,7 +8,6 @@ import { loadConfig, loadDotEnv } from './config';
 import { Scheduler, type Connector } from './connector';
 import { Credentials } from './credentials';
 import { celestrak } from './connectors/celestrak';
-import { demo } from './connectors/demo';
 import { dsn } from './connectors/dsn';
 import { flightclub } from './connectors/flightclub';
 import { horizons } from './connectors/horizons';
@@ -24,7 +23,7 @@ import { Store } from './store';
 import { registerStream } from './ws';
 
 const CONNECTORS: Connector[] = [
-  demo, flightclub, celestrak, launchlibrary, snapi, dsn, horizons, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
+  flightclub, celestrak, launchlibrary, snapi, dsn, horizons, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
 ];
 
 async function main(): Promise<void> {

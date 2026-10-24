@@ -7,7 +7,7 @@ import { framePathPoint, type FrameSampler } from './frame';
  * over a time window around "now" (past trail + future prediction), converted for display.
  *
  * Display frame: the scene is Earth-inertial and the Earth mesh rotates by GMST. A provider defined in
- * `EARTH:fixed` (the demo booster, launch ascents, a landing burn relative to a pad) describes motion
+ * `EARTH:fixed` (launch ascents and landing boosters, a landing burn relative to a pad) describes motion
  * relative to the ground. Drawn in the inertial frame a booster standing on its landing pad would leave a
  * 460 m/s eastward streak, and an ascent would be sheared by the Earth's rotation. So when every sample is
  * native `EARTH:fixed` and the window is short (<= 45 min, <= 11 degrees of rotation) the path is returned
