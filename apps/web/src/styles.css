@@ -43,11 +43,12 @@ a:hover { text-decoration: underline; }
 .app {
   /* panel sizes; ResizableLayout overrides these inline once the user has resized or resets */
   --left-w: 292px; --right-w: 372px; --bottom-h: 176px; --dsn-w: 470px;
+  --ticker-h: 26px; /* 0 while the news ticker is hidden (PANELS menu) */
   position: relative;
   display: grid;
   height: 100%;
   grid-template-columns: var(--left-w) minmax(0, 1fr) var(--right-w);
-  grid-template-rows: 46px minmax(0, 1fr) var(--bottom-h) 26px;
+  grid-template-rows: 46px minmax(0, 1fr) var(--bottom-h) var(--ticker-h);
   grid-template-areas: 'top top top' 'left scene right' 'bottom bottom bottom' 'tick tick tick';
 }
 .topbar { grid-area: top; }
@@ -55,6 +56,7 @@ a:hover { text-decoration: underline; }
 .scene { grid-area: scene; }
 .panel.right { grid-area: right; }
 .bottom { grid-area: bottom; display: grid; grid-template-columns: minmax(0, 1fr) var(--dsn-w); border-top: 1px solid var(--line); }
+.bottom.solo { grid-template-columns: minmax(0, 1fr); } /* only one of the launch board and the DSN panel is shown */
 .ticker { grid-area: tick; }
 
 .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
@@ -82,10 +84,10 @@ a:hover { text-decoration: underline; }
 .sp-v::after { top: 0; bottom: 0; left: 3px; width: 1px; }
 .sp-h { height: 7px; cursor: row-resize; }
 .sp-h::after { left: 0; right: 0; top: 3px; height: 1px; }
-.sp-left { left: calc(var(--left-w) - 3px); top: 46px; bottom: calc(var(--bottom-h) + 26px); }
-.sp-right { right: calc(var(--right-w) - 4px); top: 46px; bottom: calc(var(--bottom-h) + 26px); }
-.sp-bottom { left: 0; right: 0; bottom: calc(var(--bottom-h) + 26px - 3px); }
-.sp-dsn { right: calc(var(--dsn-w) - 4px); bottom: 26px; height: var(--bottom-h); }
+.sp-left { left: calc(var(--left-w) - 3px); top: 46px; bottom: calc(var(--bottom-h) + var(--ticker-h)); }
+.sp-right { right: calc(var(--right-w) - 4px); top: 46px; bottom: calc(var(--bottom-h) + var(--ticker-h)); }
+.sp-bottom { left: 0; right: 0; bottom: calc(var(--bottom-h) + var(--ticker-h) - 3px); }
+.sp-dsn { right: calc(var(--dsn-w) - 4px); bottom: var(--ticker-h); height: var(--bottom-h); }
 /* while a drag is in progress: keep the cursor, block text selection, and never let the canvas or an iframe take the pointer */
 body.resizing { user-select: none; -webkit-user-select: none; }
 body.resizing-x, body.resizing-x * { cursor: col-resize !important; }
@@ -196,6 +198,33 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .keys-error { color: var(--bad); font-size: 11px; margin: 4px 0; }
 .keys-actions { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
 .keys-saved { font-size: 11px; }
+
+/* ---- PANELS menu (ui/PanelsMenu.tsx): top bar button + popover with a checkbox per optional panel ---- */
+.panels-btn { min-width: 0; gap: 5px; }
+.panels-icon { display: block; flex: none; }
+.panels-pop { width: 300px; }
+.panels-row { display: grid; grid-template-columns: 16px 1fr; gap: 1px 8px; align-items: center; padding: 5px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.panels-row input { margin: 0; accent-color: var(--accent); grid-row: 1 / span 2; cursor: pointer; }
+.panels-name { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; }
+.panels-hint { font-size: 11px; }
+.panels-row:hover .panels-name, .panels-row:focus-within .panels-name { color: var(--accent); }
+/* the top bar is full below ~1500 px: the button shrinks to its icon (title and aria-label stay) */
+@media (max-width: 1499px) {
+  .panels-text { display: none; }
+  .panels-btn { padding: 4px 7px; }
+}
+/* ...and at 900 px and below the bar gets a little tighter so the extra button still leaves every time field visible
+   (header.topbar outranks the .topbar rules of the 1100 px query further down) */
+@media (max-width: 900px) {
+  header.topbar { gap: 5px; padding: 0 6px; }
+  header.topbar .clock { gap: 4px; }
+  header.topbar .clock .mode { min-width: 50px; }
+  header.topbar .utc { font-size: 15px; }
+}
+/* the stacked layout (820 px and below) makes the top bar a scroll container, which would clip its popovers: pin them to the viewport instead */
+@media (max-width: 820px) {
+  header.topbar .popover { position: fixed; top: 50px; right: 6px; max-width: calc(100vw - 12px); }
+}
 
 /* ---- scene ---- */
 .scene { position: relative; min-width: 0; min-height: 0; background: var(--bg); overflow: hidden; }
@@ -411,7 +440,7 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 @media (max-width: 820px) {
   body { overflow: auto; }
   .splitter { display: none; }
-  .app { height: auto; min-height: 100%; grid-template-columns: 1fr; grid-template-rows: 46px 60vh 320px 380px auto 26px; grid-template-areas: 'top' 'scene' 'left' 'right' 'bottom' 'tick'; }
+  .app { height: auto; min-height: 100%; grid-template-columns: 1fr; grid-template-rows: 46px 60vh 320px 380px auto var(--ticker-h); grid-template-areas: 'top' 'scene' 'left' 'right' 'bottom' 'tick'; }
   .topbar { overflow-x: auto; }
   .bottom { grid-template-columns: 1fr; }
 }

@@ -24,6 +24,7 @@ const HELP: [string, string][] = [
   ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or SURFACE switches to the globe view, and that choice is remembered until you press S again'],
   ['Esc', 'Deselect and return to the Earth view'],
   ['MODEL', 'Objects with a 3D model (ISS, the demo booster, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or MODEL on such a selection flies to it'],
+  ['PANELS (top bar)', 'Show or hide the DSN panel (hidden by default), the launch board and the news ticker; the space is given back to the globe and the choice is remembered'],
   ['H', 'Show / hide this help'],
 ];
 

@@ -10,6 +10,7 @@ import { useStore } from '../state/store';
 import { CredentialsPanel } from './CredentialsPanel';
 import { HealthIndicator } from './HealthIndicator';
 import { useSimNow } from './hooks';
+import { PanelsMenu } from './PanelsMenu';
 
 /** Views the app can centre on; Mars has no ephemeris or map yet. */
 const BODIES: [string, string | null][] = [['Earth', 'EARTH'], ['Moon', 'MOON'], ['Sun', 'SUN'], ['Mars', null]];
@@ -169,6 +170,7 @@ export function TopBar() {
         </div>
       </div>
 
+      <PanelsMenu />
       <CredentialsPanel />
       <HealthIndicator />
     </header>
