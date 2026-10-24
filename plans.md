@@ -1,5 +1,6 @@
 # UI/UX
-- [ ] Add a feature to timeskip to a launch or skip to specific points of a launch by clicking the trajectory
+- [x] Add a feature to timeskip to a launch or skip to specific points of a launch by clicking the trajectory
+  - Done in code, mock mode only: SKIP / SKIP TO LAUNCH (to the NET), clickable events and chart points, and clicking the selected launch path (8 px, lowest pick priority). Unchecked: clicking an object that lies on the path, true-scale and non-Earth frames.
 - [x] When zoomed out, dynamically show labels for planets and moons. Also show labels for satallites (when filtered) Add a toggle to show these labels
   - Done in code (`lib/labels.ts`, `scene/LabelLayer.ts`, LABELS button, `eio.labels`), checked in the mock mode only. Cap 48, body fade 50 to 220 px; entities with `render.label` (ISS, probes, launch vehicles, DSN) are also named in the default view.
 - [x] When a click triggers the selection popup, order the objects primarily by highest in the object hierarchy, then by most recent created. Following this logic, only display the highest celestial object in the hierarchy when zoomed out (eg. the satallites overlapping the Earth are just aggregated into an icon to select the Earth itself) if this ends up being too janky, we can just increase the size of celestial bodies' hitbox when zoomed out and hide small objects
