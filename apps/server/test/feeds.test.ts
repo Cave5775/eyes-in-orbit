@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { complexOfDish, parseDsn, probeAttrs } from '../src/connectors/dsn';
-import { HORIZONS_FUTURE_DAYS, HORIZONS_PAST_DAYS, horizonsUrl, parseHorizonsVectors } from '../src/connectors/horizons';
+import { DEFAULT_HORIZONS, DSN_TARGETS, horizonsSpecOf, probeEntity } from '../src/connectors/dsn-targets';
+import { HORIZONS_FUTURE_DAYS, HORIZONS_PAST_DAYS, horizonsCacheKey, horizonsUrl, parseHorizonsVectors } from '../src/connectors/horizons';
 import { decodeUpdate, issTimestampMs, telemetryPoint } from '../src/connectors/iss-live';
 import { normalizeIssFix } from '../src/connectors/iss-rest';
 import { newsUrl, normalizeArticle, parseArticles } from '../src/connectors/snapi';
@@ -104,6 +105,57 @@ describe('horizons', () => {
     expect((stop - start) / 1_800_000 + 1).toBe(481);
   });
 
+  const NOW = Date.parse('2026-10-22T14:05:00Z');
+
+  it('leaves every default target geocentric with 30 min steps and a -3 d .. +7 d window', () => {
+    const plain = horizonsUrl('-31', NOW);
+    for (const [code, target] of Object.entries(DSN_TARGETS)) {
+      if (code === 'LRO') continue;
+      const spec = horizonsSpecOf(target);
+      expect(spec, code).toEqual(DEFAULT_HORIZONS);
+      expect(horizonsUrl('-31', NOW, spec), code).toBe(plain);
+      expect(probeEntity(code), code).toMatchObject({ bodyId: 'EARTH' });
+      expect(probeEntity(code).attrs, code).toBeUndefined();
+    }
+    expect(DEFAULT_HORIZONS).toEqual({ center: '500@399', frame: 'EARTH:inertial', bodyId: 'EARTH', stepMin: 30, pastDays: 3, futureDays: 7 });
+  });
+
+  it('fetches LRO Moon-centred with 5 min steps over -1 d .. +3 d', () => {
+    const spec = horizonsSpecOf(DSN_TARGETS.LRO);
+    expect(spec).toEqual({ center: '500@301', frame: 'MOON:inertial', bodyId: 'MOON', stepMin: 5, pastDays: 1, futureDays: 3 });
+    const p = new URL(horizonsUrl(DSN_TARGETS.LRO.horizons, NOW, spec)).searchParams;
+    expect(p.get('COMMAND')).toBe("'-85'");
+    expect(p.get('CENTER')).toBe("'500@301'");
+    expect(p.get('STEP_SIZE')).toBe("'5 m'");
+    expect(p.get('REF_PLANE')).toBe('FRAME');
+    expect(p.get('START_TIME')).toBe("'2026-10-21 14:00'");
+    expect(p.get('STOP_TIME')).toBe("'2026-10-25 14:00'");
+    const parse = (s: string | null) => Date.parse(`${s!.replace(/'/g, '').replace(' ', 'T')}:00Z`);
+    expect((parse(p.get('STOP_TIME')) - parse(p.get('START_TIME'))) / 300_000 + 1).toBe(1153);
+  });
+
+  it('builds the LRO entity on the Moon with the Moon-centred note and keeps name, aliases, group and render hints', () => {
+    expect(probeEntity('LRO')).toMatchObject({
+      id: 'dsn-LRO', name: 'Lunar Reconnaissance Orbiter', kind: 'probe', bodyId: 'MOON', group: 'dsn',
+      aliases: { dsn: 'LRO', horizons: '-85' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
+      attrs: { trackCentre: 'Moon' },
+    });
+    expect(String(probeEntity('LRO').attrs?.trackNote)).toMatch(/Moon-centred/);
+  });
+
+  it('keys the cache by target, centre, step and window, and not like the old geocentric key', () => {
+    const lro = horizonsSpecOf(DSN_TARGETS.LRO);
+    const key = horizonsCacheKey('-85', lro);
+    expect(key).toContain('-85');
+    expect(key).toContain('500@301');
+    expect(key).toContain('5m');
+    expect(key).toContain('-1d+3d');
+    expect(key).not.toBe('horizons:w3-7:-85');
+    expect(key).not.toBe(horizonsCacheKey('-85'));
+    expect(horizonsCacheKey('-85', { ...lro, stepMin: 10 })).not.toBe(key);
+    expect(horizonsCacheKey('-85', { ...lro, futureDays: 7 })).not.toBe(key);
+    expect(horizonsCacheKey('-31')).toBe('horizons:v2:-31:500@399:30m:-3d+7d');
+  });
 
   it('parses the $$SOE table into [tMs, r, v] samples (TDB -> UTC)', () => {
     const samples = parseHorizonsVectors(fixture('horizons-vectors.json'));

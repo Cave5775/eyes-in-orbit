@@ -1,5 +1,5 @@
 import {
-  DEG, EARTH, LL2_STATUS, Sgp4Provider, ascentEntityEvents, convert, deriveMissionState, enuBasis, geodeticToFixed,
+  DEG, EARTH, LL2_STATUS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, convert, deriveMissionState, enuBasis, geodeticToFixed,
   modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
@@ -298,12 +298,25 @@ const unitFromRaDec = (raDeg: number, decDeg: number): Vec3 => [
   Math.cos(decDeg * DEG) * Math.cos(raDeg * DEG), Math.cos(decDeg * DEG) * Math.sin(raDeg * DEG), Math.sin(decDeg * DEG),
 ];
 
-/** Geocentric samples over [now-3d, now+7d] in 30 minute steps, as the server's Horizons connector produces. */
-function probeSamples(nowMs: number, at: (t: number) => Vec3): Sample[] {
+/**
+ * Samples over [now-3d, now+7d] in 30 minute steps, as the server's Horizons connector produces for the default
+ * (geocentric) targets; `win` overrides the window and step (LRO: -1 d .. +3 d, 5 min) and `at` may return a
+ * 6-vector (position and velocity, km and km/s) like the Horizons rows.
+ */
+function probeSamples(nowMs: number, at: (t: number) => Vec3 | number[], win = { pastDays: 3, futureDays: 7, stepMin: 30 }): Sample[] {
   const out: Sample[] = [];
-  for (let t = nowMs - 3 * DAY; t <= nowMs + 7 * DAY; t += 30 * MIN) out.push([t, ...at(t)]);
+  for (let t = nowMs - win.pastDays * DAY; t <= nowMs + win.futureDays * DAY; t += win.stepMin * MIN) out.push([t, ...at(t)] as Sample);
   return out;
 }
+
+/**
+ * The mock LRO: polar orbit about the Moon, 50 x 150 km altitude (period ~1.96 h), elements at `nowMs`.
+ * The plane contains the Moon's spin axis (pole RA ~270 deg, so i = 90 deg and raan = 270 deg in the equatorial axes).
+ */
+const LRO_ORBIT = (nowMs: number) => {
+  const a = MOON.radiusKm + 100, e = 50 / a;
+  return { a, e, i: 90 * DEG, raan: 270 * DEG, argp: 270 * DEG, m0: 0, epochMs: nowMs };
+};
 
 export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
   const out: EntityRecord[] = STATIONS.map((s) => ({
@@ -338,6 +351,19 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
     },
     links: { newsQuery: 'Mars Reconnaissance Orbiter' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
     attrs: { rangeKm: 2.2e8, rtltSec: 1470, dataRate: 2_000_000, dish: 'DSS-43' }, updatedAt: nowMs,
+  });
+
+  // LRO: Moon-centred like the server's Horizons target (MOON:inertial, position and velocity, 5 min steps, -1 d .. +3 d)
+  const lroOrbit = LRO_ORBIT(nowMs);
+  out.push({
+    id: 'dsn-LRO', name: 'Lunar Reconnaissance Orbiter', kind: 'probe', bodyId: 'MOON', aliases: { dsn: 'LRO', horizons: '-85' }, group: 'dsn',
+    provider: {
+      type: 'sampled', frame: 'MOON:inertial',
+      samples: probeSamples(nowMs, (t) => { const s = keplerState(lroOrbit, MOON.gm, t); return [...s.r, ...s.v]; }, { pastDays: 1, futureDays: 3, stepMin: 5 }),
+    },
+    links: { newsQuery: 'Lunar Reconnaissance Orbiter' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
+    attrs: { trackCentre: 'Moon', trackNote: 'Track is Moon-centred (Horizons 500@301, 5 min steps, -1 d to +3 d), not Earth-centred' },
+    updatedAt: nowMs,
   });
 
   // demo: booster arc loop, drone orbiting it, rover on Mars

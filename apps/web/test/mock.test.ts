@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EARTH, EntityGraph, Sgp4Provider, norm, providerFromSpec, type EntityRecord } from '@eio/core';
+import { EARTH, EntityGraph, MOON, Sgp4Provider, norm, providerFromSpec, stateToGeodetic, type EntityRecord } from '@eio/core';
 import {
   makeOmm, mockDsn, mockGroundAndProbes, mockIssFix, mockLaunches, mockNews, mockSatellites, mulberry32,
 } from '../src/mock/generators';
@@ -92,6 +92,38 @@ describe('mock non-SGP4 entities', () => {
     expect(range('dsn-JWST')).toBeLessThan(2e6);
     expect(range('dsn-MRO')).toBeGreaterThan(5e7);
     expect(range('demo-rover')).toBeGreaterThan(5e7);
+  });
+
+  it('mock LRO orbits the Moon: MOON body, Moon-inertial samples, 50 x 150 km polar orbit of about 2 h', () => {
+    const lro = entities.find((e) => e.id === 'dsn-LRO')!;
+    expect(lro).toMatchObject({ name: 'Lunar Reconnaissance Orbiter', kind: 'probe', bodyId: 'MOON', group: 'dsn', aliases: { dsn: 'LRO' } });
+    expect(lro.attrs?.trackCentre).toBe('Moon');
+    if (lro.provider?.type !== 'sampled') throw new Error('expected sampled');
+    expect(lro.provider.frame).toBe('MOON:inertial');
+    expect(lro.provider.samples).toHaveLength(1153); // -1 d .. +3 d in 5 min steps
+    expect(lro.provider.samples[0][0]).toBe(NOW - 86_400_000);
+    expect(lro.provider.samples[0]).toHaveLength(7); // with velocities
+
+    const g = new EntityGraph();
+    entities.forEach((e) => g.upsert(e));
+    const alts: number[] = [];
+    for (let t = NOW; t <= NOW + 2.2 * 3_600_000; t += 60_000) alts.push(stateToGeodetic(g.stateOf('dsn-LRO', t)!, t, 'MOON').alt);
+    expect(Math.min(...alts)).toBeGreaterThan(47);
+    expect(Math.min(...alts)).toBeLessThan(54);
+    expect(Math.max(...alts)).toBeGreaterThan(147);
+    expect(Math.max(...alts)).toBeLessThan(154);
+    // period ~1.96 h: back at the same Moon-relative place after one period (mean motion of a = 1837.4 km)
+    const period = 2 * Math.PI * Math.sqrt(1837.4 ** 3 / MOON.gm) * 1000;
+    const a = g.stateOf('dsn-LRO', NOW)!.r, b = g.stateOf('dsn-LRO', NOW + period)!.r;
+    expect(norm([b[0] - a[0], b[1] - a[1], b[2] - a[2]])).toBeLessThan(1);
+    expect(period / 3_600_000).toBeGreaterThan(1.9);
+    expect(period / 3_600_000).toBeLessThan(2.05);
+    // polar: it crosses both poles' latitudes
+    const lats = [];
+    for (let t = NOW; t <= NOW + period; t += 60_000) lats.push(stateToGeodetic(g.stateOf('dsn-LRO', t)!, t, 'MOON').lat);
+    expect(Math.max(...lats)).toBeGreaterThan(1.4);
+    // in Earth-inertial coordinates it is at the Moon's distance
+    expect(norm(g.stateIn('dsn-LRO', NOW, 'EARTH:inertial')!.r)).toBeGreaterThan(340_000);
   });
 
   it('launches are NET-ordered with consistent entities and phases', () => {

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   Clock, CompositeProvider, EntityGraph, EARTH, GeodeticProvider, KeplerianProvider, RelativeProvider,
   SampledProvider, Sgp4Provider, DEG, convert, deriveMissionState, formatCountdown, fixedToGeodetic,
-  geodeticToFixed, gmstRad, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS,
-  type Omm,
+  geodeticToFixed, gmstRad, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS, MOON,
+  type Omm, type Sample,
 } from '../src';
 
 const ISS_OMM: Omm = {
@@ -52,6 +52,75 @@ describe('frames', () => {
 
   it('sun direction is a unit vector', () => {
     expect(norm(sunDirectionEci(T0))).toBeCloseTo(1, 6);
+  });
+});
+
+describe('entity sampled in MOON:inertial (Moon-centred Horizons track)', () => {
+  const R = 1788; // km from the Moon's centre: ~50 km above the mean radius
+  const v = Math.sqrt(MOON.gm / R);
+  const period = (2 * Math.PI * R) / v; // s
+  const w = (2 * Math.PI) / period;
+  const t0 = T0;
+  // polar circular orbit in the Moon's inertial equatorial axes: x-z plane, with velocities as Horizons returns them
+  const at = (t: number): [number, number, number, number, number, number] => {
+    const a = w * ((t - t0) / 1000);
+    return [R * Math.cos(a), 0, R * Math.sin(a), -v * Math.sin(a), 0, v * Math.cos(a)];
+  };
+  const samples: Sample[] = [];
+  for (let t = t0 - 3_600_000; t <= t0 + 3_600_000; t += 300_000) samples.push([t, ...at(t)]);
+  const g = new EntityGraph();
+  g.upsert({ id: 'lro', name: 'LRO', kind: 'probe', bodyId: 'MOON', aliases: {}, provider: { type: 'sampled', frame: 'MOON:inertial', samples }, updatedAt: 0 });
+
+  it('stays a Moon-relative state in MOON:inertial', () => {
+    const t = t0 + 1_234_567;
+    const s = g.stateIn('lro', t, 'MOON:inertial')!;
+    expect(s.frame).toBe('MOON:inertial');
+    expect(norm(s.r)).toBeCloseTo(R, 0);
+    expect(norm(s.v!)).toBeCloseTo(v, 2);
+  });
+
+  it('is expressed in EARTH:inertial as the Moon ephemeris position plus the Moon-relative sample', () => {
+    for (const dt of [0, 777_000, -1_500_000, 2_900_000]) {
+      const t = t0 + dt;
+      const e = g.stateIn('lro', t, 'EARTH:inertial')!;
+      const moon = MOON.ephemeris!(t);
+      const rel = at(t);
+      expect(e.frame).toBe('EARTH:inertial');
+      for (let k = 0; k < 3; k++) {
+        expect(e.r[k]).toBeCloseTo(moon.r[k] + rel[k], -0.5); // Hermite error well below 0.5 km
+        expect(e.v![k]).toBeCloseTo(moon.v[k] + rel[3 + k], 2);
+      }
+      // far from the Earth's surface, near the Moon's distance
+      expect(norm(e.r)).toBeGreaterThan(340_000);
+      expect(norm(e.r)).toBeLessThan(420_000);
+      // and the distance to the Moon is the orbit radius
+      expect(norm([e.r[0] - moon.r[0], e.r[1] - moon.r[1], e.r[2] - moon.r[2]])).toBeCloseTo(R, 0);
+    }
+  });
+
+  it('gives the altitude above the Moon (not the Earth) through stateToGeodetic', () => {
+    for (let dt = -3_000_000; dt <= 3_000_000; dt += 411_000) {
+      const t = t0 + dt;
+      const viaMoon = stateToGeodetic(g.stateOf('lro', t)!, t, 'MOON');
+      // ellipsoid flattening 0.0012: 50.6 km over the equator .. 52.7 km over the poles
+      expect(viaMoon.alt).toBeGreaterThan(R - MOON.radiusKm - 0.1);
+      expect(viaMoon.alt).toBeLessThan(R - MOON.radiusKm * (1 - MOON.flattening) + 0.1);
+      // the same result when the state is first brought into Earth-inertial coordinates
+      const viaEarth = stateToGeodetic(g.stateIn('lro', t, 'EARTH:inertial')!, t, 'MOON');
+      expect(viaEarth.alt).toBeCloseTo(viaMoon.alt, 4);
+      expect(Math.abs(viaEarth.lat - viaMoon.lat)).toBeLessThan(1e-9);
+      // measured against the Earth the same track would be ~380 000 km up
+      expect(stateToGeodetic(g.stateIn('lro', t, 'EARTH:inertial')!, t, 'EARTH').alt).toBeGreaterThan(340_000);
+    }
+  });
+
+  it('converts to MOON:fixed, changing the speed only by the Moon rotation', () => {
+    const t = t0 + 600_000;
+    const f = g.stateIn('lro', t, 'MOON:fixed')!;
+    expect(f.frame).toBe('MOON:fixed');
+    expect(norm(f.r)).toBeCloseTo(R, 0);
+    // the Moon spins once per 27.3 d (0.0000027 rad/s), so the fixed-frame speed differs from the orbital speed by < 5 m/s
+    expect(Math.abs(norm(f.v!) - v)).toBeLessThan(0.005);
   });
 });
 

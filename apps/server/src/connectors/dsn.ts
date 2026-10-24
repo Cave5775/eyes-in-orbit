@@ -134,7 +134,7 @@ export const dsn: Connector = {
       const recent = now - (lastAttrUpdate.get(code) ?? 0) < ATTR_REFRESH_MS;
       if (!prev || (!tracked && !wasTracked) || (recent && tracked === wasTracked)) continue;
       lastAttrUpdate.set(code, now);
-      ctx.hub.upsert({ ...prev, attrs });
+      ctx.hub.upsert({ ...prev, attrs: { ...prev.attrs, ...attrs } });
     }
   },
 };
