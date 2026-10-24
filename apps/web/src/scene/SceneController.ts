@@ -6,7 +6,8 @@ import {
 import { modelViewDirection } from '../lib/attitude';
 import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
 import { isRefBody, refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } from '../lib/ref-body';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, panGround, settleDistance, surfaceFrame, surfaceLift, viewAnglesFor, type V3 } from '../lib/camera';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, maxDistKm, panGround, settleDistance, surfaceFitDistance, viewAnglesFor, type V3 } from '../lib/camera';
+import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
@@ -95,11 +96,13 @@ export interface SceneStats {
   arrays: { sources: ArraySources; joints: IssJoints | null } | null;
 }
 
-/** Where the surface-aligned camera is anchored. */
-type SurfaceSource = { kind: 'entity'; id: string } | { kind: 'latlon'; lat: number; lon: number; lift?: number };
+/** What the surface-aligned camera is centred on: an entity, or a fixed point over the ground (`alt` km above the ellipsoid, 0 on it). */
+type SurfaceSource = { kind: 'entity'; id: string } | { kind: 'latlon'; lat: number; lon: number; alt?: number };
 
 /** Elevation of the surface camera on entry and after a fit, radians above the local horizon. */
 const SURFACE_EL = 0.35;
+/** Camera distance of the surface view of a ground point (a focused pad, the point under the view), km. */
+const SURFACE_POINT_DIST_KM = 300;
 
 interface PointSet {
   geo: THREE.BufferGeometry;
@@ -187,6 +190,8 @@ export class SceneController {
   private hadPathLabels = false;
   private surfaceOn = false;
   private surfaceSrc: SurfaceSource | null = null;
+  /** the user's remembered choice: false after they switched the surface view off, which stops it coming on by itself */
+  private surfaceAuto = loadSurfacePref();
   private globeDist = 24000;
   private focusLatLon: { lat: number; lon: number } | null = null;
   /** Earth-fixed point the free (unfollowed) camera target is pinned to after a FIT of ground-level objects */
@@ -480,8 +485,9 @@ export class SceneController {
     this.refreshHints();
     this.applyAppearance();
     this.updatePadAppearance();
-    // the surface camera tracked the deselected object's sub-point: stay where it is, on the rotating ground
-    if (!id && this.surfaceOn && this.surfaceSrc?.kind === 'entity') this.freezeSurfaceSource();
+    // the surface camera was centred on the deselected object: nothing left to look at, back to the globe (a view already
+    // let go of its object, by panning, has a point of its own and stays)
+    if (!id && this.surfaceOn && this.surfaceSrc?.kind === 'entity') this.setSurfaceMode(false);
   }
 
   /**
@@ -553,11 +559,8 @@ export class SceneController {
       return;
     }
     this.follow = true;
-    if (this.surfaceOn) {
-      this.rig.flyTo({ dist: this.rig.dist, az: this.rig.az, el: this.rig.el });
-      return;
-    }
-    if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+    if (!this.surfaceOn && this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+    this.applyAutoSurface(req);
   }
 
   /** Centre the view on the Moon or the Sun and follow it (they move); everything is then seen relative to that body. */
@@ -583,25 +586,38 @@ export class SceneController {
     return this.surfaceOn;
   }
 
+  /** The user's S / SURFACE: switch the view, and remember the choice so the surface view neither comes back nor stays away by itself. */
   toggleSurface(): void {
-    this.setSurfaceMode(!this.surfaceOn);
+    const on = !this.surfaceOn;
+    this.setSurfaceMode(on);
+    if (this.surfaceOn === on) {
+      this.surfaceAuto = on;
+      saveSurfacePref(on);
+    }
   }
 
   /**
-   * Surface-aligned camera: orbits a ground point (the sub-point of the selected object, a launch pad being focused,
-   * or the point under the view centre) with the local vertical up and north-up, so the horizon is level and the
-   * Earth blocks the stars below it. Leaving flies back to the globe view of the same place.
+   * The surface view is Earth-only: not while the camera is centred on the Moon or the Sun, nor while the frame of
+   * reference is a body other than the Earth (an entity as the frame is fine). The one place to adapt for other bodies.
+   */
+  private surfaceAvailable(): boolean {
+    return !this.bodyTarget && (this.frameCentre.kind === 'entity' || isEarthCentre(this.frameCentre));
+  }
+
+  /**
+   * Surface-aligned camera: centred on the selected object, a launch pad being focused or the point under the view
+   * centre, with the local vertical up and north-up, so the horizon is level and the Earth blocks the stars below it.
+   * Leaving flies back to the globe view of the same place.
    */
   setSurfaceMode(on: boolean): void {
     if (on === this.surfaceOn) return;
     if (on) {
-      if (this.bodyTarget) return; // surface views are Earth-only for now
+      if (!this.surfaceAvailable()) return;
       const src = this.pickSurfaceSource();
       if (!src) return;
       this.globeDist = this.rig.dist;
       this.surfaceSrc = src;
-      let dist = 300;
-      if (src.kind === 'entity') dist = this.surfaceFitDist(src.id) ?? dist;
+      const dist = this.surfaceDist(src);
       this.rig.switchMode('surface');
       this.rig.az = NORTH_UP_AZ;
       this.rig.el = SURFACE_EL;
@@ -729,44 +745,78 @@ export class SceneController {
     out.set(f[0] * Math.cos(g) - f[1] * Math.sin(g), f[0] * Math.sin(g) + f[1] * Math.cos(g), f[2]);
   }
 
-  /** Where a fresh surface view anchors: the selected object's sub-point, the focused pad, else the point under the view centre. */
+  /** Where a fresh surface view centres: the followed object, the focused pad, else the ground point under the view centre. */
   private pickSurfaceSource(): SurfaceSource | null {
-    if (this.follow && this.selectedId && this.worldPos(this.selectedId, clock.now(), this.tmp)) return { kind: 'entity', id: this.selectedId };
+    const id = this.follow ? this.followId ?? (this.focusLatLon ? null : this.selectedId) : null;
+    if (id && this.worldPos(id, clock.now(), this.tmp)) return { kind: 'entity', id };
     if (this.follow && this.focusLatLon) return { kind: 'latlon', ...this.focusLatLon };
     const dir = this.camera.getWorldDirection(new THREE.Vector3());
     const c = this.camera.position;
     const b = c.dot(dir);
     const disc = b * b - (c.lengthSq() - RE * RE);
     const p = disc > 0 && -b - Math.sqrt(disc) > 0 ? c.clone().addScaledVector(dir, -b - Math.sqrt(disc)) : c.clone();
-    return this.latLonOfWorld(p);
+    return this.latLonOfWorld(p, false);
   }
 
-  private latLonOfWorld(p: THREE.Vector3): SurfaceSource | null {
+  /** Geodetic latitude/longitude of a world point as a surface source; `keepAlt` keeps its height, else the source is on the ground. */
+  private latLonOfWorld(p: THREE.Vector3, keepAlt: boolean): SurfaceSource | null {
     if (p.lengthSq() < 1) return null;
     const g = -gmstRad(clock.now());
     const fx = p.x * Math.cos(g) - p.y * Math.sin(g), fy = p.x * Math.sin(g) + p.y * Math.cos(g);
     const geo = fixedToGeodetic([fx, fy, p.z], EARTH);
-    return { kind: 'latlon', lat: geo.lat, lon: geo.lon };
+    return { kind: 'latlon', lat: geo.lat, lon: geo.lon, alt: keepAlt ? Math.max(0, geo.alt) : 0 };
   }
 
-  /** Pin an entity source to where its sub-point is now (keeping the target's height), so the view stays put on the rotating ground. */
+  /** Pin an entity source to where the object is now, at its current height, so the view stays put over the rotating ground. */
   private freezeSurfaceSource(): void {
     const src = this.surfaceSrc;
     if (src?.kind !== 'entity' || !this.worldPos(src.id, clock.now(), this.tmp)) return;
-    const lift = surfaceLift(altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z]));
-    const ll = this.latLonOfWorld(this.tmp);
-    if (ll?.kind === 'latlon') this.surfaceSrc = { kind: 'latlon', lat: ll.lat, lon: ll.lon, lift };
+    const ll = this.latLonOfWorld(this.tmp, true);
+    if (ll) this.surfaceSrc = ll;
   }
 
-  /** Surface camera distance that frames the ground and the entity above it, or null when it has no position. */
+  /** Height of an entity above the ellipsoid now, km, or null when it has no position. */
+  private entityAltKm(id: string): number | null {
+    return this.worldPos(id, clock.now(), this.tmp) ? altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z]) : null;
+  }
+
+  /** Surface camera distance that frames an object together with the ground below it, or null when it has no position. */
   private surfaceFitDist(id: string): number | null {
-    if (!this.worldPos(id, clock.now(), this.tmp)) return null;
-    return surfaceFrame(altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z]), this.camera.fov, this.camera.aspect).dist;
+    const alt = this.entityAltKm(id);
+    return alt === null ? null : surfaceFitDistance(alt, this.camera.fov, this.camera.aspect);
+  }
+
+  /** Camera distance on entering the surface view of `src`: the object's fit, or a regional view of a ground point. */
+  private surfaceDist(src: SurfaceSource | null): number {
+    return (src?.kind === 'entity' ? this.surfaceFitDist(src.id) : null) ?? SURFACE_POINT_DIST_KM;
   }
 
   /**
-   * FIT of one entity while in surface view: stay in the view, follow the entity and refit so the ground and the object are
-   * both on screen. False when the entity has no position (the caller falls back to the globe fit).
+   * End of focus(): decide whether the camera should be in the surface orientation for what was just focused. Entering
+   * (or staying) is the default for anything near the Earth (`shouldAutoSurface`); a deep-space object, or a non-Earth
+   * frame, takes the camera back to the globe view; a user who switched the surface view off keeps the globe view.
+   * Internal refocuses (`nonce` 0: FIT in the surface view, MODEL) frame their own view and are left alone.
+   */
+  private applyAutoSurface(req: FocusRequest): void {
+    if (req.nonce === 0) return;
+    const id = req.id ?? (req.centre?.kind === 'entity' ? req.centre.id : undefined);
+    const rec = id ? this.recs.get(id) ?? null : null;
+    const alt = id ? this.entityAltKm(id) : 0;
+    const want = shouldAutoSurface(rec, alt, { pref: this.surfaceAuto, earthCentred: this.surfaceAvailable() });
+    if (!this.surfaceOn) {
+      if (want) this.setSurfaceMode(true);
+    } else if (want) {
+      // another object (or pad): same view direction, refit distance for it
+      this.rig.flyTo({ dist: this.surfaceDist(this.surfaceSrc), az: this.rig.az, el: this.rig.el });
+    } else {
+      this.setSurfaceMode(false);
+      if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+    }
+  }
+
+  /**
+   * FIT of one entity while in surface view: stay in the view, follow the entity and refit so the object and the ground below
+   * it are on screen. False when the entity has no position (the caller falls back to the globe fit).
    */
   private fitSurface(id: string): boolean {
     const rec = this.recs.get(id);
@@ -780,7 +830,10 @@ export class SceneController {
     return true;
   }
 
-  /** A pan drag in surface view: slide the ground target over the Earth. A followed object is let go first. */
+  /**
+   * A pan drag in surface view: slide the target along the ground. A followed object is let go first and the target stays
+   * where the object was, at its height, over the rotating ground; the drag then moves it along the sphere at that height.
+   */
   private panSurface(eastKm: number, northKm: number): void {
     if (!this.surfaceOn) return;
     if (this.follow) {
@@ -790,22 +843,15 @@ export class SceneController {
     this.freezeSurfaceSource();
     const src = this.surfaceSrc;
     if (src?.kind !== 'latlon') return;
-    this.surfaceSrc = { ...src, ...panGround(src.lat, src.lon, eastKm, northKm) };
+    this.surfaceSrc = { ...src, ...panGround(src.lat, src.lon, eastKm, northKm, RE + (src.alt ?? 0)) };
   }
 
-  /** World position of the surface camera's ground target at sim time `t`, or null when its source has no position. */
+  /** World position of the surface camera's target at sim time `t`: the object itself, or a point over the ground. Null when its source has no position. */
   private surfaceTarget(out: THREE.Vector3, t: number): boolean {
     const src = this.surfaceSrc;
     if (!src) return false;
-    if (src.kind === 'entity') {
-      if (!this.worldPos(src.id, t, out)) return false;
-      // aim at the middle of the segment between the ground and the object, so a high object is framed vertically
-      const p: V3 = [out.x, out.y, out.z];
-      const g = groundPoint(p, surfaceLift(altitudeOf(p)));
-      out.set(g[0], g[1], g[2]);
-      return true;
-    }
-    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: src.lift ?? 0 }, EARTH), out, t);
+    if (src.kind === 'entity') return this.worldPos(src.id, t, out);
+    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: src.alt ?? 0 }, EARTH), out, t);
     return true;
   }
 
@@ -1214,7 +1260,9 @@ export class SceneController {
     if (this.surfaceOn) {
       anchored = this.surfaceTarget(this.anchor, t);
       if (!anchored) this.setSurfaceMode(false); // the anchored object lost its position: back to the globe
-      this.rig.minDist = MIN_ALT_KM;
+      // an object may be approached as in the globe view (the camera itself still stops MIN_ALT_KM above the ground)
+      const src = this.surfaceSrc;
+      this.rig.minDist = src?.kind === 'entity' ? this.models.defOf(src.id)?.minViewKm ?? MIN_TARGET_DIST_KM : MIN_ALT_KM;
     } else {
       anchored = this.follow && this.followFn ? this.followFn(this.anchor, t) : false;
       if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget, t);

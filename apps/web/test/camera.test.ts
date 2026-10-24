@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { EARTH, enuBasis, geodeticToFixed } from '@eio/core';
 import {
   MAX_DIST_KM, MIN_ALT_KM, SMALL_FIT_TILT, altitudeOf, basisFromUp, basisOffset, boundingSphere, ellipsoidUp, fitAngles, fitDistance,
-  SURFACE_FIT_MAX_KM, SURFACE_FIT_MIN_KM, groundPanDelta, groundPoint, localBasis, minElevation, panGround, slerpDir, surfaceFrame, surfaceLift,
+  SURFACE_FIT_MAX_KM, SURFACE_FIT_MIN_KM, groundPanDelta, localBasis, minElevation, panGround, slerpDir, surfaceFitDistance,
   surfaceRadius, viewAnglesFor, zoomDistance, type V3,
 } from '../src/lib/camera';
 
@@ -58,19 +58,28 @@ describe('altitude-scaled zoom', () => {
 });
 
 describe('surface helpers', () => {
-  it('altitude and ground point agree with the ellipsoid', () => {
+  it('altitude agrees with the ellipsoid', () => {
     const p = geodeticToFixed({ lat: 0.6, lon: 1.1, alt: 400 }, EARTH);
     // geocentric radius approximation is within a few km of the true geodetic altitude
     expect(Math.abs(altitudeOf(p as V3) - 400)).toBeLessThan(25);
-    const g = groundPoint(p as V3);
-    expect(Math.abs(altitudeOf(g))).toBeLessThan(1e-6);
     expect(surfaceRadius([0, 0, RE])).toBeCloseTo(RE * (1 - EARTH.flattening), 6);
-    expect(groundPoint([0, 0, 0])).toEqual([0, 0, 0]);
   });
 
   it('minElevation keeps the camera above the minimum altitude', () => {
     expect(Math.sin(minElevation(100)) * 100).toBeCloseTo(MIN_ALT_KM, 9);
     expect(minElevation(1)).toBeCloseTo(Math.PI / 2, 9);
+  });
+
+  it('minElevation lets the camera go below a high target but not into the ground', () => {
+    // 400 km up, camera 1,000 km away: it may sit up to 397 km below the target's height
+    const el = minElevation(1000, MIN_ALT_KM, 400);
+    expect(el).toBeLessThan(0);
+    expect(Math.sin(el) * 1000).toBeCloseTo(MIN_ALT_KM - 400, 9);
+    // very close to a high target any angle is fine
+    expect(minElevation(100, MIN_ALT_KM, 400)).toBeCloseTo(-Math.PI / 2, 9);
+    // a target on or below the ground behaves like the ground
+    expect(minElevation(100, MIN_ALT_KM, -50)).toBeCloseTo(minElevation(100), 12);
+    expect(minElevation(1, MIN_ALT_KM, 0)).toBeCloseTo(Math.PI / 2, 9);
   });
 });
 
@@ -193,24 +202,24 @@ describe('local surface frame', () => {
 });
 
 describe('surface view fit and ground pan', () => {
-  it('aims halfway up to a high object and frames the whole segment', () => {
-    const iss = surfaceFrame(420, 45, 1.6);
-    expect(iss.lift).toBe(210);
-    expect(iss.dist).toBeCloseTo(fitDistance(210, 45, 1.6, 1.6), 9);
+  it('frames an object together with the ground below it, from a distance that grows with its height', () => {
+    const iss = surfaceFitDistance(420, 45, 1.6);
+    expect(iss).toBeCloseTo(fitDistance(420, 45, 1.6, 1.25), 9);
+    expect(iss).toBeGreaterThan(1000); // about 1,400 km
+    expect(iss).toBeLessThan(2000);
     // a taller object needs a camera farther back
-    expect(surfaceFrame(2000, 45, 1.6).dist).toBeGreaterThan(iss.dist);
-    // a narrow (portrait) window needs more distance than a wide one for the same segment
-    expect(surfaceFrame(420, 45, 0.5).dist).toBeGreaterThan(iss.dist);
+    expect(surfaceFitDistance(2000, 45, 1.6)).toBeGreaterThan(iss);
+    // a narrow (portrait) window needs more distance than a wide one
+    expect(surfaceFitDistance(420, 45, 0.5)).toBeGreaterThan(iss);
   });
 
-  it('keeps ground-level objects at the minimum distance and very high ones within the zoom and lift limits', () => {
-    expect(surfaceFrame(0, 45, 1.6)).toEqual({ lift: 0, dist: SURFACE_FIT_MIN_KM });
-    expect(surfaceFrame(-5, 45, 1.6).lift).toBe(0);
-    const geo = surfaceFrame(35786, 45, 1.6);
-    expect(geo.lift).toBe(surfaceLift(35786));
-    expect(surfaceLift(1e9)).toBe(surfaceLift(1e12)); // capped: a probe on the compressed shell does not pull the target into space
-    expect(surfaceFrame(1e9, 45, 1.6).dist).toBe(geo.dist);
-    expect(surfaceFrame(35786, 45, 0.1).dist).toBe(SURFACE_FIT_MAX_KM); // a very narrow window hits the zoom-out limit
+  it('keeps ground-level objects at the minimum distance and very high ones at the zoom-out limit', () => {
+    expect(surfaceFitDistance(0, 45, 1.6)).toBe(SURFACE_FIT_MIN_KM);
+    expect(surfaceFitDistance(-5, 45, 1.6)).toBe(SURFACE_FIT_MIN_KM);
+    expect(surfaceFitDistance(5, 45, 1.6)).toBe(SURFACE_FIT_MIN_KM); // a booster just off the pad
+    expect(surfaceFitDistance(100, 45, 1.6)).toBeGreaterThan(SURFACE_FIT_MIN_KM); // a rocket in ascent
+    expect(surfaceFitDistance(1e9, 45, 1.6)).toBe(SURFACE_FIT_MAX_KM); // a probe on the compressed shell
+    expect(surfaceFitDistance(35786, 45, 0.1)).toBe(SURFACE_FIT_MAX_KM);
   });
 
   it('turns a drag into ground motion in the camera\'s own frame', () => {
@@ -236,6 +245,13 @@ describe('surface view fit and ground pan', () => {
     const eq = panGround(0, 0, 10, 0).lon;
     const hi = panGround(Math.PI / 3, 0, 10, 0).lon;
     expect(hi / eq).toBeCloseTo(2, 3); // cos 60 deg = 0.5
+  });
+
+  it('moves along a sphere larger than the Earth when the target is held aloft', () => {
+    const ground = panGround(0, 0, 10, 0).lon;
+    const iss = panGround(0, 0, 10, 0, RE + 420).lon;
+    expect(ground / iss).toBeCloseTo((RE + 420) / RE, 9); // the same km is a smaller angle higher up
+    expect(panGround(0, 0, 0, 10, RE + 420).lat * (RE + 420)).toBeCloseTo(10, 6);
   });
 
   it('stops short of the poles and wraps the date line', () => {

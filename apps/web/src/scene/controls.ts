@@ -21,9 +21,9 @@ const tup = (v: THREE.Vector3): V3 => [v.x, v.y, v.z];
 /**
  * Orbit camera around a (possibly moving) target. Two modes:
  *  - `globe`: world z is up (the Earth's axis); az/el are measured in the world frame.
- *  - `surface`: the target is a point on the ground and the frame is its local east/north/up, so "up" on screen is the
- *    local vertical, the horizon is level and az = -90 deg looks north.
- * Left drag orbits, right/shift drag pans (in surface mode it slides the ground target, see `onGroundPan`), wheel and pinch zoom with a step proportional to the height
+ *  - `surface`: the target is an object (or a ground point) and the frame is its local east/north/up, so "up" on screen is
+ *    the local vertical, the horizon is level and az = -90 deg looks north.
+ * Left drag orbits, right/shift drag pans (in surface mode it slides the target along the ground, see `onGroundPan`), wheel and pinch zoom with a step proportional to the height
  * above the surface (see `zoomDistance`). Any user input cancels a fly-to or a mode transition.
  */
 export class OrbitRig {
@@ -155,7 +155,7 @@ export class OrbitRig {
     // the mode's own ("natural") pose
     if (this.mode === 'surface') {
       const basis = basisFromUp(ellipsoidUp(tup(this.target)));
-      this.el = Math.max(minElevation(this.dist), Math.min(MAX_EL, this.el));
+      this.el = Math.max(this.minSurfaceEl(), Math.min(MAX_EL, this.el));
       const ce = Math.cos(this.el), se = Math.sin(this.el), ca = Math.cos(this.az), sa = Math.sin(this.az);
       const { e, n, u } = basis;
       this.natOffset.set(
@@ -204,13 +204,18 @@ export class OrbitRig {
 
   private orbitBy(dx: number, dy: number): void {
     this.az -= dx * 0.0055;
-    this.el = Math.max(this.mode === 'surface' ? minElevation(this.dist) : -MAX_EL, Math.min(MAX_EL, this.el + dy * 0.0055));
+    this.el = Math.max(this.mode === 'surface' ? this.minSurfaceEl() : -MAX_EL, Math.min(MAX_EL, this.el + dy * 0.0055));
+  }
+
+  /** Lowest surface-view elevation: above the horizon for a ground target, lower for a high object (the camera still clears the ground). */
+  private minSurfaceEl(): number {
+    return minElevation(this.dist, MIN_ALT_KM, altitudeOf(tup(this.target)));
   }
 
   private panBy(dx: number, dy: number): void {
     const k = (2 * this.dist * Math.tan((this.camera.fov * Math.PI) / 360)) / this.dom.clientHeight;
     if (this.mode === 'surface') {
-      // the target is a ground point: the owner moves it over the ground (and stops following whatever it followed)
+      // the target slides along the ground at its own height: the owner moves it (and stops following whatever it followed)
       const d = groundPanDelta(this.az, this.el, dx, dy, k);
       this.onGroundPan?.(d.east, d.north);
       return;

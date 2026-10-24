@@ -49,14 +49,6 @@ export function surfaceRadius(p: V3): number {
 /** Height of `p` above the ellipsoid, km (negative below). */
 export const altitudeOf = (p: V3): number => len(p) - surfaceRadius(p);
 
-/** The point on the ellipsoid under (radially below) `p`; `p` itself at the origin. */
-export function groundPoint(p: V3, liftKm = 0): V3 {
-  const n = len(p);
-  if (n === 0) return [0, 0, 0];
-  const k = (surfaceRadius(p) + liftKm) / n;
-  return [p[0] * k, p[1] * k, p[2] * k];
-}
-
 /**
  * Wheel/pinch zoom that scales with height above the surface instead of with distance to the target.
  * Near the ground a notch moves the camera metres; at GEO it moves thousands of km. `factor` < 1 zooms in
@@ -79,9 +71,17 @@ export function zoomDistance(
   return Math.min(opts.maxDist ?? MAX_DIST_KM, Math.max(opts.minDist, next));
 }
 
-/** Smallest elevation (rad above the local horizon) that keeps a camera at `dist` from the ground target above `minAltKm`. */
-export function minElevation(distKm: number, minAltKm = MIN_ALT_KM): number {
-  return distKm <= minAltKm ? Math.PI / 2 : Math.asin(Math.min(1, minAltKm / distKm));
+/**
+ * Smallest elevation (rad above the local horizon) that keeps a camera at `dist` from the target above `minAltKm`.
+ * `targetAltKm` is the target's own height: a ground target (0) needs a camera above the horizon, a high object may be
+ * viewed from below its own height (negative result), down to the point where the camera would reach `minAltKm`.
+ * The flat estimate is conservative: the Earth's curvature only raises the camera.
+ */
+export function minElevation(distKm: number, minAltKm = MIN_ALT_KM, targetAltKm = 0): number {
+  const need = minAltKm - Math.max(0, targetAltKm);
+  if (distKm <= 0) return Math.PI / 2;
+  if (need > 0 && distKm <= need) return Math.PI / 2;
+  return Math.asin(Math.max(-1, Math.min(1, need / distKm)));
 }
 
 /** Camera distance at which a sphere of `radius` fills the view with `margin` spare (>= 1) for both FOV axes. */
@@ -186,24 +186,18 @@ export function slerpDir(a: V3, b: V3, k: number): V3 {
   return [ua[0] * w0 + ub[0] * w1, ua[1] * w0 + ub[1] * w1, ua[2] * w0 + ub[2] * w1];
 }
 
-/** Surface view of an object: closest and farthest the fit may put the camera from the framed segment's middle, km. */
+/** Surface view of an object: closest and farthest the fit may put the camera from it, km. */
 export const SURFACE_FIT_MIN_KM = 20;
 export const SURFACE_FIT_MAX_KM = 60000;
-/** The surface target rises at most this far above the ground, so a very high object (GEO, a compressed probe) does not drag it into space. */
-const SURFACE_LIFT_MAX_KM = 10000;
-
-/** How far above its ground point the surface view aims for an object `heightKm` up: halfway, so the ground and the object both fit. */
-export const surfaceLift = (heightKm: number): number => Math.min(SURFACE_LIFT_MAX_KM, Math.max(0, heightKm) / 2);
 
 /**
- * Surface view of an object `heightKm` above its ground point: the camera looks at the middle of the vertical segment
- * between the ground and the object (`lift` above the ground), from a distance that frames the whole segment, so both
- * the horizon below and the object above stay on screen. Objects on the ground get the minimum distance.
+ * Camera distance for the surface view of an object `heightKm` above the ground. The camera is centred on the object
+ * itself; the distance frames a sphere as tall as the object's height, so the ground point below it still fits in a
+ * view tilted down at the usual elevation (at ISS altitude about 1,400 km; far enough out the ground leaves the frame,
+ * which is accepted). Objects on the ground get the minimum distance, very high ones stop at the zoom-out limit.
  */
-export function surfaceFrame(heightKm: number, fovDeg: number, aspect: number, margin = 1.6): { lift: number; dist: number } {
-  const lift = surfaceLift(heightKm);
-  const dist = Math.min(SURFACE_FIT_MAX_KM, Math.max(SURFACE_FIT_MIN_KM, fitDistance(lift, fovDeg, aspect, margin)));
-  return { lift, dist };
+export function surfaceFitDistance(heightKm: number, fovDeg: number, aspect: number, margin = 1.25): number {
+  return Math.min(SURFACE_FIT_MAX_KM, Math.max(SURFACE_FIT_MIN_KM, fitDistance(Math.max(0, heightKm), fovDeg, aspect, margin)));
 }
 
 /**
@@ -217,11 +211,14 @@ export function groundPanDelta(az: number, el: number, dx: number, dy: number, k
   return { east: sa * right - ca * forward, north: -ca * right - sa * forward };
 }
 
-/** Move a geodetic point (radians) by `eastKm`/`northKm` over the ground; latitude is kept off the poles and longitude wrapped. */
-export function panGround(lat: number, lon: number, eastKm: number, northKm: number): { lat: number; lon: number } {
+/**
+ * Move a geodetic point (radians) by `eastKm`/`northKm` over the ground; latitude is kept off the poles and longitude wrapped.
+ * `radiusKm` is the sphere the point travels on: the Earth's radius for a ground point, plus the height for a point held aloft.
+ */
+export function panGround(lat: number, lon: number, eastKm: number, northKm: number, radiusKm = RE): { lat: number; lon: number } {
   const maxLat = Math.PI / 2 - 1e-3;
-  const nlat = Math.max(-maxLat, Math.min(maxLat, lat + northKm / RE));
-  const dlon = eastKm / (RE * Math.max(Math.cos(nlat), 1e-3));
+  const nlat = Math.max(-maxLat, Math.min(maxLat, lat + northKm / radiusKm));
+  const dlon = eastKm / (radiusKm * Math.max(Math.cos(nlat), 1e-3));
   const nlon = lon + dlon;
   return { lat: nlat, lon: Math.atan2(Math.sin(nlon), Math.cos(nlon)) };
 }

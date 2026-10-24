@@ -16,12 +16,12 @@ const LEGEND: [string, string][] = [
 
 const HELP: [string, string][] = [
   ['Left drag', 'Orbit (surface view: look around the local horizon)'],
-  ['Right / Shift drag', 'Pan (globe view)'],
+  ['Right / Shift drag', 'Pan (surface view: lets go of the followed object and slides along the ground at its height)'],
   ['Wheel / pinch', 'Zoom: step scales with height above the surface'],
   ['Click', 'Select an object; hover for its name. Where several overlap a list opens: wheel or arrows choose, click or Enter selects, Esc closes'],
   ['F', 'Fit the selection and its related objects'],
   ['Shift+F', 'Fit everything visible (respects filters)'],
-  ['S', 'Surface view: level horizon, north-up, around the object\'s sub-point or the point under the view'],
+  ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or SURFACE switches to the globe view, and that choice is remembered until you press S again'],
   ['Esc', 'Deselect and return to the Earth view'],
   ['MODEL', 'Objects with a 3D model (ISS, the demo booster, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or MODEL on such a selection flies to it'],
   ['H', 'Show / hide this help'],
@@ -234,7 +234,7 @@ export function SceneView() {
           <button className="btn" onClick={showModel} title={`Fly to the 3D model (${selModel.label}) and follow it. It replaces the point sprite within ${selModel.lodKm} km.`}>MODEL</button>
         )}
         <button className="btn" onClick={fitVisible} title="Frame everything currently visible, respecting filters (Shift+F)">FIT VISIBLE</button>
-        <button className={surface ? 'btn active' : 'btn'} onClick={toggleSurface} aria-pressed={surface} title="Surface-aligned camera: level horizon, north-up, around the selection's sub-point or the point under the view (S)">
+        <button className={surface ? 'btn active' : 'btn'} onClick={toggleSurface} aria-pressed={surface} title="Surface-aligned camera: centred on the selected object, level horizon, north-up. On by default near the Earth; turn it off for the globe view, the choice is remembered (S)">
           SURFACE
         </button>
         <button className="btn" onClick={resetView} title="Deselect and return to the Earth view (Esc)">EARTH VIEW</button>
