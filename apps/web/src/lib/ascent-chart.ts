@@ -51,6 +51,12 @@ export function fmtAxisT(sec: number): string {
   return `${Math.floor(s / 60)}:${p2(s % 60)}`;
 }
 
+/** T+ (s) under pixel `px` of a plot that maps [0, tMax] onto [x0, x1]; null outside the plot. */
+export function plotTimeAt(px: number, x0: number, x1: number, tMax: number): number | null {
+  if (!(px >= x0 && px <= x1) || !(x1 > x0)) return null;
+  return ((px - x0) / (x1 - x0)) * tMax;
+}
+
 /** SVG path through the points, one decimal. */
 export function linePath(pts: [number, number][]): string {
   return pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join('');

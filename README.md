@@ -20,7 +20,7 @@ Monorepo (npm workspaces): `packages/core` (`@eio/core`, shared model), `apps/se
   - Launch (launch entities only): countdown, status, phase, window, provider, vehicle, mission, pad, and for Falcon 9 an [ascent telemetry](#ascent-telemetry) section (modeled or measured altitude, speed and downrange charts, event timeline).
   - Stream (when the entity or its launch has streams): YouTube links are embedded; NASA TV, X and other links open in a new tab. POP OUT floats a YouTube stream above the app (up to 3 windows; drag the title bar, resize from the corner at 16:9, DOCK returns it to the tab; positions are remembered). Hover a player for PLAY, PAUSE, MUTE and UNMUTE; the embeds hide what YouTube's parameters allow (see `apps/web/src/lib/youtube.ts`).
   - News: Spaceflight News articles for the object (`links.newsQuery` or name), or all spaceflight.
-- **Launch board**: upcoming launches (plus the last 2 hours) with live countdowns, LL2 status and derived mission phase. Click a card to select the launch entity or fly to its pad.
+- **Launch board**: upcoming launches (plus the last 2 hours) with live countdowns, LL2 status and derived mission phase. Click a card to select the launch entity or fly to its pad. The small SKIP button on a card (and SKIP TO LAUNCH in the Launch tab) jumps the simulation clock to liftoff, see [Jumping to a launch](#jumping-to-a-launch).
 - **DSN panel**: dishes with active links first, craft chips that select the spacecraft, range, round-trip light time, downlink band and rate. It is **hidden by default**: switch it on in the PANELS menu (top bar, see [Controls](#controls)). The DSN data keeps updating while it is hidden, and the entity detail's Telemetry tab still shows a probe's current DSN link.
 - **PANELS menu**: the top bar button (icon below 1500 px wide, `PANELS` above) opens a popover with a checkbox for the DSN panel, the launch board and the news ticker. A hidden panel gives its space back (the globe grows; with the launch board and the DSN panel both hidden the whole bottom row goes, with only one of them shown it takes the full width), and showing it again restores its previous size. The choice is kept in `localStorage` (`eio.panels.v1`); defaults: DSN hidden, launch board and ticker shown.
 - **News ticker**: scrolling global headlines, pauses on hover.
@@ -159,6 +159,16 @@ Rules (see the format comment at the top of `apps/server/src/trajectory.ts`):
 - At least 2 rows; `tSec` is seconds since liftoff, anchored at the launch NET.
 - Every row needs either `downrangeKm`, or `speedKmS` (downrange is then integrated from speed and altitude rate).
 - `azimuthDeg` defaults to 90 (due east).
+
+## Jumping to a launch
+
+All three only move the shared simulation clock (`clock.seek`); nothing is loaded, so they work for past and future launches alike, and a launch whose entity has no data at that time simply shows nothing in the scene.
+
+- **SKIP TO LAUNCH** (launch board card: `SKIP`; Launch tab): seek to T-0 of the launch, its NET as the server last published it (read at the click, so a hold or a new NET is followed; a TBD / TBC launch is jumped to its placeholder NET, which the tooltip says). It plays from there: live and paused become x1, a forward scrub keeps its speed, a rewind turns forward.
+- **Event rows and charts** (Launch tab, ascent telemetry): clicking a row of the events table, an event label on the timeline, or anywhere in a chart or the timeline jumps to `liftoff + T+`. The chart click is clamped to the charted range. These keep the rate: paused stays paused, a rewind keeps rewinding, live becomes x1.
+- **The trajectory in the scene** (see the Click row of the controls table): the time of the nearest point of the drawn ascent or booster-return path, interpolated between samples.
+
+Pure logic: `apps/web/src/lib/launch-seek.ts` (T-0, event time, rates, tooltips), `lib/path-pick.ts` (nearest point of a polyline in screen space, perspective-correct, clipped at the camera plane); the clock access is `state/seek.ts`.
 
 ## Ascent telemetry
 

@@ -395,6 +395,15 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 /* ---- launch board ---- */
 .board { min-width: 0; }
 .cards { display: flex; gap: 8px; padding: 8px 12px; overflow-x: auto; flex: 1; min-height: 0; align-items: stretch; }
+.card-box { position: relative; flex: none; width: 228px; display: flex; }
+.card-box .card { width: 100%; }
+.card-box .cd { padding-right: 46px; }
+.card-skip {
+  position: absolute; top: 6px; right: 6px; font-size: 10px; letter-spacing: 0.1em; padding: 1px 6px; border-radius: 3px;
+  background: transparent; border: 1px solid var(--line-2); color: var(--dim);
+}
+.card-skip:hover, .card-skip:focus-visible { border-color: var(--accent); color: var(--accent); }
+.skip-row { padding: 0 12px 6px; }
 .card {
   flex: none; width: 228px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; text-align: left;
   padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; overflow: hidden;

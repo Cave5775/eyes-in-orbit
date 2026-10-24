@@ -53,6 +53,15 @@
 .at-events tr.past th, .at-events tr.past td { color: var(--text); }
 .at-events tr:not(.past) th, .at-events tr:not(.past) td.mono { color: var(--dim); }
 
+.at-jumpable { cursor: pointer; }
+.at-ev { cursor: pointer; }
+.at-ev:hover text { fill: var(--accent); }
+.at-ev:hover line, .at-ev:hover circle { stroke: var(--accent); }
+.at-events tr.jumpable { cursor: pointer; }
+.at-events tr.jumpable:hover th, .at-events tr.jumpable:hover td { color: var(--accent); }
+.at-jump { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.at-jump:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
 .at-data { margin: 4px 12px 0; font-size: 11px; }
 .at-data summary { cursor: pointer; color: var(--dim); }
 .at-data table { width: 100%; border-collapse: collapse; margin-top: 4px; }
