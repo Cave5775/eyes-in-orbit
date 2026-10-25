@@ -51,19 +51,21 @@ export interface Category {
   label: string;
   /** one line for the chip tooltip */
   hint: string;
+  /** the colour of everything in the category: its points in the scene, its dots in the lists, the legend, the labels (styles.css `--c-<id>` holds the same value) */
+  color: string;
 }
 
 /** Chip order. `other` is shown only when the catalog has something in it. */
 export const CATEGORIES: readonly Category[] = [
-  { id: 'satellites', label: 'Satellites', hint: 'Satellites that are not navigation, stations or debris (Starlink, active, amateur...)' },
-  { id: 'stations', label: 'Stations', hint: 'Space stations (ISS, Tiangong)' },
-  { id: 'navigation', label: 'Navigation', hint: 'GNSS satellites (GPS, GLONASS, Galileo, BeiDou)' },
-  { id: 'probes', label: 'Probes', hint: 'Probes, landers and rovers' },
-  { id: 'launch-vehicles', label: 'Launch vehicles', hint: 'Launch vehicles, stages and capsules' },
-  { id: 'debris', label: 'Debris', hint: 'Debris and spent rocket bodies' },
-  { id: 'ground', label: 'Ground', hint: 'Ground stations and launch pads' },
-  { id: 'bodies', label: 'Bodies', hint: 'The Sun, planets and moons (scenery: they cannot be hidden)' },
-  { id: 'other', label: 'Other', hint: 'Everything else' },
+  { id: 'satellites', label: 'Satellites', color: '#90bef1', hint: 'Satellites that are not navigation, stations or debris (Starlink, active, amateur...)' },
+  { id: 'stations', label: 'Stations', color: '#f9f684', hint: 'Space stations (ISS, Tiangong)' },
+  { id: 'navigation', label: 'Navigation', color: '#ff58a6', hint: 'GNSS satellites (GPS, GLONASS, Galileo, BeiDou)' },
+  { id: 'probes', label: 'Probes', color: '#7781f2', hint: 'Probes, landers and rovers' },
+  { id: 'launch-vehicles', label: 'Launch vehicles', color: '#fb9f21', hint: 'Launch vehicles, stages and capsules' },
+  { id: 'debris', label: 'Debris', color: '#777d7f', hint: 'Debris and spent rocket bodies' },
+  { id: 'ground', label: 'Ground', color: '#40b272', hint: 'Ground stations and launch pads' },
+  { id: 'bodies', label: 'Bodies', color: '#e8f5fd', hint: 'The Sun, planets and moons (scenery: they cannot be hidden)' },
+  { id: 'other', label: 'Other', color: '#3eeec1', hint: 'Everything else' },
 ];
 
 export const categoryLabel = (id: string): string => CATEGORIES.find((c) => c.id === id)?.label ?? id;
@@ -73,7 +75,11 @@ export const BODY_CATEGORY_KINDS: ReadonlySet<string> = new Set(['star', 'planet
 /** CelesTrak navigation groups (plus the combined `gnss`). */
 const NAV_GROUP_NAMES: ReadonlySet<string> = new Set(['gps-ops', 'glo-ops', 'galileo', 'beidou', 'gnss']);
 
-/** The category of an entity, from its kind, its group and `render.colorKey`. */
+/**
+ * The category of an entity, from its kind, its group and `render.colorKey`. This is also its colour everywhere (`colorKeyOf`
+ * in entity.ts, the palette, the legend, the lists): `render.colorKey` is only an advisory hint from the feed, and the old
+ * per-constellation `starlink` key is just a satellite here.
+ */
 export function categoryOf(rec: { kind: string; group?: string; render?: { colorKey?: string } }): CategoryId {
   const k = rec.kind;
   const ck = rec.render?.colorKey;

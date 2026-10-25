@@ -219,6 +219,18 @@ export function suggestTags(active: ActiveTag, source: readonly TagSuggestion[],
   return scored.slice(0, limit).map((x) => x.s);
 }
 
+/**
+ * Backspace in the search field removes the chip just before the input when there is nothing in front of the caret to
+ * delete: an empty field, or a caret at the very start of the typed text (a collapsed selection at 0). The chips sit before
+ * the input, so the last chip is the one directly in front of the caret. A selection (even one that starts at 0) is deleted
+ * as text, as is a caret anywhere else. Selection offsets are null for inputs that have none: only an empty field counts then.
+ */
+export function backspaceRemovesChip(value: string, selStart: number | null, selEnd: number | null, chipCount: number): boolean {
+  if (chipCount <= 0) return false;
+  if (selStart === null || selEnd === null) return value === '';
+  return selStart === 0 && selEnd === 0;
+}
+
 /** Accepting a suggestion: the finished chip word and the text that stays in the field. */
 export function acceptTag(raw: string, active: ActiveTag, value: string): { chip: string; rest: string } {
   return { chip: tagToken(active.key, value, active.negated), rest: raw.slice(0, active.start).replace(/\s+$/, '') };

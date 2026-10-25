@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { sourceLabel } from '../lib/arrays';
 import { fmtDist, fmtPathWindow } from '../lib/format';
+import { CATEGORIES } from '../lib/browser-ui';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { launchOfPathEntity, liftoffMsOf, pathTipText } from '../lib/launch-seek';
 import { relatedFor } from '../lib/related';
@@ -14,10 +15,8 @@ import { useStore } from '../state/store';
 import { FrameBar } from './FrameBar';
 import { PickPopup, type PickItem } from './PickPopup';
 
-const LEGEND: [string, string][] = [
-  ['station', 'Station'], ['satellite', 'Satellite'], ['starlink', 'Starlink'], ['navigation', 'Navigation'], ['debris', 'Debris'],
-  ['probe', 'Probe'], ['vehicle', 'Launch'], ['ground', 'Ground'],
-];
+/** The colour key: the nine browser categories, each in its own colour (lib/browser-ui.ts, `--c-<category>`), the same as the dots. */
+const LEGEND: readonly [string, string][] = CATEGORIES.map((c) => [c.id, c.label]);
 
 const HELP: [string, string][] = [
   ['Left drag', 'Orbit (surface view: look around the local horizon)'],
@@ -133,7 +132,11 @@ export function SceneView() {
     const store = useStore;
     // two layers over the canvas: the path's phase labels and the object labels (scene/LabelLayer.ts pools their nodes)
     const pathLayer = new LabelLayer(labelHost.current!, 'path-label mono');
-    const objectLayer = new LabelLayer(labelHost.current!, 'scene-label mono');
+    // an object label carries its category colour (the same as its dot) as a stripe on its left edge
+    const objectLayer = new LabelLayer(labelHost.current!, 'scene-label mono', (id) => {
+      const rec = store.getState().entities.get(id);
+      return rec ? `var(--c-${colorKeyOf(rec)})` : undefined;
+    });
     const pathItems: LabelItem[] = [];
     const showPathLabels = (labels: PathLabel[]) => {
       for (let i = 0; i < labels.length; i++) {

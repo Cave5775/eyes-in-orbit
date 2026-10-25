@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NO_TAGS, acceptTag, activeTag, matchesTag, parseQuery, parseToken, splitCommitted, suggestTags, type TagTarget } from '../src/lib/search-tags';
+import { NO_TAGS, acceptTag, activeTag, backspaceRemovesChip, matchesTag, parseQuery, parseToken, splitCommitted, suggestTags, type TagTarget } from '../src/lib/search-tags';
 
 // What the tags do with a set of entities (only / hide, AND / OR, negation) is tested in query.test.ts.
 const sat = (id: string, kind: string, group: string | undefined, aliases: Record<string, string> = {}, colorKey?: string, bodyId = 'EARTH'): TagTarget =>
@@ -120,5 +120,23 @@ describe('typing: chips and autocomplete', () => {
   it('accepting a suggestion gives the chip word (keeping a leading minus) and the text left in the field', () => {
     expect(acceptTag('iss #sta', activeTag('iss #sta')!, 'starlink')).toEqual({ chip: 'group:starlink', rest: 'iss' });
     expect(acceptTag('-kind:de', activeTag('-kind:de')!, 'debris')).toEqual({ chip: '-kind:debris', rest: '' });
+  });
+});
+
+describe('backspaceRemovesChip (Backspace in front of the typed text removes the chip before it)', () => {
+  it('removes a chip when the field is empty or the caret is collapsed at the very start', () => {
+    expect(backspaceRemovesChip('', 0, 0, 2)).toBe(true);
+    expect(backspaceRemovesChip('iss', 0, 0, 1)).toBe(true);
+    expect(backspaceRemovesChip('', null, null, 1)).toBe(true);
+  });
+  it('leaves normal text deletion alone: a caret later in the text, or a selection', () => {
+    expect(backspaceRemovesChip('iss', 1, 1, 2)).toBe(false);
+    expect(backspaceRemovesChip('iss', 3, 3, 2)).toBe(false);
+    expect(backspaceRemovesChip('iss', 0, 3, 2)).toBe(false); // selected text: Backspace deletes it
+    expect(backspaceRemovesChip('iss', null, null, 2)).toBe(false);
+  });
+  it('does nothing without a chip', () => {
+    expect(backspaceRemovesChip('', 0, 0, 0)).toBe(false);
+    expect(backspaceRemovesChip('iss', 0, 0, 0)).toBe(false);
   });
 });

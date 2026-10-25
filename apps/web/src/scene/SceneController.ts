@@ -1070,7 +1070,7 @@ export class SceneController {
     const { colors } = this.palette;
     // 'dim' (HIGHLIGHT) keeps the point but darkens and shrinks it; 'boost' enlarges what HIGHLIGHT picks
     const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, look: Look) => {
-      const key: ColorKey = rec ? colorKeyOf(rec) : 'satellite';
+      const key: ColorKey = rec ? colorKeyOf(rec) : 'satellites';
       const c = colors[key];
       const k = look === 'dim' ? 0.3 : 1;
       set.color.setXYZ(i, c.r * k, c.g * k, c.b * k);
@@ -1081,7 +1081,7 @@ export class SceneController {
     };
     // with an only / text term, the objects it lets through ('show') are exempt from the scope policy
     const active = queryActive(this.query);
-    const exemptRec = (rec: EntityRecord | undefined) => !!rec && colorKeyOf(rec) === 'vehicle';
+    const exemptRec = (rec: EntityRecord | undefined) => !!rec && colorKeyOf(rec) === 'launch-vehicles';
     this.satKeep = new Uint8Array(this.propagator.ids.length);
     this.satExempt = new Uint8Array(this.propagator.ids.length);
     this.propagator.ids.forEach((id, i) => {
@@ -1115,7 +1115,7 @@ export class SceneController {
     this.launches.forEach((l, i) => {
       const isSel = l.entityId === sel;
       const soon = Date.parse(l.net) - now < 24 * 3600_000 && Date.parse(l.net) - now > -3600_000;
-      const c = isSel ? this.palette.colors.vehicle : soon ? this.palette.accent : this.palette.colors.ground;
+      const c = isSel ? this.palette.colors['launch-vehicles'] : soon ? this.palette.accent : this.palette.colors.ground;
       this.pads.color.setXYZ(i, c.r, c.g, c.b);
       this.pads.size.setX(i, isSel ? 24 : soon ? 17 : 12);
     });
@@ -1671,10 +1671,10 @@ export class SceneController {
     const ringOff = !!sel && this.models.ringHidden.has(sel.id);
     set(0, ok && !ringOff, 26, this.palette.accent, GLYPH_ID.ring);
     // sat-cloud points of the selected sat are hidden, so redraw it here at its exact position
-    set(1, ok && !!sel && isSgp4(sel) && !replaced, POINT_SIZE[sel ? colorKeyOf(sel) : 'satellite'] + 3, c, GLYPH_ID.dot);
+    set(1, ok && !!sel && isSgp4(sel) && !replaced, POINT_SIZE[sel ? colorKeyOf(sel) : 'satellites'] + 3, c, GLYPH_ID.dot);
 
     const hov = this.hoverId && this.hoverId !== this.selectedId ? this.pointPos(this.hoverId, tmp) : false;
-    set(2, hov, 18, this.palette.colors.station, GLYPH_ID.ring);
+    set(2, hov, 18, this.palette.colors.stations, GLYPH_ID.ring);
 
     let fixOk = false;
     const fix = this.issFix;

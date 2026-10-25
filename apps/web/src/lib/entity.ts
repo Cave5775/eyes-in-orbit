@@ -1,23 +1,16 @@
 import type { EntityRecord, Launch } from '@eio/core';
+import { categoryOf, type CategoryId } from './browser-ui';
 
-export type ColorKey = NonNullable<NonNullable<EntityRecord['render']>['colorKey']>;
+/**
+ * The colour key of an entity is its browser category (`categoryOf`, lib/browser-ui.ts): the nine general categories are the
+ * only colours, in the scene, the lists, the legend and the labels (`--c-<category>` in styles.css, `scene/palette.ts`).
+ * `render.colorKey` from a feed is advisory: `categoryOf` reads it as a hint when the kind does not decide, and the old
+ * `starlink` key just means a satellite.
+ */
+export type ColorKey = CategoryId;
 
-const KIND_COLOR: Record<string, ColorKey> = {
-  station: 'station',
-  debris: 'debris',
-  probe: 'probe',
-  launch_vehicle: 'vehicle',
-  stage: 'vehicle',
-  capsule: 'vehicle',
-  ground_station: 'ground',
-  pad: 'ground',
-  rover: 'rover',
-  lander: 'rover',
-  drone: 'aircraft',
-};
-
-export function colorKeyOf(rec: EntityRecord): ColorKey {
-  return rec.render?.colorKey ?? KIND_COLOR[rec.kind] ?? (rec.group === 'starlink' ? 'starlink' : 'satellite');
+export function colorKeyOf(rec: Pick<EntityRecord, 'kind' | 'group' | 'render'>): ColorKey {
+  return categoryOf(rec);
 }
 
 export const isSgp4 = (rec: EntityRecord): boolean => rec.provider?.type === 'sgp4';

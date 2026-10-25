@@ -6,7 +6,7 @@ export interface PickItem {
   name: string;
   /** kind label, already readable */
   kind: string;
-  /** colour token of the kind (`--c-<colorKey>`) */
+  /** colour token of the object's category (`--c-<category>`, see `colorKeyOf`) */
   colorKey: string;
 }
 

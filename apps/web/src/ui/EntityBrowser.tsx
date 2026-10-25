@@ -1,7 +1,7 @@
 import { bodyEntityId, bodyOf, defaultBodies } from '@eio/core';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { BODY_CATEGORY_KINDS, CATEGORIES, categoryCounts, categoryLabel } from '../lib/browser-ui';
-import { buildTreeRows, revealKeys, revealRowIndex, type TreeBody } from '../lib/entity-tree';
+import { buildTreeRows, revealKeys, revealRowIndex, stickyAncestors, type TreeBody } from '../lib/entity-tree';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { browseOrder, facetCounts, type SearchHit } from '../lib/filters';
 import { isEarthCentre } from '../lib/frame';
@@ -10,7 +10,7 @@ import {
   NO_FOCUS, findTerm, hasHide, isDrawn, classify, queryActive, tagTerms, termFromWord, termWord, textOf, type Ctx, type Term,
 } from '../lib/query';
 import {
-  acceptTag, activeTag, parseQuery, splitCommitted, suggestTags, type TagKey, type TagSuggestion,
+  acceptTag, activeTag, backspaceRemovesChip, parseQuery, splitCommitted, suggestTags, type TagKey, type TagSuggestion,
 } from '../lib/search-tags';
 import { runtime } from '../state/runtime';
 import { useStore } from '../state/store';
@@ -79,7 +79,12 @@ export function EntityBrowser() {
       localStorage.setItem(MODE_KEY, m);
     } catch { /* private window: the choice just is not remembered */ }
   };
-  const setOpen = useCallback((key: string, open: boolean) => setOverrides((o) => new Map(o).set(key, open)), []);
+  /** the node just collapsed: its row stays in view (a pinned header that is collapsed would otherwise scroll away) */
+  const collapsedKey = useRef<string | null>(null);
+  const setOpen = useCallback((key: string, open: boolean) => {
+    if (!open) collapsedKey.current = key;
+    setOverrides((o) => new Map(o).set(key, open));
+  }, []);
   /** what the query restricts (its only terms and the text): a change of it starts from the defaults again; hiding a group does not */
   const filterKey = useMemo(() => query.terms.filter((t) => t.effect === 'only').map(termWord).join('\n'), [query]);
   const filtering = queryActive(query);
@@ -154,6 +159,9 @@ export function EntityBrowser() {
     });
   }, [mode, rows, entities, frame, filtering, overrides]);
 
+  /** the rows pinned at the top of the tree while a row is the first in view: its ancestors (the body chain and the kind group) */
+  const stickyOf = useCallback((first: number) => stickyAncestors(treeRows, first), [treeRows]);
+
   // a body node: opens, and selects its body entity like any other row (the detail panel shows the body, it becomes the
   // frame unless the frame is locked, and the camera flies there)
   const chooseBody = (key: string, entityId?: string) => {
@@ -186,6 +194,14 @@ export function EntityBrowser() {
     setRevealId(null);
   }, [revealId, mode, treeRows, rows]);
   useEffect(() => setRevealId(null), [filterKey]);
+  // collapsing a node (a pinned header too) shrinks the list under the scroll position: keep the node's own row in view
+  useEffect(() => {
+    const key = collapsedKey.current;
+    if (key === null || mode !== 'tree') return;
+    collapsedKey.current = null;
+    const i = treeRows.findIndex((r) => r.key === key);
+    if (i >= 0) listRef.current?.reveal(i);
+  }, [treeRows, mode]);
 
   // ---------------------------------------------------------------- the search field: chips (terms), text, autocomplete
 
@@ -235,7 +251,9 @@ export function EntityBrowser() {
         addChips(done.chips);
         setInput(done.rest.trim());
       }
-    } else if (e.key === 'Backspace' && input === '' && chips.length) {
+    } else if (e.key === 'Backspace' && backspaceRemovesChip(input, e.currentTarget.selectionStart, e.currentTarget.selectionEnd, chips.length)) {
+      // nothing in front of the caret to delete: the chip before the field goes (the typed text stays)
+      e.preventDefault();
       const last = chips[chips.length - 1];
       removeTerm(last.key, last.value, !!last.neg);
     }
@@ -260,7 +278,7 @@ export function EntityBrowser() {
       <button
         key={key} className={cls} style={{ height: ROW_H, paddingLeft: mode === 'tree' ? 10 + depth * INDENT_PX : undefined }}
         onClick={() => pick(id)}>
-        <i className="swatch" style={{ background: `var(--c-${rec ? colorKeyOf(rec) : 'satellite'}, var(--c-satellite))` }} />
+        <i className="swatch" style={{ background: `var(--c-${rec ? colorKeyOf(rec) : 'satellites'}, var(--c-satellites))` }} />
         <span className="row-name">{name}</span>
         {isFrame && <span className="row-frame" title="The frame of reference is centred on this object">FRAME</span>}
         <span className="row-kind">{kindLabel(kind)}</span>
@@ -402,6 +420,7 @@ export function EntityBrowser() {
                 <button
                   className={on ? 'chip on' : 'chip'} aria-pressed={on} title={`${cat?.hint ?? id} (tag cat:${id})`}
                   onClick={() => toggleTerm('cat', id, 'only')}>
+                  <i className="swatch" style={{ background: `var(--c-${id})` }} />
                   {categoryLabel(id)} <small>{n.toLocaleString('en-US')}</small>
                 </button>
                 {id !== 'bodies' && (
@@ -423,7 +442,7 @@ export function EntityBrowser() {
         <div className="empty">No matching entities.</div>
       ) : (
         mode === 'tree' ? (
-          <VirtualList key="tree" ref={listRef} count={treeRows.length} rowHeight={ROW_H} render={renderTree} />
+          <VirtualList key="tree" ref={listRef} count={treeRows.length} rowHeight={ROW_H} render={renderTree} sticky={stickyOf} />
         ) : (
           <VirtualList
             key="list"

@@ -221,13 +221,47 @@ export function revealRowIndex(rows: readonly TreeRow[], id: string): number {
 }
 
 /**
- * The scrollTop that brings row `index` into view in a fixed-row-height list: null when the row is already fully visible (no
- * movement), else the row centred in the viewport, clamped to the scrollable range.
+ * The scrollTop that puts row `index` in the middle of the part of the viewport that is not covered by `pinned` px of sticky
+ * rows at the top, clamped to the scrollable range.
  */
-export function scrollTopToReveal(index: number, rowHeight: number, scrollTop: number, viewHeight: number, count: number): number | null {
+export function centredScrollTop(index: number, rowHeight: number, viewHeight: number, count: number, pinned = 0): number {
+  const max = Math.max(0, count * rowHeight - viewHeight);
+  return Math.min(max, Math.max(0, Math.round(index * rowHeight - pinned - (viewHeight - pinned - rowHeight) / 2)));
+}
+
+/**
+ * The scrollTop that brings row `index` into view in a fixed-row-height list: null when the row is already fully visible (no
+ * movement), else the row centred in the viewport, clamped to the scrollable range. `pinned` is the height in px of the sticky
+ * rows laid over the top of the viewport: a row under them is not visible.
+ */
+export function scrollTopToReveal(
+  index: number, rowHeight: number, scrollTop: number, viewHeight: number, count: number, pinned = 0,
+): number | null {
   if (index < 0 || index >= count) return null;
   const top = index * rowHeight;
-  if (top >= scrollTop && top + rowHeight <= scrollTop + viewHeight) return null;
-  const max = Math.max(0, count * rowHeight - viewHeight);
-  return Math.min(max, Math.max(0, Math.round(top - (viewHeight - rowHeight) / 2)));
+  if (top >= scrollTop + pinned && top + rowHeight <= scrollTop + viewHeight) return null;
+  return centredScrollTop(index, rowHeight, viewHeight, count, pinned);
+}
+
+// ---------------------------------------------------------------- sticky ancestors (the chain of the first visible row)
+
+/**
+ * The rows to pin at the top of the list while the row `first` is the first one in view: its ancestors in the tree (the body
+ * nodes down to its body and the kind group it sits in), as indices into `rows`, outermost first (SUN, EARTH, the group). The
+ * row itself is not among them, and a top-level row has none. The flattened rows are in depth order, so the ancestors are found
+ * by walking back from `first` and taking each row that is shallower than every row taken so far: at most one step per
+ * row between the first row and its outermost ancestor, and no allocation beyond the (short) result.
+ */
+export function stickyAncestors(rows: readonly TreeRow[], first: number): number[] {
+  if (rows.length === 0 || first <= 0) return [];
+  const at = Math.min(first, rows.length - 1);
+  let depth = rows[at].depth;
+  const out: number[] = [];
+  for (let i = at - 1; i >= 0 && depth > 0; i--) {
+    if (rows[i].depth < depth) {
+      out.push(i);
+      depth = rows[i].depth;
+    }
+  }
+  return out.reverse();
 }

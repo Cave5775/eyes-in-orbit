@@ -1,5 +1,5 @@
 /* Ascent telemetry section of the Launch tab. Colours come from the app's CSS variables. */
-.at { --at-modeled: var(--accent); --at-live: var(--ok); --at-file: var(--c-probe); padding-bottom: 6px; }
+.at { --at-modeled: var(--accent); --at-live: var(--ok); --at-file: var(--c-probes); padding-bottom: 6px; }
 .at-chips { padding: 0 12px 6px; }
 .at-note { margin: 4px 12px; font-size: 11px; }
 .at-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -45,7 +45,7 @@
 .at-ev circle { fill: var(--panel); stroke: var(--dim); stroke-width: 1.5; }
 .at-ev.past text { fill: var(--text); }
 .at-ev.past line { stroke: var(--text); }
-.at-ev.past circle { fill: var(--c-vehicle); stroke: var(--c-vehicle); }
+.at-ev.past circle { fill: var(--c-launch-vehicles); stroke: var(--c-launch-vehicles); }
 
 .at-events { width: calc(100% - 24px); margin: 4px 12px 0; border-collapse: collapse; font-size: 11px; }
 .at-events th, .at-events td { text-align: left; padding: 1px 4px 1px 0; font-weight: 400; white-space: nowrap; }

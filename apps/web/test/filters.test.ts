@@ -55,12 +55,14 @@ describe('search ranking', () => {
 });
 
 describe('colour keys', () => {
-  it('prefers the server hint, then kind, then group', () => {
-    expect(colorKeyOf({ ...CATALOG[2], render: { colorKey: 'probe' } })).toBe('probe');
-    expect(colorKeyOf(CATALOG[0])).toBe('station');
-    expect(colorKeyOf(CATALOG[2])).toBe('starlink');
+  it('are the browser categories: the kind decides, the feed hint is advisory, Starlink is a satellite', () => {
+    expect(colorKeyOf({ ...CATALOG[2], render: { colorKey: 'probe' } })).toBe('probes');
+    expect(colorKeyOf(CATALOG[0])).toBe('stations');
+    expect(colorKeyOf(CATALOG[2])).toBe('satellites');
+    expect(colorKeyOf({ ...CATALOG[2], render: { colorKey: 'starlink' } })).toBe('satellites');
     expect(colorKeyOf(CATALOG[4])).toBe('debris');
-    expect(colorKeyOf(CATALOG[5])).toBe('vehicle');
-    expect(colorKeyOf(rec('x', 'x', 'weird'))).toBe('satellite');
+    expect(colorKeyOf(CATALOG[5])).toBe('launch-vehicles');
+    expect(colorKeyOf(CATALOG[6])).toBe('probes');
+    expect(colorKeyOf(rec('x', 'x', 'weird'))).toBe('other');
   });
 });

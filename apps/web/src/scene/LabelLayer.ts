@@ -17,6 +17,7 @@ interface Node {
   op: number;
   cls: string;
   text: string;
+  tint: string;
   shown: boolean;
 }
 
@@ -30,7 +31,8 @@ export class LabelLayer {
   private next = new Map<string, Node>();
   private free: Node[] = [];
 
-  constructor(private readonly host: HTMLElement, private readonly baseClass: string) {}
+  /** `tintOf` gives a label's colour (a CSS colour, e.g. `var(--c-debris)`) from its id; it is written as `--tint` when it changes */
+  constructor(private readonly host: HTMLElement, private readonly baseClass: string, private readonly tintOf?: (id: string) => string | undefined) {}
 
   /** Show the first `n` of `items`; everything shown before and not in them is hidden. */
   update(items: readonly LabelItem[], n: number): void {
@@ -55,6 +57,13 @@ export class LabelLayer {
       if (node.cls !== cls) {
         node.cls = cls;
         node.el.className = cls ? `${this.baseClass} ${cls}` : this.baseClass;
+      }
+      if (this.tintOf) {
+        const tint = this.tintOf(l.id) ?? '';
+        if (node.tint !== tint) {
+          node.tint = tint;
+          node.el.style.setProperty('--tint', tint);
+        }
       }
       if (node.text !== l.text) {
         node.text = l.text;
@@ -90,6 +99,6 @@ export class LabelLayer {
     el.className = this.baseClass;
     el.style.display = 'none';
     this.host.appendChild(el);
-    return { el, tx: NaN, ty: NaN, op: NaN, cls: '', text: '', shown: false };
+    return { el, tx: NaN, ty: NaN, op: NaN, cls: '', text: '', tint: '', shown: false };
   }
 }

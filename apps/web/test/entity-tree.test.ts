@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords, defaultBodies } from '@eio/core';
-import { bodyKey, bodyPathKeys, buildTreeRows, entityKey, groupKey, revealKeys, revealRowIndex, scrollTopToReveal, type TreeBody, type TreeItem, type TreeRow } from '../src/lib/entity-tree';
+import { bodyKey, bodyPathKeys, buildTreeRows, entityKey, groupKey, revealKeys, revealRowIndex, scrollTopToReveal, stickyAncestors, centredScrollTop, type TreeBody, type TreeItem, type TreeRow } from '../src/lib/entity-tree';
 
 const BODIES: TreeBody[] = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId }));
 const item = (id: string, kind: string, bodyId: string): TreeItem => ({ id, kind, bodyId });
@@ -237,6 +237,67 @@ describe('reveal a selected entity', () => {
       expect(scrollTopToReveal(3, H, 0, 280, 5)).toBeNull();
       expect(scrollTopToReveal(-1, H, 0, 280, 100)).toBeNull();
       expect(scrollTopToReveal(100, H, 0, 280, 100)).toBeNull();
+    });
+    it('does not count a row under the pinned sticky rows as visible, and centres below them', () => {
+      // 2 pinned rows (56 px) cover rows 10 and 11 at scrollTop 280
+      expect(scrollTopToReveal(10, H, 280, 280, 100, 0)).toBeNull();
+      expect(scrollTopToReveal(10, H, 280, 280, 100, 2 * H)).toBe(centredScrollTop(10, H, 280, 100, 2 * H));
+      expect(scrollTopToReveal(12, H, 280, 280, 100, 2 * H)).toBeNull(); // the first row below them
+      expect(scrollTopToReveal(30, H, 0, 280, 100, 2 * H)).toBe(30 * H - 2 * H - (280 - 2 * H - H) / 2);
+      // with the pinned rows the target row sits fully below them
+      const to = scrollTopToReveal(30, H, 0, 280, 100, 2 * H)!;
+      expect(30 * H - to).toBeGreaterThanOrEqual(2 * H);
+      expect(30 * H + H - to).toBeLessThanOrEqual(280);
+    });
+  });
+
+  describe('stickyAncestors', () => {
+    /** SUN > EARTH (open, grouped satellites + stations) > MOON (open) and MARS */
+    const openAll = new Map<string, boolean>([
+      [bodyKey('SUN'), true], [bodyKey('EARTH'), true], [bodyKey('MOON'), true], [bodyKey('MARS'), true],
+      [groupKey('EARTH', 'satellite'), true], [groupKey('EARTH', 'station'), true],
+    ]);
+    const rows = buildTreeRows(CATALOG, { ...base, overrides: openAll });
+    const keyAt = (i: number) => rows[i].key;
+    const idx = (key: string) => rows.findIndex((r) => r.key === key);
+    const chain = (first: number) => stickyAncestors(rows, first).map(keyAt);
+
+    it('has the rows we expect', () => {
+      expect(types(rows).slice(0, 5)).toEqual(['B:SUN', 'B:EARTH', 'B:MOON', 'E:dsn-LRO', 'G:satellite']);
+    });
+    it('gives the body chain and the kind group of an entity row, outermost first', () => {
+      expect(chain(idx(entityKey('EARTH', 'sat-4')))).toEqual([bodyKey('SUN'), bodyKey('EARTH'), groupKey('EARTH', 'satellite')]);
+      expect(chain(idx(entityKey('EARTH', 'stn-1')))).toEqual([bodyKey('SUN'), bodyKey('EARTH'), groupKey('EARTH', 'station')]);
+      expect(chain(idx(entityKey('MOON', 'dsn-LRO')))).toEqual([bodyKey('SUN'), bodyKey('EARTH'), bodyKey('MOON')]);
+    });
+    it('gives the parents of a group or a body node, never the row itself', () => {
+      expect(chain(idx(groupKey('EARTH', 'station')))).toEqual([bodyKey('SUN'), bodyKey('EARTH')]);
+      expect(chain(idx(bodyKey('MOON')))).toEqual([bodyKey('SUN'), bodyKey('EARTH')]);
+      expect(chain(idx(bodyKey('MARS')))).toEqual([bodyKey('SUN')]);
+    });
+    it('skips the siblings in between (the first row of the next group does not keep the previous group)', () => {
+      const firstStation = idx(groupKey('EARTH', 'station'));
+      expect(rows[firstStation - 1]).toMatchObject({ type: 'entity' }); // the last satellite
+      expect(chain(firstStation)).not.toContain(groupKey('EARTH', 'satellite'));
+      // the first row after Earth's whole subtree is Mars: its chain is only the Sun
+      expect(chain(idx(bodyKey('MARS')))).toEqual([bodyKey('SUN')]);
+    });
+    it('has no ancestors for the top of the list, a root, an empty list or a bad index', () => {
+      expect(stickyAncestors(rows, 0)).toEqual([]);
+      expect(stickyAncestors(rows, -3)).toEqual([]);
+      expect(stickyAncestors([], 5)).toEqual([]);
+      // an index past the end is the last row
+      expect(stickyAncestors(rows, 10_000)).toEqual(stickyAncestors(rows, rows.length - 1));
+    });
+    it('never returns an index at or after the first row, and the depths strictly increase', () => {
+      for (let f = 0; f < rows.length; f++) {
+        const a = stickyAncestors(rows, f);
+        a.forEach((i, k) => {
+          expect(i).toBeLessThan(f);
+          expect(rows[i].depth).toBe(k);
+        });
+        expect(a.length).toBe(rows[f].depth);
+      }
     });
   });
 });
