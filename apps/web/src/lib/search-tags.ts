@@ -1,5 +1,5 @@
 import { defaultBodies, launchIdFromCospar } from '@eio/core';
-import { CATEGORIES, BODY_CATEGORY_KINDS, categoryOf } from './browser-ui';
+import { CATEGORIES, categoryOf } from './browser-ui';
 
 /**
  * Tags in the entity search field (pure). The browser's chips only offer a few general categories; a specific group is a
@@ -13,7 +13,8 @@ import { CATEGORIES, BODY_CATEGORY_KINDS, categoryOf } from './browser-ui';
  *   body:earth                  what orbits that body or one of its moons (the tree nodes)
  *
  * Different keys AND together, repeated values of one key OR (`group:gps-ops group:galileo`), a leading `-` negates
- * (`-kind:debris`). Everything else, including unknown `key:value` words, is plain text for the name search.
+ * (`-kind:debris`). Everything else, including unknown `key:value` words, is plain text for the name search. What a tag
+ * does (show only those, or hide them) is the `effect` of its term in lib/query.ts.
  */
 
 export type TagKey = 'kind' | 'group' | 'launch' | 'cat' | 'id' | 'body';
@@ -111,17 +112,6 @@ export function parseQuery(raw: string): ParsedQuery {
   return { text: words.join(' '), tags };
 }
 
-export const hasValues = (v: TagValues | undefined): boolean => !!v && TAG_KEYS.some((k) => (v[k]?.length ?? 0) > 0);
-export const tagsActive = (t: TagFilter | undefined): boolean => !!t && (hasValues(t.include) || hasValues(t.exclude));
-
-/** The canonical words of a filter: the inclusions, then the negations. */
-export function tagTokens(t: TagFilter): string[] {
-  const out: string[] = [];
-  for (const k of TAG_KEYS) for (const v of t.include[k] ?? []) out.push(tagToken(k, v));
-  for (const k of TAG_KEYS) for (const v of t.exclude[k] ?? []) out.push(tagToken(k, v, true));
-  return out;
-}
-
 /** The fields of an entity the tags look at (a record, or a search hit with the extra fields looked up). */
 export interface TagTarget {
   id?: string;
@@ -158,79 +148,6 @@ export function matchesTag(rec: TagTarget, key: TagKey, value: string): boolean 
       return defaultBodies.has(b) ? defaultBodies.lineage(b).some((x) => x.id.toLowerCase() === value) : b.toLowerCase() === value;
     }
   }
-}
-
-const anyMatch = (rec: TagTarget, key: TagKey, values: readonly string[]): boolean => values.some((v) => matchesTag(rec, key, v));
-
-/** AND between keys, OR between the values of one key, and no negated value may match. */
-export function matchesTags(rec: TagTarget, t: TagFilter | undefined): boolean {
-  if (!t) return true;
-  for (const k of TAG_KEYS) {
-    const inc = t.include[k];
-    if (inc?.length && !anyMatch(rec, k, inc)) return false;
-    const exc = t.exclude[k];
-    if (exc?.length && anyMatch(rec, k, exc)) return false;
-  }
-  return true;
-}
-
-// ---------------------------------------------------------------- hiding
-
-/**
- * Hidden groups are a set of tags (`cat:debris`, `group:starlink`, `body:moon`...): an entity matching ANY of them is hidden
- * in the scene (it stays in the browser list, greyed). The celestial bodies are scenery and never hidden.
- */
-export type HiddenTags = TagValues;
-
-export const NO_HIDDEN: HiddenTags = {};
-
-export function isHiddenBy(rec: TagTarget, hidden: HiddenTags | undefined): boolean {
-  if (!hidden || BODY_CATEGORY_KINDS.has(rec.kind)) return false;
-  for (const k of TAG_KEYS) {
-    const v = hidden[k];
-    if (v?.length && anyMatch(rec, k, v)) return true;
-  }
-  return false;
-}
-
-export const hiddenCount = (h: HiddenTags | undefined): number => (h ? TAG_KEYS.reduce((n, k) => n + (h[k]?.length ?? 0), 0) : 0);
-export const hiddenTokens = (h: HiddenTags | undefined): string[] => (h ? TAG_KEYS.flatMap((k) => (h[k] ?? []).map((v) => tagToken(k, v))) : []);
-export const isTagHidden = (h: HiddenTags | undefined, key: TagKey, value: string): boolean => !!h?.[key]?.includes(value);
-
-/** A copy of `h` with `key:value` toggled (`on` forces it). */
-export function toggleHidden(h: HiddenTags, key: TagKey, value: string, on?: boolean): HiddenTags {
-  const list = h[key] ?? [];
-  const has = list.includes(value);
-  const want = on ?? !has;
-  if (want === has) return h;
-  const next: HiddenTags = { ...h };
-  const l = want ? [...list, value] : list.filter((x) => x !== value);
-  if (l.length) next[key] = l;
-  else delete next[key];
-  return next;
-}
-
-/** Stored form (`localStorage['eio.hidden']`): the tag lists as JSON. */
-export const serialiseHidden = (h: HiddenTags): string => JSON.stringify(Object.fromEntries(TAG_KEYS.filter((k) => h[k]?.length).map((k) => [k, h[k]])));
-
-/** Parse the stored form; anything malformed gives nothing hidden, unknown keys and non-strings are dropped. */
-export function parseHidden(raw: string | null | undefined): HiddenTags {
-  if (!raw) return {};
-  let obj: unknown;
-  try {
-    obj = JSON.parse(raw);
-  } catch {
-    return {};
-  }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
-  const out: HiddenTags = {};
-  for (const k of TAG_KEYS) {
-    const v = (obj as Record<string, unknown>)[k];
-    if (!Array.isArray(v)) continue;
-    const list = [...new Set(v.filter((x): x is string => typeof x === 'string' && x.length > 0).map((x) => normaliseValue(k, x)))];
-    if (list.length) out[k] = list;
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------- typing: chips and autocomplete

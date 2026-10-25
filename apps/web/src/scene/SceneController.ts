@@ -10,7 +10,7 @@ import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
-import { NO_FILTERS, filtersActive, isHiddenRec, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
+import { NO_CTX, NO_QUERY, classify, isDrawn, queryActive, type Class, type Ctx, type Query } from '../lib/query';
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
 import { liftNearSurface } from '../lib/paths';
 import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
@@ -85,6 +85,23 @@ export interface SceneCallbacks {
   onFollowChange?(follow: boolean): void;
   onSurfaceChange?(on: boolean): void;
 }
+
+/** What the page tells the scene about the query and the selection (see `SceneController.setView`). */
+export interface SceneViewState {
+  query: Query;
+  /** the ids the query's text matches (null without text) */
+  text: ReadonlySet<string> | null;
+  selectedId: string | null;
+  /** the objects related to the selection: never hidden, filtered out nor scoped out */
+  related: Iterable<string>;
+  highlight: boolean;
+}
+
+/** How a point is drawn: not at all, dimmed or enlarged by HIGHLIGHT, or as usual. */
+type Look = 'show' | 'hide' | 'dim' | 'boost';
+
+/** The hide terms of a query as one string: the orbit lines and footprints only depend on these. */
+const hideKey = (q: Query): string => q.terms.filter((t) => t.effect === 'hide').map((t) => `${t.neg ? '-' : ''}${t.key}:${t.value}`).join(' ');
 
 export interface SceneStats {
   fps: number;
@@ -238,11 +255,13 @@ export class SceneController {
   /** Earth-fixed point the free (unfollowed) camera target is pinned to after a FIT of ground-level objects */
   private groundLock: [number, number, number] | null = null;
   private launches: Launch[] = [];
-  private filters: Filters = NO_FILTERS;
+  /** what the search field says (lib/query.ts) and the entities it never hides: the selection and what is related to it */
+  private query: Query = NO_QUERY;
+  private ctx: Ctx = NO_CTX;
+  /** HIGHLIGHT: what the query (and the selection) does not pick is dimmed instead of hidden */
+  private highlight = false;
   // scope policy (see lib/scope.ts)
   private scopeMode: ScopeMode = 'auto';
-  /** the selection's related objects (parent, children, pad, linked probes ...): never scoped out */
-  private related: ReadonlySet<string> = new Set();
   /** 1 where an active filter lets the object through: never scoped out */
   private satKeep = new Uint8Array(0);
   private dynKeep = new Uint8Array(0);
@@ -434,11 +453,32 @@ export class SceneController {
     this.applyAppearance();
   }
 
-  setFilters(f: Filters): void {
-    const hiddenChanged = f.hidden !== this.filters.hidden;
-    this.filters = f;
-    if (hiddenChanged) this.refreshHints(); // a hidden group keeps no orbit line or footprint
+  /**
+   * THE view setter: the query, the ids its text matches, the selection with the objects related to it (parent, children, pad,
+   * linked probes ...: never hidden, filtered out nor scoped out) and HIGHLIGHT arrive together, so the points are painted once.
+   * Orbit lines and footprints are refreshed when the selection or the hide terms change.
+   */
+  setView(v: SceneViewState): void {
+    const focus = new Set(v.related);
+    if (v.selectedId) focus.add(v.selectedId);
+    const old = this.ctx;
+    const sameFocus = focus.size === old.focus.size && [...focus].every((id) => old.focus.has(id));
+    const selChanged = v.selectedId !== this.selectedId;
+    if (!selChanged && sameFocus && v.query === this.query && v.text === (old.text ?? null) && v.highlight === this.highlight) return;
+    const hideChanged = v.query !== this.query && hideKey(v.query) !== hideKey(this.query);
+    this.query = v.query;
+    this.highlight = v.highlight;
+    this.ctx = { focus, text: v.text };
+    this.selectedId = v.selectedId;
+    if (selChanged || hideChanged) this.refreshHints(); // a hidden group keeps no orbit line or footprint
     this.applyAppearance();
+    this.scopeDirty = true;
+    if (selChanged) {
+      this.updatePadAppearance();
+      // the surface camera was centred on the deselected object: nothing left to look at, back to the globe (a view already
+      // let go of its object, by panning, has a point of its own and stays)
+      if (!v.selectedId && this.surfaceOn && this.surfaceSrc?.kind === 'entity') this.setSurfaceMode(false);
+    }
   }
 
   /** Turn the streamed close-up imagery on or off (off: the base map only, no tile requests). */
@@ -479,12 +519,6 @@ export class SceneController {
     this.scopeDirty = true;
   }
 
-  /** Ids that scope never removes besides the selection: its related objects. */
-  setRelated(ids: Iterable<string>): void {
-    this.related = new Set(ids);
-    this.scopeDirty = true;
-  }
-
   setLaunches(launches: Launch[]): void {
     this.launches = launches.filter((l) => l.pad);
     const n = this.launches.length;
@@ -510,16 +544,6 @@ export class SceneController {
   /** Live ISS array telemetry; the model's SARJ and attitude follow it while fresh, verified and at live time. */
   setIssArrays(arrays: IssArrays | undefined): void {
     this.issTracker.push(arrays, Date.now());
-  }
-
-  setSelected(id: string | null): void {
-    this.selectedId = id;
-    this.refreshHints();
-    this.applyAppearance();
-    this.updatePadAppearance();
-    // the surface camera was centred on the deselected object: nothing left to look at, back to the globe (a view already
-    // let go of its object, by panning, has a point of its own and stays)
-    if (!id && this.surfaceOn && this.surfaceSrc?.kind === 'entity') this.setSurfaceMode(false);
   }
 
   /**
@@ -734,13 +758,13 @@ export class SceneController {
     return true;
   }
 
-  /** FIT VISIBLE: everything the current filters leave on screen. */
+  /** FIT VISIBLE: everything the query leaves on screen (the selection and its related objects always stay). */
   fitVisible(): boolean {
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const rec of this.recs.values()) {
       if (this.bodyIds.has(rec.id)) continue; // the bodies are scenery here: the Sun on its shell would make FIT VISIBLE a deep-space view
-      if (!matchesFilters(rec, this.filters) || isHiddenRec(rec, this.filters)) continue;
+      if (!isDrawn(classify(rec, this.query, this.ctx))) continue;
       if (this.fitPos(rec.id, v)) pts.push(v.x, v.y, v.z);
     }
     return this.frameSphere(pts);
@@ -1027,31 +1051,42 @@ export class SceneController {
     this.dynBaseSize = new Float32Array(ids.length);
   }
 
-  /** Colours, sizes and glyphs from entity metadata, filters and selection. */
+  /**
+   * How the query and HIGHLIGHT draw an entity: not at all (a hide term; left out by an only / text term unless HIGHLIGHT is
+   * on), dimmed (HIGHLIGHT: the query or the selection does not pick it), enlarged (HIGHLIGHT: picked) or as usual.
+   */
+  private lookOf(rec: EntityRecord, c: Class = classify(rec, this.query, this.ctx)): Look {
+    if (c === 'hide') return 'hide';
+    if (c === 'out') return this.highlight ? 'dim' : 'hide';
+    if (this.highlight && (queryActive(this.query) || this.selectedId !== null)) return c === 'show' || this.ctx.focus.has(rec.id) ? 'boost' : 'dim';
+    return 'show';
+  }
+
+  /** Colours, sizes and glyphs from entity metadata, the query, HIGHLIGHT and the selection. */
   private applyAppearance(): void {
     const { colors } = this.palette;
-    // 'dim' (launch highlight mode) keeps the point but darkens and shrinks it; with a launch selected its members are enlarged
-    const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, vis: Visibility) => {
+    // 'dim' (HIGHLIGHT) keeps the point but darkens and shrinks it; 'boost' enlarges what HIGHLIGHT picks
+    const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, look: Look) => {
       const key: ColorKey = rec ? colorKeyOf(rec) : 'satellite';
       const c = colors[key];
-      const k = vis === 'dim' ? 0.3 : 1;
+      const k = look === 'dim' ? 0.3 : 1;
       set.color.setXYZ(i, c.r * k, c.g * k, c.b * k);
       set.glyph.setX(i, rec?.render?.glyph ? GLYPH_ID[rec.render.glyph] : 0);
       // a 3D model drawn for the entity replaces its sprite
       const replaced = !!rec && this.models.spriteHidden.has(rec.id);
-      set.size.setX(i, vis === 'hide' || replaced ? 0 : POINT_SIZE[key] * (vis === 'dim' ? 0.7 : this.filters.launch ? 1.8 : 1));
+      set.size.setX(i, look === 'hide' || replaced ? 0 : POINT_SIZE[key] * (look === 'dim' ? 0.7 : look === 'boost' ? 1.8 : 1));
     };
-    const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters, rec.id === this.selectedId));
-    // with a filter on, the objects it lets through ('show') are exempt from the scope policy
-    const filtering = filtersActive(this.filters);
+    // with an only / text term, the objects it lets through ('show') are exempt from the scope policy
+    const active = queryActive(this.query);
     const exemptRec = (rec: EntityRecord | undefined) => !!rec && colorKeyOf(rec) === 'vehicle';
     this.satKeep = new Uint8Array(this.propagator.ids.length);
     this.satExempt = new Uint8Array(this.propagator.ids.length);
     this.propagator.ids.forEach((id, i) => {
       const rec = this.recs.get(id);
-      const v = vis(rec, id === this.selectedId);
-      paint(this.sats, i, rec, v);
-      if (filtering && v === 'show') this.satKeep[i] = 1;
+      const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
+      // the selected point is drawn from the highlight set (updateHighlights), not the cloud
+      paint(this.sats, i, rec, !rec || id === this.selectedId ? 'hide' : this.lookOf(rec, c));
+      if (active && c === 'show') this.satKeep[i] = 1;
       if (exemptRec(rec)) this.satExempt[i] = 1;
     });
     this.sats.color.needsUpdate = this.sats.size.needsUpdate = this.sats.glyph.needsUpdate = true;
@@ -1059,10 +1094,10 @@ export class SceneController {
     this.dynExempt = new Uint8Array(this.dynIds.length);
     this.dynIds.forEach((id, i) => {
       const rec = this.recs.get(id);
-      const v = vis(rec);
-      paint(this.dyn, i, rec, v);
+      const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
+      paint(this.dyn, i, rec, rec ? this.lookOf(rec, c) : 'hide');
       this.dynBaseSize[i] = this.dyn.size.getX(i);
-      if (filtering && v === 'show') this.dynKeep[i] = 1;
+      if (active && c === 'show') this.dynKeep[i] = 1;
       if (exemptRec(rec)) this.dynExempt[i] = 1;
     });
     this.dyn.color.needsUpdate = this.dyn.size.needsUpdate = this.dyn.glyph.needsUpdate = true;
@@ -1090,7 +1125,7 @@ export class SceneController {
     let hinted = 0;
     for (const rec of this.recs.values()) {
       // body entities have their own rule (selected / followed / frame centre), below
-      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyIds.has(rec.id) && !isHiddenRec(rec, this.filters)) {
+      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyIds.has(rec.id) && classify(rec, this.query, this.ctx) !== 'hide') {
         want.set(rec.id, false);
         hinted++;
         graph.upsert(rec);
@@ -1501,10 +1536,11 @@ export class SceneController {
       },
       visibility: (id) => {
         const r = rec(id);
-        return r ? sceneVisibility(r, this.filters, id === this.selectedId) : 'hide';
+        const look = r ? this.lookOf(r) : 'hide';
+        return look === 'boost' ? 'show' : look;
       },
       inScope: (id) => {
-        if (this.scopeMode === 'all' || id === this.selectedId || this.related.has(id)) return true;
+        if (this.scopeMode === 'all' || this.ctx.focus.has(id)) return true;
         const si = this.satIndex.get(id);
         if (si !== undefined) return this.sats.show.getX(si) > 0.5;
         const di = this.dynIndex.get(id);
@@ -1571,7 +1607,7 @@ export class SceneController {
         if (w.x === 0 && w.y === 0 && w.z === 0) continue; // no position (failed propagation, provider without a state)
         total++;
         const id = ids[i];
-        const keep = id === sel || id === hov || this.related.has(id) || (keepFlags !== null && keepFlags[i] === 1);
+        const keep = id === hov || this.ctx.focus.has(id) || (keepFlags !== null && keepFlags[i] === 1);
         const d = Math.hypot(w.x - focus.x, w.y - focus.y, w.z - focus.z);
         // an object the user filtered for is never hidden over a small disc, or a zoomed-out filter would show nothing
         const kept = keepFlags !== null && keepFlags[i] === 1;
@@ -1596,7 +1632,7 @@ export class SceneController {
     // light overlays (orbit line, footprint) of entities that are scoped out are not drawn either
     this.overlayInScope.clear();
     for (const id of this.overlays.keys()) {
-      const keep = id === sel || this.related.has(id) || this.bodyIds.has(id); // a body line is already limited to what is looked at
+      const keep = this.ctx.focus.has(id) || this.bodyIds.has(id); // a body line is already limited to what is looked at
       let d = 0;
       if (!keep && this.pointPos(id, tmp)) d = Math.hypot(tmp.x - focus.x, tmp.y - focus.y, tmp.z - focus.z);
       this.overlayInScope.set(id, inScope({ d, key: 0, bulk: false, keep }, radius, mode));
@@ -1744,7 +1780,7 @@ export class SceneController {
     this.labelCandN = 0;
     const feat = this.featuredIds();
     const sel = this.selectedId;
-    if (!filtersActive(this.filters)) {
+    if (!queryActive(this.query)) {
       for (const id of feat) {
         if (id === sel) continue;
         const si = this.satIndex.get(id);

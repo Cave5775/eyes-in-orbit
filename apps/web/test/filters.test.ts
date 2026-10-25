@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EntityRecord } from '@eio/core';
-import { NO_FILTERS, browseOrder, facetCounts, filtersActive, matchScore, matchesFilters, rankEntities, toggled } from '../src/lib/filters';
+import { browseOrder, facetCounts, matchScore, rankEntities } from '../src/lib/filters';
 import { colorKeyOf } from '../src/lib/entity';
 
 const rec = (id: string, name: string, kind: string, group?: string, aliases: Record<string, string> = {}): EntityRecord => ({
@@ -16,26 +16,6 @@ const CATALOG = [
   rec('launch-x', 'Falcon 9 | Crew-14', 'launch_vehicle', 'launch'),
   rec('dsn-VGR1', 'Voyager 1', 'probe', 'dsn', { dsn: 'VGR1' }),
 ];
-
-describe('filters', () => {
-  it('matches kinds and groups, empty set meaning all', () => {
-    const f = { kinds: new Set(['station']), groups: new Set<string>() };
-    expect(CATALOG.filter((r) => matchesFilters(r, f)).map((r) => r.id)).toEqual(['sat-25544', 'sat-48274']);
-    expect(matchesFilters(CATALOG[2], { kinds: new Set(['satellite']), groups: new Set(['starlink']) })).toBe(true);
-    expect(matchesFilters(CATALOG[2], { kinds: new Set(['satellite']), groups: new Set(['active']) })).toBe(false);
-    expect(CATALOG.every((r) => matchesFilters(r, NO_FILTERS))).toBe(true);
-    expect(filtersActive(NO_FILTERS)).toBe(false);
-    expect(filtersActive(f)).toBe(true);
-  });
-
-  it('toggled returns a new set', () => {
-    const a = new Set(['a']);
-    const b = toggled(a, 'b');
-    expect([...b].sort()).toEqual(['a', 'b']);
-    expect([...toggled(b, 'a')]).toEqual(['b']);
-    expect([...a]).toEqual(['a']);
-  });
-});
 
 describe('search ranking', () => {
   it('exact id/alias beats prefix beats substring', () => {
@@ -54,6 +34,10 @@ describe('search ranking', () => {
     expect(rankEntities(CATALOG, '48274')[0].id).toBe('sat-48274');
     expect(rankEntities(CATALOG, 'vgr1')[0].id).toBe('dsn-VGR1');
     expect(rankEntities(CATALOG, 'zzz')).toEqual([]);
+  });
+
+  it('ranks every match when the limit is open', () => {
+    expect(rankEntities(CATALOG, 'starlink', Infinity).map((h) => h.id)).toEqual(['sat-44713', 'sat-44714']);
   });
 
   it('counts facets most common first', () => {

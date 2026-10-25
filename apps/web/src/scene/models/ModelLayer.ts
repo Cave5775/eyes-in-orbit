@@ -3,7 +3,6 @@ import type { EntityRecord } from '@eio/core';
 import { sunInBody } from '../../lib/arrays';
 import { basisToQuaternion, forwardBasis, lvlhBasis, rocketForward, sunlitFraction, type Basis } from '../../lib/attitude';
 import type { V3 } from '../../lib/camera';
-import type { Visibility } from '../../lib/filters';
 import { modelLod, ringHiddenFor } from '../../lib/model-lod';
 import { modelDef } from './registry';
 import type { ModelDef, ModelInstance, ModelUpdate } from './types';
@@ -27,7 +26,8 @@ export interface ModelFrame {
   approx(id: string, out: THREE.Vector3): boolean;
   /** exact display position and velocity (km, km/s) at `t` */
   resolve(id: string, t: number): { r: V3; v?: V3 } | null;
-  visibility(id: string): Visibility;
+  /** from the query (lib/query.ts `classify`) and HIGHLIGHT: `hide` = not drawn, `dim` = drawn dimmed */
+  visibility(id: string): 'show' | 'dim' | 'hide';
   /** passes the scope policy (selection, related objects and filter exemptions included) */
   inScope(id: string): boolean;
   /** size of the entity's point sprite, CSS pixels */

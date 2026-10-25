@@ -1,25 +1,22 @@
 import { bodyEntityId, bodyOf, defaultBodies } from '@eio/core';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { api } from '../api/client';
 import { BODY_CATEGORY_KINDS, CATEGORIES, categoryCounts, categoryLabel } from '../lib/browser-ui';
 import { buildTreeRows, revealKeys, revealRowIndex, type TreeBody } from '../lib/entity-tree';
 import { colorKeyOf, kindLabel } from '../lib/entity';
-import {
-  browseOrder, buildLaunchGroups, facetCounts, filtersActive, isHiddenRec, matchesFilters, rankEntities, type SearchHit,
-} from '../lib/filters';
+import { browseOrder, facetCounts, type SearchHit } from '../lib/filters';
 import { isEarthCentre } from '../lib/frame';
+import { buildLaunchGroups, launchMembers } from '../lib/launch-group';
 import {
-  acceptTag, activeTag, hiddenCount, hiddenTokens, isTagHidden, parseQuery, parseToken, splitCommitted, suggestTags, tagsActive,
-  type TagKey, type TagSuggestion,
+  NO_FOCUS, findTerm, hasHide, isDrawn, classify, queryActive, tagTerms, termFromWord, termWord, textOf, type Ctx, type Term,
+} from '../lib/query';
+import {
+  acceptTag, activeTag, parseQuery, splitCommitted, suggestTags, type TagKey, type TagSuggestion,
 } from '../lib/search-tags';
+import { runtime } from '../state/runtime';
 import { useStore } from '../state/store';
-import { LaunchFilter } from './LaunchFilter';
 import { VirtualList, type VirtualListHandle } from './VirtualList';
 
 const ROW_H = 28;
-const SEARCH_LIMIT = 60;
-/** a search with tags ranks the entities that pass them locally (the server does not know the tags), so it can list more */
-const TAG_SEARCH_LIMIT = 500;
 const DEBOUNCE_MS = 250;
 const INDENT_PX = 12;
 const MODE_KEY = 'eio.browser';
@@ -60,16 +57,14 @@ const HELP_TAGS: [string, string][] = [
 
 export function EntityBrowser() {
   const entities = useStore((s) => s.entities);
-  const filters = useStore((s) => s.filters);
   const query = useStore((s) => s.query);
-  const results = useStore((s) => s.searchResults);
+  const textHits = useStore((s) => s.textHits);
+  const textIds = useStore((s) => s.textIds);
   const selectedId = useStore((s) => s.selectedId);
   const frame = useStore((s) => s.frame);
-  const { setQuery, setSearchResults, setTags, selectObject, clearFilters, toggleHidden, showAll } = useStore.getState();
-  /** the free text and the tag word being typed */
-  const [input, setInput] = useState(query);
-  /** finished tag words (`group:starlink`, `-kind:debris`), shown as chips in the field */
-  const [chips, setChips] = useState<string[]>([]);
+  const { setText, addTerms, removeTerm, toggleTerm, setTermEffect, clearQuery, showAll, selectObject } = useStore.getState();
+  /** the free text and the tag word being typed; the finished tag words are terms of the query (the chips) */
+  const [input, setInput] = useState(() => textOf(query));
   const [mode, setModeState] = useState<Mode>(loadMode);
   const [help, setHelp] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -85,8 +80,11 @@ export function EntityBrowser() {
     } catch { /* private window: the choice just is not remembered */ }
   };
   const setOpen = useCallback((key: string, open: boolean) => setOverrides((o) => new Map(o).set(key, open)), []);
-  // a new query or filter starts from the defaults again (everything with a hit open); hiding a group is no filter
-  useEffect(() => setOverrides((o) => (o.size ? new Map() : o)), [query, filters.kinds, filters.groups, filters.launch, filters.tags]);
+  /** what the query restricts (its only terms and the text): a change of it starts from the defaults again; hiding a group does not */
+  const filterKey = useMemo(() => query.terms.filter((t) => t.effect === 'only').map(termWord).join('\n'), [query]);
+  const filtering = queryActive(query);
+  // a new query starts from the defaults again (everything with a hit open)
+  useEffect(() => setOverrides((o) => (o.size ? new Map() : o)), [filterKey]);
   // reveal: a selection that did not come from a click in this browser opens the path to its row and scrolls to it
   const listRef = useRef<VirtualListHandle>(null);
   /** the id a row click here just selected: the effect below skips it, so the list never moves under the cursor */
@@ -94,39 +92,14 @@ export function EntityBrowser() {
   /** the entity whose row is still to be scrolled to once the expansion has reached the list */
   const [revealId, setRevealId] = useState<string | null>(null);
 
-  // the field = tag chips + free text; both go to the store (text for the search, tags for the list and the scene). Typing is
-  // debounced, a chip change applies at once.
+  // the typed text is the text term of the query. Typing is debounced; the chips (terms) apply at once.
   const lastInput = useRef(input);
   useEffect(() => {
-    const typed = lastInput.current !== input;
+    if (lastInput.current === input) return;
     lastInput.current = input;
-    const apply = () => {
-      const p = parseQuery([...chips, input].join(' '));
-      setQuery(p.text);
-      setTags(p.tags);
-    };
-    if (!typed) {
-      apply();
-      return;
-    }
-    const h = setTimeout(apply, DEBOUNCE_MS);
+    const h = setTimeout(() => setText(parseQuery(input).text), DEBOUNCE_MS);
     return () => clearTimeout(h);
-  }, [input, chips, setQuery, setTags]);
-
-  const tagged = tagsActive(filters.tags);
-  // server-ranked search; falls back to local ranking when the request fails. With tags the entities that pass them are
-  // ranked locally instead (see `rows`).
-  useEffect(() => {
-    if (!query || tagged) {
-      setSearchResults(null);
-      return;
-    }
-    let stale = false;
-    api.search(query, SEARCH_LIMIT)
-      .catch(() => rankEntities(useStore.getState().entities.values(), query, SEARCH_LIMIT))
-      .then((r) => !stale && setSearchResults(r));
-    return () => { stale = true; };
-  }, [query, tagged, setSearchResults]);
+  }, [input, setText]);
 
   const facets = useMemo(() => facetCounts(entities.values()), [entities]);
   const categories = useMemo(() => categoryCounts(entities.values()), [entities]);
@@ -150,18 +123,16 @@ export function EntityBrowser() {
   const suggestOpen = focused && !dismissed && suggestions.length > 0;
   const cur = Math.min(sel, Math.max(0, suggestions.length - 1));
 
+  // the rows: what the query lets through (the same predicate the scene draws by, so the counts match what is drawn). Hidden
+  // groups are not listed. The text ranks them; without text the notable kinds come first.
+  const ordered = useMemo(() => [...entities.values()].sort(browseOrder), [entities]);
   const rows: SearchHit[] = useMemo(() => {
-    // a hit carries kind and group only; the tags also look at the body, the colour key and the ids, from the entity table
-    const pass = (r: SearchHit) => matchesFilters(entities.get(r.id) ?? r, filters);
-    if (query && tagged) return rankEntities([...entities.values()].filter(pass), query, TAG_SEARCH_LIMIT);
-    if (query) return (results ?? []).filter(pass);
-    const out: SearchHit[] = [];
-    for (const e of entities.values()) if (matchesFilters(e, filters)) out.push(e);
-    return out.sort(browseOrder);
-  }, [entities, filters, query, results, tagged]);
+    const ctx: Ctx = { focus: NO_FOCUS, text: textIds };
+    const pass = (r: SearchHit) => isDrawn(classify(entities.get(r.id) ?? r, query, ctx));
+    return (textOf(query) && textHits ? textHits : ordered).filter(pass);
+  }, [entities, ordered, query, textHits, textIds]);
 
   // the tree: the same filtered, ordered rows, nested under their primary body and flattened to the rows that are open
-  const filtering = !!query || filtersActive(filters);
   const pick = (id: string) => {
     ownSelect.current = id;
     selectObject(id);
@@ -194,7 +165,7 @@ export function EntityBrowser() {
     const own = ownSelect.current === selectedId;
     ownSelect.current = null;
     const rec = selectedId && !own ? entities.get(selectedId) : undefined;
-    // a search or filter that hides the entity is never cleared: then there is nothing to reveal and the list stays as it is
+    // a search that leaves the entity out is never cleared: then there is nothing to reveal and the list stays as it is
     if (!rec || !rows.some((r) => r.id === rec.id)) {
       setRevealId(null);
       return;
@@ -214,16 +185,21 @@ export function EntityBrowser() {
     listRef.current?.reveal(i);
     setRevealId(null);
   }, [revealId, mode, treeRows, rows]);
-  useEffect(() => setRevealId(null), [query, filters.kinds, filters.groups, filters.launch, filters.tags]);
+  useEffect(() => setRevealId(null), [filterKey]);
 
-  // ---------------------------------------------------------------- the search field: chips, tags, autocomplete
+  // ---------------------------------------------------------------- the search field: chips (terms), text, autocomplete
 
-  const addChips = (add: string[]) => setChips((c) => {
-    const next = [...c];
-    for (const w of add) if (!next.includes(w)) next.push(w);
-    return next.length === c.length ? c : next;
-  });
-  const removeChip = (w: string) => setChips((c) => c.filter((x) => x !== w));
+  const chips = useMemo(() => tagTerms(query), [query]);
+  /** finished tag words become terms; a launch fits the camera to its members. A typed word takes over a term that is hidden. */
+  const addChips = (words: string[]) => {
+    const terms = words.map((w) => termFromWord(w)).filter((t): t is Term => !!t);
+    if (!terms.length) return;
+    addTerms(terms, true);
+    for (const t of terms) if (t.key === 'launch' && !t.neg) {
+      const ids = launchMembers(launchGroups, t.value);
+      if (ids.length) runtime.onFitRequest?.(ids);
+    }
+  };
   const onInput = (v: string) => {
     setDismissed(false);
     setSel(0);
@@ -260,53 +236,32 @@ export function EntityBrowser() {
         setInput(done.rest.trim());
       }
     } else if (e.key === 'Backspace' && input === '' && chips.length) {
-      setChips((c) => c.slice(0, -1));
+      const last = chips[chips.length - 1];
+      removeTerm(last.key, last.value, !!last.neg);
     }
   };
-  const toggleCategoryChip = (id: string) => {
-    const w = `cat:${id}`;
-    if (chips.includes(w)) removeChip(w);
-    else addChips([w]);
-  };
-  /** hide the group a chip names: the chip leaves the search (it would show only what is hidden) and joins the hidden list */
-  const hideChip = (w: string) => {
-    const t = parseToken(w);
-    if (!t || t.negated) return;
-    toggleHidden(t.key, t.value, true);
-    removeChip(w);
-  };
-  const toggleCategoryHidden = (id: string) => {
-    if (!isTagHidden(filters.hidden, 'cat', id)) removeChip(`cat:${id}`);
-    toggleHidden('cat', id);
-  };
+  /** CLEAR: the chips, the text and the typed input; the hidden groups stay (SHOW ALL) */
   const clearAll = () => {
-    setChips([]);
-    clearFilters();
+    setInput('');
+    lastInput.current = '';
+    clearQuery();
   };
 
-  const hidden = filters.hidden;
-  const hiddenN = hiddenCount(hidden);
-  const selRec = selectedId ? entities.get(selectedId) : undefined;
-  const selHidden = !!selRec && isHiddenRec(selRec, filters);
+  const hasHidden = hasHide(query);
+  const hidesTerm = (key: TagKey, value: string) => findTerm(query, key, value)?.effect === 'hide';
 
   // ---------------------------------------------------------------- rows
 
   const entityRow = (id: string, name: string, kind: string, depth: number, key: string) => {
     const rec = entities.get(id);
     const isFrame = frame === id && !isEarthCentre(id);
-    const isHid = !!rec && isHiddenRec(rec, filters);
-    const cls = `row${id === selectedId ? ' sel' : ''}${isHid ? ' is-hidden' : ''}`;
+    const cls = `row${id === selectedId ? ' sel' : ''}`;
     return (
       <button
         key={key} className={cls} style={{ height: ROW_H, paddingLeft: mode === 'tree' ? 10 + depth * INDENT_PX : undefined }}
         onClick={() => pick(id)}>
         <i className="swatch" style={{ background: `var(--c-${rec ? colorKeyOf(rec) : 'satellite'}, var(--c-satellite))` }} />
         <span className="row-name">{name}</span>
-        {isHid && (
-          <span className="row-hidden" title={id === selectedId ? 'In a hidden group; shown in the scene while it is selected' : 'In a hidden group: not drawn in the scene'}>
-            {id === selectedId ? 'HIDDEN, SHOWN' : 'HIDDEN'}
-          </span>
-        )}
         {isFrame && <span className="row-frame" title="The frame of reference is centred on this object">FRAME</span>}
         <span className="row-kind">{kindLabel(kind)}</span>
       </button>
@@ -314,12 +269,12 @@ export function EntityBrowser() {
   };
 
   const eyeButton = (token: [TagKey, string], label: string) => {
-    const off = isTagHidden(hidden, token[0], token[1]);
+    const off = hidesTerm(token[0], token[1]);
     return (
       <button
         className={off ? 'eye off' : 'eye'} aria-pressed={off} aria-label={`${off ? 'Show' : 'Hide'} ${label}`}
-        title={off ? `Show ${label} in the scene again` : `Hide ${label} in the scene (they stay in this list)`}
-        onClick={() => toggleHidden(token[0], token[1])}>
+        title={off ? `Show ${label} again` : `Hide ${label} (not drawn, not listed)`}
+        onClick={() => toggleTerm(token[0], token[1], 'hide')}>
         <Eye off={off} />
       </button>
     );
@@ -333,9 +288,8 @@ export function EntityBrowser() {
       return entityRow(r.id, rec?.name ?? r.id, rec?.kind ?? '', r.depth, r.key);
     }
     if (r.type === 'group') {
-      const off = isTagHidden(hidden, 'kind', r.kind);
       return (
-        <div key={r.key} className={off ? 'row tree-group is-hidden' : 'row tree-group'} style={{ height: ROW_H, paddingLeft: pad }}>
+        <div key={r.key} className="row tree-group" style={{ height: ROW_H, paddingLeft: pad }}>
           <button className="tree-group-name" aria-expanded={r.open} onClick={() => setOpen(r.key, !r.open)}>
             <span className="tree-chev" aria-hidden="true">{r.open ? '▾' : '▸'}</span>
             <span className="row-name">{kindLabel(r.kind)}</span>
@@ -346,7 +300,7 @@ export function EntityBrowser() {
       );
     }
     const active = !!r.entityId && (r.entityId === frame || r.entityId === selectedId);
-    const bodyOff = isTagHidden(hidden, 'body', r.bodyId.toLowerCase());
+    const bodyOff = hidesTerm('body', r.bodyId.toLowerCase());
     return (
       <div key={r.key} className={`row tree-body${active ? ' sel' : ''}${bodyOff ? ' is-hidden' : ''}`} style={{ height: ROW_H, paddingLeft: pad }}>
         <button className="tree-chev" aria-expanded={r.open} aria-label={`${r.open ? 'Collapse' : 'Expand'} ${r.name}`} onClick={() => setOpen(r.key, !r.open)}>
@@ -363,18 +317,23 @@ export function EntityBrowser() {
     );
   };
 
-  const chipView = (w: string) => {
-    const t = parseToken(w);
-    const off = !!t && !t.negated && isTagHidden(hidden, t.key, t.value);
+  /** a term as a chip: the word, an eye (an only term hides instead and back) and an x */
+  const chipView = (t: Term) => {
+    const w = termWord(t);
+    const hide = t.effect === 'hide';
+    const cls = `tagchip${t.neg ? ' neg' : ''}${hide ? ' hide' : ''}`;
     return (
-      <span key={w} className={t?.negated ? 'tagchip neg' : 'tagchip'} title={t?.negated ? `Leaves out ${w.slice(1)}` : `Only ${w}`}>
+      <span key={w} className={cls} title={hide ? `Hidden: ${w} is not drawn nor listed` : t.neg ? `Leaves out ${w.slice(1)}` : `Only ${w}`}>
         <span className="tagchip-text">{w}</span>
-        {t && !t.negated && !off && (
-          <button className="tagchip-btn" aria-label={`Hide ${w} in the scene`} title="Hide these objects in the scene instead (moves the tag to the hidden list)" onClick={() => hideChip(w)}>
-            <Eye off={false} />
+        {!t.neg && (
+          <button
+            className="tagchip-btn" aria-pressed={hide} aria-label={`${hide ? 'Show only' : 'Hide'} ${w}`}
+            title={hide ? 'Show only these objects instead' : 'Hide these objects (not drawn, not listed) instead of showing only them'}
+            onClick={() => setTermEffect(t.key, t.value, hide ? 'only' : 'hide')}>
+            <Eye off={hide} />
           </button>
         )}
-        <button className="tagchip-btn" aria-label={`Remove ${w}`} title="Remove this tag" onClick={() => removeChip(w)}>×</button>
+        <button className="tagchip-btn" aria-label={`Remove ${w}`} title="Remove this tag" onClick={() => removeTerm(t.key, t.value, !!t.neg)}>×</button>
       </span>
     );
   };
@@ -387,7 +346,7 @@ export function EntityBrowser() {
           <button className={mode === 'tree' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'tree'} onClick={() => setMode('tree')} title="Group objects under the body they orbit (Sun, Earth, Moon, Mars)">TREE</button>
           <button className={mode === 'list' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'list'} onClick={() => setMode('list')} title="One flat list">LIST</button>
         </span>
-        <span className="mono dim">{rows.length.toLocaleString('en-US')}{filtering ? '' : ` / ${entities.size.toLocaleString('en-US')}`}</span>
+        <span className="mono dim">{rows.length.toLocaleString('en-US')}{query.terms.length ? '' : ` / ${entities.size.toLocaleString('en-US')}`}</span>
       </div>
       <div className="search">
         <div className="search-box" onClick={() => inputRef.current?.focus()}>
@@ -427,56 +386,41 @@ export function EntityBrowser() {
                 <div key={t}><dt className="mono">{t}</dt><dd>{d}</dd></div>
               ))}
             </dl>
-            <div>Type <span className="mono">group:</span> or <span className="mono">#</span> to list the groups. The eye on a category, a tag chip or a tree header hides it in the scene.</div>
+            <div>Type <span className="mono">group:</span>, <span className="mono">#</span> or <span className="mono">launch:</span> to list the groups or launches. The eye on a category, a tag chip or a tree header hides it: not drawn, not listed. The search and the tags also thin the scene; HIGHLIGHT dims instead.</div>
           </div>
         )}
       </div>
       <div className="facets">
         <div className="chips" role="group" aria-label="Categories">
           {categories.map(([id, n]) => {
-            const on = chips.includes(`cat:${id}`);
-            const off = isTagHidden(hidden, 'cat', id);
+            const term = findTerm(query, 'cat', id);
+            const on = term?.effect === 'only';
+            const off = term?.effect === 'hide';
             const cat = CATEGORIES.find((c) => c.id === id);
             return (
               <span key={id} className={`chip-pair${off ? ' off' : ''}`}>
                 <button
                   className={on ? 'chip on' : 'chip'} aria-pressed={on} title={`${cat?.hint ?? id} (tag cat:${id})`}
-                  onClick={() => toggleCategoryChip(id)}>
+                  onClick={() => toggleTerm('cat', id, 'only')}>
                   {categoryLabel(id)} <small>{n.toLocaleString('en-US')}</small>
                 </button>
                 {id !== 'bodies' && (
                   <button
                     className={off ? 'eye off' : 'eye'} aria-pressed={off} aria-label={`${off ? 'Show' : 'Hide'} ${categoryLabel(id)}`}
-                    title={off ? `Show ${categoryLabel(id)} in the scene again` : `Hide ${categoryLabel(id)} in the scene (they stay in this list)`}
-                    onClick={() => toggleCategoryHidden(id)}>
+                    title={off ? `Show ${categoryLabel(id)} again` : `Hide ${categoryLabel(id)} (not drawn, not listed)`}
+                    onClick={() => toggleTerm('cat', id, 'hide')}>
                     <Eye off={off} />
                   </button>
                 )}
               </span>
             );
           })}
-          {(filtersActive(filters) || chips.length > 0) && <button className="chip clear" onClick={clearAll}>CLEAR</button>}
+          {hasHidden && <button className="chip more" onClick={showAll} title="Show every hidden group again">SHOW ALL</button>}
+          {(filtering || input !== '') && <button className="chip clear" onClick={clearAll} title="Clear the search: the chips and the typed text (hidden groups stay)">CLEAR</button>}
         </div>
-        {hiddenN > 0 && (
-          <div className="hidden-strip" role="group" aria-label="Hidden groups">
-            <span className="hidden-label" title="Not drawn in the scene; still listed here">HIDDEN</span>
-            {hiddenTokens(hidden).map((w) => {
-              const t = parseToken(w)!;
-              return (
-                <button key={w} className="chip hid" title={`Show ${w} again`} aria-label={`Show ${w} again`} onClick={() => toggleHidden(t.key, t.value, false)}>
-                  <Eye off />
-                  {t.key === 'cat' ? categoryLabel(t.value) : w}
-                </button>
-              );
-            })}
-            <button className="chip more" onClick={showAll} title="Show every hidden group again">SHOW ALL</button>
-            {selHidden && <span className="hidden-note">The selected object stays visible.</span>}
-          </div>
-        )}
-        <LaunchFilter groups={launchGroups} />
       </div>
       {rows.length === 0 ? (
-        <div className="empty">{query && results === null && !tagged ? 'Searching...' : 'No matching entities.'}</div>
+        <div className="empty">No matching entities.</div>
       ) : (
         mode === 'tree' ? (
           <VirtualList key="tree" ref={listRef} count={treeRows.length} rowHeight={ROW_H} render={renderTree} />

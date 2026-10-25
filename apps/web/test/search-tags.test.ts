@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-  NO_TAGS, acceptTag, activeTag, hiddenCount, hiddenTokens, isHiddenBy, matchesTags, parseHidden, parseQuery, parseToken,
-  serialiseHidden, splitCommitted, suggestTags, tagTokens, tagsActive, toggleHidden, type TagTarget,
-} from '../src/lib/search-tags';
-import { NO_FILTERS, filtersActive, isHiddenRec, matchesFilters, sceneVisibility } from '../src/lib/filters';
+import { NO_TAGS, acceptTag, activeTag, matchesTag, parseQuery, parseToken, splitCommitted, suggestTags, type TagTarget } from '../src/lib/search-tags';
 
+// What the tags do with a set of entities (only / hide, AND / OR, negation) is tested in query.test.ts.
 const sat = (id: string, kind: string, group: string | undefined, aliases: Record<string, string> = {}, colorKey?: string, bodyId = 'EARTH'): TagTarget =>
   ({ id, kind, group, aliases, bodyId, render: colorKey ? { colorKey } : undefined });
 
@@ -15,7 +12,8 @@ const DEB = sat('sat-33791', 'debris', 'cosmos-2251-debris', { norad: '33791', c
 const LRO = sat('dsn-LRO', 'probe', 'dsn', { dsn: 'LRO' }, undefined, 'MOON');
 const MOON = sat('body-moon', 'moon', 'bodies', {}, 'body', 'EARTH');
 const ALL = [ISS, STAR, GPS, DEB, LRO, MOON];
-const ids = (f: ReturnType<typeof parseQuery>['tags']) => ALL.filter((r) => matchesTags(r, f)).map((r) => r.id);
+/** the entities that match the single tag `word` */
+const ids = (word: string) => ALL.filter((r) => { const t = parseToken(word)!; return matchesTag(r, t.key, t.value); }).map((r) => r.id);
 
 describe('parseToken', () => {
   it('reads key:value, #group and a leading minus, lower-casing the value', () => {
@@ -57,109 +55,31 @@ describe('parseQuery', () => {
     expect(parseQuery('#')).toEqual({ text: '', tags: NO_TAGS });
     expect(parseQuery('   ')).toEqual({ text: '', tags: NO_TAGS });
   });
-  it('round-trips through the canonical words', () => {
-    const p = parseQuery('#starlink type:probe -cat:debris launch:2024-123');
-    expect(tagTokens(p.tags)).toEqual(['kind:probe', 'group:starlink', 'launch:2024-123', '-cat:debris']);
-    expect(parseQuery(tagTokens(p.tags).join(' ')).tags).toEqual(p.tags);
+  it('reads the canonical form of every spelling', () => {
+    const p = parseQuery('#starlink type:probe -category:debris launch:2024-123');
+    expect(p.tags).toEqual({ include: { group: ['starlink'], kind: ['probe'], launch: ['2024-123'] }, exclude: { cat: ['debris'] } });
   });
 });
 
-describe('matchesTags', () => {
+describe('matchesTag', () => {
   it('matches group, kind, id, body, launch and category', () => {
-    expect(ids(parseQuery('group:starlink').tags)).toEqual(['sat-44713']);
-    expect(ids(parseQuery('kind:probe').tags)).toEqual(['dsn-LRO']);
-    expect(ids(parseQuery('id:25544').tags)).toEqual(['sat-25544']);
-    expect(ids(parseQuery('id:1998-067a').tags)).toEqual(['sat-25544']);
-    expect(ids(parseQuery('body:moon').tags)).toEqual(['dsn-LRO']);
-    expect(ids(parseQuery('body:earth').tags)).toEqual(ids(NO_TAGS));
-    expect(ids(parseQuery('body:sun').tags)).toEqual(ids(NO_TAGS));
-    expect(ids(parseQuery('body:mars').tags)).toEqual([]);
-    expect(ids(parseQuery('launch:1993-036').tags)).toEqual(['sat-33791']);
-    expect(ids(parseQuery('launch:1997').tags)).toEqual(['sat-24876']);
-    expect(ids(parseQuery('cat:navigation').tags)).toEqual(['sat-24876']);
+    expect(ids('group:starlink')).toEqual(['sat-44713']);
+    expect(ids('kind:probe')).toEqual(['dsn-LRO']);
+    expect(ids('id:25544')).toEqual(['sat-25544']);
+    expect(ids('id:1998-067a')).toEqual(['sat-25544']);
+    expect(ids('body:moon')).toEqual(['dsn-LRO']);
+    expect(ids('body:earth')).toHaveLength(ALL.length);
+    expect(ids('body:sun')).toHaveLength(ALL.length);
+    expect(ids('body:mars')).toEqual([]);
+    expect(ids('launch:1993-036')).toEqual(['sat-33791']);
+    expect(ids('launch:1997')).toEqual(['sat-24876']);
+    expect(ids('launch:199')).toEqual([]); // a year, not a prefix of digits
+    expect(ids('cat:navigation')).toEqual(['sat-24876']);
   });
   it('matches a group by its word prefix', () => {
-    expect(ids(parseQuery('group:cosmos').tags)).toEqual(['sat-33791']);
-    expect(ids(parseQuery('group:gps').tags)).toEqual(['sat-24876']);
-    expect(ids(parseQuery('group:star').tags)).toEqual([]);
-  });
-  it('ANDs different keys and ORs the values of one key', () => {
-    expect(ids(parseQuery('group:starlink group:gps-ops').tags)).toEqual(['sat-44713', 'sat-24876']);
-    expect(ids(parseQuery('kind:satellite group:gps-ops').tags)).toEqual(['sat-24876']);
-    expect(ids(parseQuery('kind:station group:gps-ops').tags)).toEqual([]);
-  });
-  it('negation removes matches, alone or with an inclusion', () => {
-    expect(ids(parseQuery('-kind:satellite').tags)).toEqual(['sat-25544', 'sat-33791', 'dsn-LRO', 'body-moon']);
-    expect(ids(parseQuery('kind:satellite -group:starlink').tags)).toEqual(['sat-24876']);
-    expect(ids(parseQuery('-group:starlink -group:gps-ops -kind:debris').tags)).toEqual(['sat-25544', 'dsn-LRO', 'body-moon']);
-  });
-  it('no tags matches everything', () => {
-    expect(ids(NO_TAGS)).toHaveLength(ALL.length);
-    expect(tagsActive(NO_TAGS)).toBe(false);
-    expect(tagsActive(parseQuery('x').tags)).toBe(false);
-    expect(tagsActive(parseQuery('-id:7').tags)).toBe(true);
-  });
-});
-
-describe('filters with tags', () => {
-  it('matchesFilters and sceneVisibility use the tags, filtersActive counts them', () => {
-    const f = { ...NO_FILTERS, tags: parseQuery('group:starlink').tags };
-    expect(filtersActive(f)).toBe(true);
-    expect(matchesFilters(STAR, f)).toBe(true);
-    expect(matchesFilters(GPS, f)).toBe(false);
-    expect(sceneVisibility(STAR, f)).toBe('show');
-    expect(sceneVisibility(GPS, f)).toBe('hide');
-  });
-});
-
-describe('hidden groups', () => {
-  const hidden = parseQuery('cat:debris').tags.include;
-  it('hides the entities of a hidden category or tag, not the others', () => {
-    expect(isHiddenBy(DEB, hidden)).toBe(true);
-    expect(isHiddenBy(STAR, hidden)).toBe(false);
-    const h2 = toggleHidden(hidden, 'group', 'starlink');
-    expect(isHiddenBy(STAR, h2)).toBe(true);
-    expect(isHiddenBy(GPS, h2)).toBe(false);
-    expect(hiddenCount(h2)).toBe(2);
-    expect(hiddenTokens(h2)).toEqual(['group:starlink', 'cat:debris']);
-  });
-  it('is an OR across keys', () => {
-    const h = { kind: ['station'], body: ['moon'] };
-    expect(ALL.filter((r) => isHiddenBy(r, h)).map((r) => r.id)).toEqual(['sat-25544', 'dsn-LRO']);
-  });
-  it('never hides the bodies, which are scenery', () => {
-    expect(isHiddenBy(MOON, { cat: ['bodies'], kind: ['moon'], group: ['bodies'], body: ['earth'] })).toBe(false);
-  });
-  it('toggles on and off, returning the same object when nothing changes', () => {
-    const on = toggleHidden({}, 'cat', 'debris');
-    expect(on).toEqual({ cat: ['debris'] });
-    expect(toggleHidden(on, 'cat', 'debris')).toEqual({});
-    expect(toggleHidden(on, 'cat', 'debris', true)).toBe(on);
-    expect(toggleHidden({}, 'cat', 'debris', false)).toEqual({});
-  });
-  it('is not a filter: the list keeps the entities, the scene hides them unless they are selected', () => {
-    const f = { ...NO_FILTERS, hidden };
-    expect(filtersActive(f)).toBe(false);
-    expect(matchesFilters(DEB, f)).toBe(true);
-    expect(isHiddenRec(DEB, f)).toBe(true);
-    expect(sceneVisibility(DEB, f)).toBe('hide');
-    expect(sceneVisibility(DEB, f, true)).toBe('show');
-    expect(sceneVisibility(STAR, f)).toBe('show');
-  });
-  it('composes with a kind filter: both must let the entity through', () => {
-    const f = { ...NO_FILTERS, kinds: new Set(['satellite']), hidden: { group: ['starlink'] } };
-    expect(sceneVisibility(GPS, f)).toBe('show');
-    expect(sceneVisibility(STAR, f)).toBe('hide');
-    expect(sceneVisibility(DEB, f)).toBe('hide');
-  });
-  it('round-trips through its stored form and survives garbage', () => {
-    const h = { cat: ['debris', 'ground'], group: ['starlink'] };
-    expect(parseHidden(serialiseHidden(h))).toEqual(h);
-    expect(serialiseHidden({})).toBe('{}');
-    for (const raw of [null, undefined, '', 'nope', '[]', '42', 'null', '{"cat":"debris"}', '{"cat":[1,null,""]}', '{"zzz":["a"]}']) {
-      expect(parseHidden(raw as string | null | undefined)).toEqual({});
-    }
-    expect(parseHidden('{"cat":["debris",7,"debris"],"kind":["Launch-Vehicle"],"x":["y"]}')).toEqual({ cat: ['debris'], kind: ['launch_vehicle'] });
+    expect(ids('group:cosmos')).toEqual(['sat-33791']);
+    expect(ids('group:gps')).toEqual(['sat-24876']);
+    expect(ids('group:star')).toEqual([]);
   });
 });
 

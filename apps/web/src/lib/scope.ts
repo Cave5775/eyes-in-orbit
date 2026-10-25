@@ -13,7 +13,7 @@
  * Beyond the scope radius the satellite cloud is thinned out over one more radius instead of being cut at an edge
  * (a stable pseudo-random subset, so the sky does not shimmer while zooming); individual entities (probes, stations,
  * pads) are cut at 1.5 radii. Whatever the policy, the caller always keeps the selection, its related objects, the
- * hovered object, and (while a kind, group or launch filter is on) the objects the filter lets through.
+ * hovered object, and (while the search has an only or text term) the objects it lets through.
  *
  * Horizon culling is separate and exact (`lib/occlusion.ts`, also done in the point shader): this module only decides
  * by distance from the focus. All distances in km.
@@ -56,7 +56,7 @@ export interface ScopeObject {
   key: number;
   /** member of a bulk cloud (the SGP4 catalogue): thinned rather than cut */
   bulk: boolean;
-  /** selected, related, hovered or let through by an active filter: never culled */
+  /** selected, related, hovered or let through by the search: never culled */
   keep: boolean;
   /** entity kind; celestial bodies (see `SCOPE_EXEMPT_KINDS`) are never thinned or cut */
   kind?: string;

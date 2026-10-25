@@ -3,10 +3,12 @@ import { bodyEntityRecords } from '@eio/core';
 import type {
   Article, ClockSnapshot, ConnectorHealth, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch, TelemetryPoint,
 } from '@eio/core';
-import { NO_FILTERS, toggled, type Filters, type LaunchMode, type SearchHit } from '../lib/filters';
+import { rankEntities, type SearchHit } from '../lib/filters';
 import {
-  NO_HIDDEN, parseHidden, serialiseHidden, tagTokens, toggleHidden, type HiddenTags, type TagFilter, type TagKey,
-} from '../lib/search-tags';
+  NO_QUERY, addTerms, legacyHiddenTerms, parseStoredQuery, removeTerm, sameQuery, serialiseQuery, setTermEffect, textOf, toggleTerm,
+  withText, withoutFilter, withoutHidden, type Effect, type Query, type Term, type TermKey,
+} from '../lib/query';
+import type { TagKey } from '../lib/search-tags';
 import {
   closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, viewportNow,
   type FloatWindow,
@@ -14,7 +16,7 @@ import {
 import { useMemo } from 'react';
 import { EARTH_CENTRE, frameChainLabel, centreLabel, frameCrumbs, isEarthCentre, type Centre, type Crumb } from '../lib/frame';
 import { frameOnSelect, loadFrame, resolveFrame, saveFrame } from '../lib/frame-store';
-import { clock, runtime } from './runtime';
+import { clock } from './runtime';
 
 export type ConnState = 'connecting' | 'live' | 'reconnecting' | 'offline' | 'mock';
 
@@ -51,9 +53,17 @@ interface State {
   /** locked: selecting objects never changes the frame (only `setFrame`, `resetView` and a vanished frame entity do) */
   frameLocked: boolean;
   focus: FocusRequest | null;
-  query: string;
-  searchResults: SearchHit[] | null;
-  filters: Filters;
+  /**
+   * What the search field, the entity list, the tree and the scene show (lib/query.ts): the tag terms (chips) with their
+   * effect, only or hide, and the typed text as a term. The tag terms are remembered (`localStorage['eio.query']`).
+   */
+  query: Query;
+  /** HIGHLIGHT: dim everything but the selection, its related objects and what the query matches instead of hiding it. Remembered. */
+  highlight: boolean;
+  /** the entities the query's text matches, best first (local ranking of the whole table); null without text */
+  textHits: SearchHit[] | null;
+  /** the ids of `textHits`: the `ctx.text` of `classify` */
+  textIds: ReadonlySet<string> | null;
   launches: Launch[];
   news: Article[];
   dsn: DsnSnapshot | null;
@@ -93,20 +103,21 @@ interface State {
   setFrame(id: Centre, lock?: boolean): void;
   setFrameLocked(locked: boolean): void;
   setFollow(follow: boolean): void;
-  setQuery(q: string): void;
-  setSearchResults(r: SearchHit[] | null): void;
-  toggleKind(kind: string): void;
-  toggleGroup(group: string): void;
-  /** The tags of the search field (`group:starlink`, `-kind:debris`...); they filter the list and the scene. */
-  setTags(tags: TagFilter): void;
-  /** Hide (or with `on` false show again) the entities of a group, `key:value` as in the search tags, e.g. `cat`, `debris`. */
-  toggleHidden(key: TagKey, value: string, on?: boolean): void;
-  /** Show every hidden group again. */
+  setQuery(q: Query): void;
+  /** The chip / eye click on `key:value`: add it with `effect` (default only), remove it when it has that effect, else switch it. */
+  toggleTerm(key: TagKey, value: string, effect?: Effect): void;
+  /** Switch the effect of a term (an only chip to hide and back). */
+  setTermEffect(key: TermKey, value: string, effect: Effect, neg?: boolean): void;
+  removeTerm(key: TermKey, value: string, neg?: boolean): void;
+  /** Add tag terms (the chips the search field commits); terms already there are left alone. */
+  addTerms(terms: readonly Term[], override?: boolean): void;
+  /** The typed text of the search field (the text term; '' removes it). */
+  setText(text: string): void;
+  /** CLEAR: no only term and no text; the hide terms stay unless `hidden` (SHOW ALL clears those alone). */
+  clearQuery(hidden?: boolean): void;
+  /** SHOW ALL: no hide term left. */
   showAll(): void;
-  /** Select a launch group (`YYYY-NNN`) or clear it with null; `memberIds` are passed to `runtime.onFitRequest`. */
-  setLaunchFilter(launchId: string | null, memberIds?: string[]): void;
-  setLaunchMode(mode: LaunchMode): void;
-  clearFilters(): void;
+  setHighlight(on: boolean): void;
   setLaunches(l: Launch[]): void;
   setNews(n: Article[]): void;
   setDsn(d: DsnSnapshot): void;
@@ -117,19 +128,54 @@ interface State {
 
 let nonce = 0;
 
-const HIDDEN_KEY = 'eio.hidden';
-/** the hidden groups remembered in this browser (nothing hidden when storage is blocked or the value is malformed) */
-function loadHidden(): HiddenTags {
+const QUERY_KEY = 'eio.query';
+/** the old key of the hidden groups: read once into hide terms, then deleted */
+const LEGACY_HIDDEN_KEY = 'eio.hidden';
+const HIGHLIGHT_KEY = 'eio.highlight';
+
+/**
+ * The tag terms remembered in this browser (empty when storage is blocked or the value is malformed). A leftover
+ * `eio.hidden` becomes hide terms once and is deleted.
+ */
+function loadQuery(): Query {
   try {
-    return parseHidden(localStorage.getItem(HIDDEN_KEY));
+    let q = parseStoredQuery(localStorage.getItem(QUERY_KEY));
+    const legacy = localStorage.getItem(LEGACY_HIDDEN_KEY);
+    if (legacy !== null) {
+      q = addTerms(q, legacyHiddenTerms(legacy));
+      saveQuery(q);
+      localStorage.removeItem(LEGACY_HIDDEN_KEY);
+    }
+    return q;
   } catch {
-    return NO_HIDDEN;
+    return NO_QUERY;
   }
 }
-function saveHidden(h: HiddenTags): void {
+function saveQuery(q: Query): void {
   try {
-    localStorage.setItem(HIDDEN_KEY, serialiseHidden(h));
+    localStorage.setItem(QUERY_KEY, serialiseQuery(q));
   } catch { /* private window: the choice just is not remembered */ }
+}
+function loadHighlight(): boolean {
+  try {
+    return localStorage.getItem(HIGHLIGHT_KEY) === 'on';
+  } catch {
+    return false;
+  }
+}
+function saveHighlight(on: boolean): void {
+  try {
+    localStorage.setItem(HIGHLIGHT_KEY, on ? 'on' : 'off');
+  } catch { /* private window: the choice just is not remembered */ }
+}
+
+type TextState = Pick<State, 'textHits' | 'textIds'>;
+const NO_TEXT: TextState = { textHits: null, textIds: null };
+/** The text term looked up once, here, not per frame: every entity the text matches, best first. */
+function lookUpText(text: string, entities: ReadonlyMap<string, EntityRecord>): TextState {
+  if (!text) return NO_TEXT;
+  const textHits = rankEntities(entities.values(), text, Infinity);
+  return { textHits, textIds: new Set(textHits.map((h) => h.id)) };
 }
 /** the remembered frame is restored once, when the first full catalog arrives */
 let frameRestorePending = true;
@@ -158,9 +204,9 @@ export const useStore = create<State>((set, get) => ({
   frame: EARTH_CENTRE,
   frameLocked: false,
   focus: null,
-  query: '',
-  searchResults: null,
-  filters: { ...NO_FILTERS, hidden: loadHidden() },
+  query: loadQuery(),
+  highlight: loadHighlight(),
+  ...NO_TEXT,
   launches: [],
   news: [],
   dsn: null,
@@ -181,6 +227,9 @@ export const useStore = create<State>((set, get) => ({
       if (selectedId !== null && !next.has(selectedId)) Object.assign(patch, { selectedId: null, follow: false });
       if (!isEarthCentre(frame) && !next.has(frame)) Object.assign(patch, { frame: EARTH_CENTRE, frameLocked: false });
     }
+    // the text term follows the catalog (the ids it matches), but only when the catalog changed in size or was replaced
+    const text = textOf(get().query);
+    if (text && (replace || next.size !== get().entities.size)) Object.assign(patch, lookUpText(text, next));
     set(patch);
     // the first full catalog is the moment to restore the remembered frame (its entity or body must exist)
     if (replace && frameRestorePending && next.size > 0) {
@@ -230,22 +279,19 @@ export const useStore = create<State>((set, get) => ({
     if (locked !== get().frameLocked) set({ frameLocked: locked });
   },
   setFollow: (follow) => set({ follow }),
-  setQuery: (query) => set({ query }),
-  setSearchResults: (searchResults) => set({ searchResults }),
-  toggleKind: (k) => set((s) => ({ filters: { ...s.filters, kinds: toggled(s.filters.kinds, k) } })),
-  toggleGroup: (g) => set((s) => ({ filters: { ...s.filters, groups: toggled(s.filters.groups, g) } })),
-  setTags: (tags) => set((s) => (tagTokens(s.filters.tags ?? { include: {}, exclude: {} }).join(' ') === tagTokens(tags).join(' ') ? s : { filters: { ...s.filters, tags } })),
-  toggleHidden: (key, value, on) => set((s) => {
-    const hidden = toggleHidden(s.filters.hidden ?? NO_HIDDEN, key, value, on);
-    return hidden === s.filters.hidden ? s : { filters: { ...s.filters, hidden } };
+  setQuery: (query) => set((s) => {
+    if (sameQuery(s.query, query)) return s;
+    const text = textOf(query);
+    return { query, ...(text === textOf(s.query) ? {} : lookUpText(text, s.entities)) };
   }),
-  showAll: () => set((s) => (s.filters.hidden && Object.keys(s.filters.hidden).length ? { filters: { ...s.filters, hidden: NO_HIDDEN } } : s)),
-  setLaunchFilter(launchId, memberIds) {
-    set((s) => ({ filters: { ...s.filters, launch: launchId } }));
-    if (launchId && memberIds?.length) runtime.onFitRequest?.(memberIds);
-  },
-  setLaunchMode: (launchMode) => set((s) => ({ filters: { ...s.filters, launchMode } })),
-  clearFilters: () => set((s) => ({ filters: { ...NO_FILTERS, launchMode: s.filters.launchMode, hidden: s.filters.hidden } })),
+  toggleTerm: (key, value, effect = 'only') => get().setQuery(toggleTerm(get().query, key, value, effect)),
+  setTermEffect: (key, value, effect, neg = false) => get().setQuery(setTermEffect(get().query, key, value, effect, neg)),
+  removeTerm: (key, value, neg = false) => get().setQuery(removeTerm(get().query, key, value, neg)),
+  addTerms: (terms, override = false) => get().setQuery(addTerms(get().query, terms, override)),
+  setText: (text) => get().setQuery(withText(get().query, text)),
+  clearQuery: (hidden = false) => get().setQuery(hidden ? NO_QUERY : withoutFilter(get().query)),
+  showAll: () => get().setQuery(withoutHidden(get().query)),
+  setHighlight: (highlight) => set((s) => (s.highlight === highlight ? s : { highlight })),
   setLaunches: (launches) => set({ launches }),
   setNews: (news) => set({ news }),
   setDsn: (dsn) => set({ dsn }),
@@ -297,5 +343,6 @@ clock.subscribe((snap) => useStore.setState({ clock: snap }));
 useStore.subscribe((s, p) => {
   if (s.floats !== p.floats) saveFloats(s.floats);
   if (s.frame !== p.frame) saveFrame(s.frame); // the lock is not remembered, only the centre
-  if (s.filters.hidden !== p.filters.hidden) saveHidden(s.filters.hidden ?? NO_HIDDEN);
+  if (s.query !== p.query && serialiseQuery(s.query) !== serialiseQuery(p.query)) saveQuery(s.query); // the typed text is not remembered
+  if (s.highlight !== p.highlight) saveHighlight(s.highlight);
 });

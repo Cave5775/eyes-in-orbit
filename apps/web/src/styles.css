@@ -283,26 +283,6 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .seg-btn:hover { color: var(--text); }
 .seg-btn.on { background: rgba(79, 179, 217, 0.12); color: var(--accent); }
 .vlist { flex: 1; min-height: 0; overflow-y: auto; }
-/* launch filter */
-.launch-filter { padding: 6px 10px 2px; }
-.launch-head { font-size: 10px; letter-spacing: 0.08em; margin-bottom: 3px; }
-.launch-filter input {
-  width: 100%; background: var(--bg); border: 1px solid var(--line-2); border-radius: 3px; color: var(--text);
-  padding: 5px 9px; font: 12px var(--mono); outline: none;
-}
-.launch-filter input:focus { border-color: var(--accent); }
-.launch-filter input:disabled { opacity: 0.5; }
-.launch-options { list-style: none; margin: 3px 0 0; padding: 0; max-height: 190px; overflow-y: auto; border: 1px solid var(--line-2); border-radius: 3px; background: var(--panel-2); }
-.launch-opt, .launch-none { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; cursor: pointer; }
-.launch-none { cursor: default; }
-.launch-opt.cur { background: rgba(79, 179, 217, 0.14); }
-.launch-opt[aria-selected='true'] { color: var(--accent); }
-.launch-opt-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.launch-opt-id { font-size: 10px; flex: none; }
-.launch-opt-n { flex: none; min-width: 5ch; text-align: right; }
-.launch-active { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
-.launch-chip { max-width: 100%; }
-.launch-chip-name { overflow: hidden; text-overflow: ellipsis; }
 .row {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 0 12px; background: transparent; border: 0;
   border-left: 2px solid transparent; text-align: left; overflow: hidden;
@@ -530,7 +510,7 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 .chip.more:hover { border-color: var(--accent); }
 /* ==== end WP5 ==== */
 
-/* ==== SEARCH-TAGS: tag chips in the search field, suggestions, categories with hide toggles, hidden strip ==== */
+/* ==== SEARCH-TAGS: tag chips in the search field, suggestions, categories with hide toggles, hidden chips ==== */
 .search { position: relative; }
 .search-box {
   display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; background: var(--bg); border: 1px solid var(--line-2);
@@ -576,15 +556,10 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 .row > .eye { height: 18px; border-color: transparent; }
 .row:hover > .eye, .row > .eye.off { border-color: var(--line-2); }
 .row > .eye.off { border-color: rgba(224, 164, 58, 0.55); }
-.hidden-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 5px 10px 0; }
-.hidden-label { color: var(--warn); font: 9.5px var(--mono); letter-spacing: 0.1em; }
-.chip.hid { color: var(--warn); border-color: rgba(224, 164, 58, 0.5); background: rgba(224, 164, 58, 0.06); }
-.chip.hid:hover { color: var(--text); }
-.hidden-note { flex-basis: 100%; color: var(--dim); font-size: 10px; }
+.tagchip.hide { border-color: rgba(224, 164, 58, 0.55); color: var(--warn); background: rgba(224, 164, 58, 0.08); }
+.tagchip.hide .tagchip-text { text-decoration: line-through; text-decoration-color: rgba(224, 164, 58, 0.6); }
 .row.is-hidden { opacity: 0.45; }
 .row.is-hidden .row-name { text-decoration: line-through; text-decoration-color: rgba(224, 164, 58, 0.6); }
 .row.is-hidden > .eye { opacity: 1; }
 .tree-group-name { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 0; background: transparent; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 /* ==== end SEARCH-TAGS ==== */
-.row-hidden { flex: none; color: var(--warn); font-size: 9px; letter-spacing: 0.08em; border: 1px solid rgba(224, 164, 58, 0.5); border-radius: 2px; padding: 0 3px; }
-.row.sel.is-hidden { opacity: 0.8; }

@@ -23,14 +23,15 @@ const HELP: [string, string][] = [
   ['Left drag', 'Orbit (surface view: look around the local horizon)'],
   ['Right / Shift drag', 'Pan (surface view: lets go of the followed object and slides along the ground at its height)'],
   ['Wheel / pinch', 'Zoom: step scales with height above the surface'],
-  ['Click', 'Select an object; hover for its name. Where several overlap a list opens (highest in the hierarchy first, then newest): wheel or arrows choose, click or Enter selects, Esc closes. Zoomed out, the small objects over a small distant body (Earth under about 80 px wide) are not drawn: a click there selects the body directly. The selection, related and filtered objects, launch vehicles and pads stay drawn'],
+  ['Click', 'Select an object; hover for its name. Where several overlap a list opens (highest in the hierarchy first, then newest): wheel or arrows choose, click or Enter selects, Esc closes. Zoomed out, the small objects over a small distant body (Earth under about 80 px wide) are not drawn: a click there selects the body directly. The selection, related and searched-for objects, launch vehicles and pads stay drawn'],
   ['Click a launch path', 'With a launch (or its booster) selected, clicking its drawn trajectory jumps the simulation clock to the moment at that point of the flight (T+ shown while hovering), at the current rate. Objects, the choice list and the Earth always take the click first'],
   ['F', 'Fit the selection and its related objects'],
-  ['Shift+F', 'Fit everything visible (respects filters)'],
+  ['Shift+F', 'Fit everything visible (respects the search and the hidden groups)'],
   ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or SURFACE switches to the globe view, and that choice is remembered until you press S again'],
   ['Esc', 'Deselect and return to the Earth view'],
   ['MODEL', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or MODEL on such a selection flies to it'],
-  ['LABELS', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a filter on, the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
+  ['LABELS', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
+  ['HIGHLIGHT', 'Dims everything but the selection, the objects related to it and what the search matches (smaller, fainter points) instead of hiding what the search leaves out. Hidden groups stay hidden. Off by default, remembered'],
   ['PANELS (top bar)', 'Show or hide the DSN panel (hidden by default), the launch board, the news ticker and the colour legend (top left of the scene); a hidden panel gives its space back to the globe and the choice is remembered'],
   ['H', 'Show / hide this help'],
 ];
@@ -63,6 +64,8 @@ export function SceneView() {
   const showLegend = usePanels((s) => s.visible.legend);
   const selectedId = useStore((s) => s.selectedId);
   const follow = useStore((s) => s.follow);
+  const highlight = useStore((s) => s.highlight);
+  const setHighlight = useStore((s) => s.setHighlight);
   const resetView = useStore((s) => s.resetView);
   const setFollow = useStore((s) => s.setFollow);
 
@@ -197,28 +200,31 @@ export function SceneView() {
     try {
       ctl.setLabelsEnabled(localStorage.getItem('eio.labels') !== 'off');
     } catch { /* storage blocked: labels stay on */ }
-    ctl.setFilters(s0.filters);
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
-    ctl.setSelected(s0.selectedId);
+    // the query, the selection with the objects related to it (never hidden, filtered out nor scoped out; same lookup FIT
+    // uses) and HIGHLIGHT reach the scene together
+    const syncView = (s: ReturnType<typeof store.getState>) => {
+      const rec = s.selectedId ? s.entities.get(s.selectedId) : undefined;
+      ctl.setView({
+        query: s.query, text: s.textIds, selectedId: s.selectedId, highlight: s.highlight,
+        related: rec ? relatedFor(rec, { entities: s.entities, launches: s.launches, dsn: s.dsn }).ids : [],
+      });
+    };
+    syncView(s0);
     ctl.setFrame(s0.frame, s0.frameLocked);
     // a camera request made before this controller existed (the frame restored from storage when the catalog was already there,
     // a remount): the new controller starts at the home view, so replay it and then the follow flag the store holds
     if (s0.focus) ctl.focus(s0.focus);
     ctl.setFollow(s0.follow);
-    // objects related to the selection are never scoped out (same lookup FIT uses)
-    const syncRelated = (s: ReturnType<typeof store.getState>) => {
-      const rec = s.selectedId ? s.entities.get(s.selectedId) : undefined;
-      ctl.setRelated(rec ? relatedFor(rec, { entities: s.entities, launches: s.launches, dsn: s.dsn }).ids : []);
-    };
-    syncRelated(s0);
     const unsub = store.subscribe((s, p) => {
       if (s.entities !== p.entities) ctl.setEntities(s.entities);
-      if (s.filters !== p.filters) ctl.setFilters(s.filters);
       if (s.launches !== p.launches) ctl.setLaunches(s.launches);
-      if (s.selectedId !== p.selectedId) ctl.setSelected(s.selectedId);
+      if (
+        s.query !== p.query || s.textIds !== p.textIds || s.highlight !== p.highlight || s.selectedId !== p.selectedId
+        || s.entities !== p.entities || s.launches !== p.launches || s.dsn !== p.dsn
+      ) syncView(s);
       if (s.frame !== p.frame || s.frameLocked !== p.frameLocked) ctl.setFrame(s.frame, s.frameLocked);
-      if (s.selectedId !== p.selectedId || s.entities !== p.entities || s.launches !== p.launches || s.dsn !== p.dsn) syncRelated(s);
       if (s.follow !== p.follow) ctl.setFollow(s.follow);
       if (s.focus !== p.focus && s.focus) ctl.focus(s.focus);
       if (s.iss.fix !== p.iss.fix) ctl.setIssFix(s.iss.fix);
@@ -277,19 +283,22 @@ export function SceneView() {
         {selModel && (
           <button className="btn" onClick={showModel} title={`Fly to the 3D model (${selModel.label}) and follow it. It replaces the point sprite within ${selModel.lodKm} km.`}>MODEL</button>
         )}
-        <button className="btn" onClick={fitVisible} title="Frame everything currently visible, respecting filters (Shift+F)">FIT VISIBLE</button>
+        <button className="btn" onClick={fitVisible} title="Frame everything currently visible, respecting the search and the hidden groups (Shift+F)">FIT VISIBLE</button>
         <button className={surface ? 'btn active' : 'btn'} onClick={toggleSurface} aria-pressed={surface} title="Surface-aligned camera: centred on the selected object, level horizon, north-up. On by default near the Earth; turn it off for the globe view, the choice is remembered (S)">
           SURFACE
         </button>
         <button className="btn" onClick={resetView} title="Deselect and return to the Earth view (Esc)">EARTH VIEW</button>
-        <button className={scopeAll ? 'btn active' : 'btn'} onClick={toggleScope} aria-pressed={scopeAll} title="Scope: AUTO draws only what is relevant to the camera focus (nearby objects, the selection and what is related to it, everything a filter lets through); ALL draws everything the filters allow">
+        <button className={scopeAll ? 'btn active' : 'btn'} onClick={toggleScope} aria-pressed={scopeAll} title="Scope: AUTO draws only what is relevant to the camera focus (nearby objects, the selection and what is related to it, everything the search lets through); ALL draws everything the search allows">
           SCOPE {scopeAll ? 'ALL' : 'AUTO'}
         </button>
         <button className={detailOn ? 'btn active' : 'btn'} onClick={toggleDetail} aria-pressed={detailOn} title="Close-up detail: below about 2,600 km, finer Earth imagery (NASA Blue Marble, up to 0.6 km per pixel) is streamed through the local server and laid over the base map. Off keeps the base map only.">
           DETAIL
         </button>
-        <button className={labelsOn ? 'btn active' : 'btn'} onClick={toggleLabels} aria-pressed={labelsOn} title="Labels: names next to the Sun, planets and moons when zoomed out, next to the selection, and next to the satellites a filter lets through (at most 48, the ones nearest the screen centre first). Off hides all of them. Remembered.">
+        <button className={labelsOn ? 'btn active' : 'btn'} onClick={toggleLabels} aria-pressed={labelsOn} title="Labels: names next to the Sun, planets and moons when zoomed out, next to the selection, and next to the satellites a search lets through (at most 48, the ones nearest the screen centre first). Off hides all of them. Remembered.">
           LABELS
+        </button>
+        <button className={highlight ? 'btn active' : 'btn'} onClick={() => setHighlight(!highlight)} aria-pressed={highlight} title="Highlight: dim everything except the selection, the objects related to it and what the search matches, instead of hiding what the search leaves out. Hidden groups stay hidden. Remembered.">
+          HIGHLIGHT
         </button>
         <button className={help ? 'btn icon active' : 'btn icon'} onClick={() => setHelp((v) => !v)} aria-pressed={help} title="Controls (H)">?</button>
       </div>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords, type EntityRecord } from '@eio/core';
 import {
-  BODY_KINDS, CATEGORIES, bodyFacts, capChips, categoryCounts, categoryOf, emptyHint, GROUP_CHIP_CAP,
+  CATEGORIES, bodyFacts, categoryCounts, categoryOf, emptyHint,
 } from '../src/lib/browser-ui';
 import { EARTH_CENTRE } from '../src/lib/frame';
 import { frameOnSelect, loadFrame, parseFrame, resolveFrame, saveFrame, serialiseFrame } from '../src/lib/frame-store';
@@ -68,29 +68,6 @@ describe('frame persistence helpers', () => {
     expect(loadFrame(bad)).toBeNull();
     expect(saveFrame(EARTH_CENTRE, bad)).toBe(false);
     expect(saveFrame(EARTH_CENTRE, null)).toBe(false);
-  });
-});
-
-describe('capChips', () => {
-  const many: [string, number][] = Array.from({ length: 30 }, (_, i) => [`g${i}`, 100 - i]);
-  it('keeps everything when it fits', () => {
-    expect(capChips(many.slice(0, 5), 14)).toEqual({ shown: many.slice(0, 5), hidden: 0 });
-  });
-  it('caps to the top n and counts the rest', () => {
-    const r = capChips(many, GROUP_CHIP_CAP);
-    expect(r.shown).toHaveLength(14);
-    expect(r.hidden).toBe(16);
-  });
-  it('keeps pinned and active chips beyond the cap, in the original order', () => {
-    const kinds: [string, number][] = [...many.slice(0, 12), ['star', 1], ['planet', 3], ['moon', 2]];
-    const r = capChips(kinds, 10, { pinned: BODY_KINDS });
-    expect(r.shown.map(([k]) => k)).toEqual([...kinds.slice(0, 10).map(([k]) => k), 'star', 'planet', 'moon']);
-    expect(r.hidden).toBe(2);
-    const a = capChips(many, 3, { active: new Set(['g20']) });
-    expect(a.shown.map(([k]) => k)).toEqual(['g0', 'g1', 'g2', 'g20']);
-  });
-  it('expanded shows every chip', () => {
-    expect(capChips(many, 3, { expanded: true })).toEqual({ shown: many, hidden: 0 });
   });
 });
 

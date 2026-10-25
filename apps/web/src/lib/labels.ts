@@ -1,13 +1,13 @@
 /**
  * Screen-space object labels, split from three.js so the rules can be tested: which labels are shown, which are dropped
- * and how they fade. The scene projects its candidates (bodies, the selection, featured and filtered objects) to CSS px
+ * and how they fade. The scene projects its candidates (bodies, the selection, featured objects and what the search matches) to CSS px
  * and hands them to a `LabelPlanner`; the DOM layer (scene/LabelLayer.ts) draws what comes back.
  *
  * Rules:
  * - a body label fades with the body's apparent size: full while it is a small disc, gone once it fills the view (so
  *   labels appear when zoomed out and the default Earth view stays clean);
- * - priority: the selection, then the hovered object, then bodies, then entities marked `render.label`, then filtered
- *   satellites; inside a class the one nearest the screen centre wins. A label that was shown last frame gets a small
+ * - priority: the selection, then the hovered object, then bodies, then entities marked `render.label`, then the
+ *   satellites a search (text or tags) lets through; inside a class the one nearest the screen centre wins. A label that was shown last frame gets a small
  *   bonus so a declutter decision does not flicker as the camera moves;
  * - at most `MAX_LABELS` are shown, and a label whose box would overlap one already accepted is dropped (the selection
  *   and the hovered object are never dropped for overlap);
@@ -27,7 +27,7 @@ export const LABEL_GAP = 2;
 export const BODY_FADE_FULL_PX = 50;
 /** ... and one at or above this shows none (it fills the view and names itself), px. */
 export const BODY_FADE_NONE_PX = 220;
-/** Candidates a scan keeps per point set when a filter is active (the planner then picks at most `MAX_LABELS`). */
+/** Candidates a scan keeps per point set when a search is active (the planner then picks at most `MAX_LABELS`). */
 export const LABEL_SCAN_KEEP = 96;
 /** A label whose opacity is below this is not drawn. */
 const MIN_OPACITY = 0.03;

@@ -1,7 +1,7 @@
 import { defaultBodies, type EntityRecord } from '@eio/core';
 import { fmtDays, fmtKm, fmtNum } from './format';
 
-/** Pure parts of the detail panel's body facts and the EntityBrowser filter chips. */
+/** Pure parts of the detail panel's body facts and the EntityBrowser's category chips. */
 
 // ---------------------------------------------------------------- body attributes (detail panel)
 
@@ -36,39 +36,6 @@ export function bodyFacts(rec: Pick<EntityRecord, 'attrs' | 'bodyId' | 'parentId
 /** The detail panel's empty text; the DSN panel is named only while it is shown (it is hidden by default). */
 export const emptyHint = (dsnShown: boolean): string =>
   `Select an object on the globe, in the entity list or the launch board${dsnShown ? ' or the DSN panel' : ''}.`;
-
-// ---------------------------------------------------------------- filter chips
-
-export interface ChipCap {
-  shown: [string, number][];
-  /** chips left out, to put behind an "n more" button */
-  hidden: number;
-}
-
-export interface ChipCapOptions {
-  /** every chip is shown (the strip scrolls) */
-  expanded?: boolean;
-  /** chips that stay visible even beyond the cap (e.g. kinds `star`, `planet`, `moon`) */
-  pinned?: readonly string[];
-  /** chips that stay visible beyond the cap because they are switched on */
-  active?: ReadonlySet<string>;
-}
-
-/**
- * The first `cap` chips of a list sorted by count, plus the pinned and the active ones wherever they are (the original
- * order is kept), so that every chip is reachable: `hidden` counts the rest, the expander shows them.
- */
-export function capChips(entries: readonly [string, number][], cap: number, opts: ChipCapOptions = {}): ChipCap {
-  if (opts.expanded || entries.length <= cap) return { shown: [...entries], hidden: 0 };
-  const keep = new Set<string>(opts.pinned);
-  const shown = entries.filter(([k], i) => i < cap || keep.has(k) || opts.active?.has(k));
-  return { shown, hidden: entries.length - shown.length };
-}
-
-export const KIND_CHIP_CAP = 10;
-export const GROUP_CHIP_CAP = 14;
-/** body kinds are always among the kind chips when the catalog has them */
-export const BODY_KINDS: readonly string[] = ['star', 'planet', 'moon'];
 
 // ---------------------------------------------------------------- general categories (the browser's chips)
 
