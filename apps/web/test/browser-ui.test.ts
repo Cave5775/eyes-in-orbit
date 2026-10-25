@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords, type EntityRecord } from '@eio/core';
 import {
-  BODY_KINDS, CATEGORIES, activeBodyTab, bodyFacts, bodyTabs, capChips, categoryCounts, categoryOf, emptyHint, GROUP_CHIP_CAP,
+  BODY_KINDS, CATEGORIES, bodyFacts, capChips, categoryCounts, categoryOf, emptyHint, GROUP_CHIP_CAP,
 } from '../src/lib/browser-ui';
-import { EARTH_CENTRE, bodyCentre, entityCentre } from '../src/lib/frame';
+import { EARTH_CENTRE } from '../src/lib/frame';
 import { frameOnSelect, loadFrame, parseFrame, resolveFrame, saveFrame, serialiseFrame } from '../src/lib/frame-store';
 
 const bodies = bodyEntityRecords();
@@ -11,74 +11,63 @@ const byId = (id: string): EntityRecord => bodies.find((b) => b.id === id)!;
 const sat = (id: string): EntityRecord => ({ id, name: id, kind: 'satellite', bodyId: 'EARTH', aliases: {}, updatedAt: 0 });
 
 describe('frameOnSelect', () => {
-  it('a body entity gives its body, unless the frame is locked', () => {
-    expect(frameOnSelect(byId('body-moon'), false)).toEqual(bodyCentre('MOON'));
-    expect(frameOnSelect(byId('body-mars'), false)).toEqual(bodyCentre('MARS'));
+  it('an orbitable entity (a body entity) is its own frame, unless the frame is locked', () => {
+    expect(frameOnSelect(byId('body-moon'), false)).toBe('body-moon');
+    expect(frameOnSelect(byId('body-mars'), false)).toBe('body-mars');
     expect(frameOnSelect(byId('body-earth'), true)).toBeNull();
   });
-  it('an ordinary object, nothing, or a non-registry orbitable gives null', () => {
+  it('an ordinary object or nothing gives null; an entity flagged attrs.orbitable is its own frame', () => {
     expect(frameOnSelect(sat('iss'), false)).toBeNull();
     expect(frameOnSelect(undefined, false)).toBeNull();
-    expect(frameOnSelect({ ...sat('ceres'), attrs: { orbitable: true } }, false)).toBeNull();
+    expect(frameOnSelect({ ...sat('ceres'), attrs: { orbitable: false } }, false)).toBeNull();
+    expect(frameOnSelect({ ...sat('ceres'), attrs: { orbitable: true } }, false)).toBe('ceres');
+    expect(frameOnSelect({ ...sat('ceres'), attrs: { orbitable: true } }, true)).toBeNull();
   });
 });
 
 describe('frame persistence helpers', () => {
-  it('round-trips both kinds of centre', () => {
-    for (const c of [EARTH_CENTRE, bodyCentre('MARS'), entityCentre('sat-25544')]) expect(parseFrame(serialiseFrame(c))).toEqual(c);
+  it('round-trips a body entity and another entity', () => {
+    for (const c of [EARTH_CENTRE, 'body-mars', 'sat-25544']) expect(parseFrame(serialiseFrame(c))).toEqual(c);
+  });
+  it('migrates the previous format: a body by registry id becomes its body entity, an entity stays', () => {
+    expect(parseFrame('{"kind":"body","id":"MARS"}')).toBe('body-mars');
+    expect(parseFrame('{"kind":"body","id":"EARTH"}')).toBe(EARTH_CENTRE);
+    expect(parseFrame('{"kind":"body","id":"MOON","locked":true}')).toBe('body-moon');
+    expect(parseFrame('{"kind":"entity","id":"sat-25544"}')).toBe('sat-25544');
+    expect(parseFrame('{"kind":"entity","id":"body-moon"}')).toBe('body-moon');
+  });
+  it('writes a shape the previous loader reads: {"kind":"entity","id":...}', () => {
+    expect(serialiseFrame('body-moon')).toBe('{"kind":"entity","id":"body-moon"}');
   });
   it('parses anything malformed to null', () => {
     for (const raw of [null, undefined, '', 'nope', '[]', 'null', '42', '{}', '{"kind":"body"}', '{"kind":"x","id":"EARTH"}', '{"kind":"body","id":""}', '{"kind":"body","id":7}']) {
       expect(parseFrame(raw as string | null | undefined)).toBeNull();
     }
   });
-  it('drops extra fields (the lock is never stored)', () => {
-    expect(serialiseFrame({ kind: 'body', id: 'MOON', locked: true } as never)).toBe('{"kind":"body","id":"MOON"}');
-    expect(parseFrame('{"kind":"body","id":"MOON","locked":true}')).toEqual(bodyCentre('MOON'));
-  });
   it('resolves a stored frame against the catalog, falling back to the Earth when stale', () => {
     const cat = new Map<string, EntityRecord>([['iss', sat('iss')], ...bodies.map((b) => [b.id, b] as [string, EntityRecord])]);
     const look = (id: string) => cat.get(id);
-    expect(resolveFrame(bodyCentre('MOON'), look)).toEqual(bodyCentre('MOON'));
-    expect(resolveFrame(bodyCentre('MARS'), look)).toEqual(bodyCentre('MARS'));
-    expect(resolveFrame(bodyCentre('PLUTO'), look)).toEqual(EARTH_CENTRE);
-    expect(resolveFrame(entityCentre('iss'), look)).toEqual(entityCentre('iss'));
-    expect(resolveFrame(entityCentre('removed'), look)).toEqual(EARTH_CENTRE);
-    expect(resolveFrame(null, look)).toEqual(EARTH_CENTRE);
-    // an entity centre naming a body entity becomes the body centre
-    expect(resolveFrame(entityCentre('body-moon'), look)).toEqual(bodyCentre('MOON'));
+    expect(resolveFrame('body-moon', look)).toBe('body-moon');
+    expect(resolveFrame(parseFrame('{"kind":"body","id":"MARS"}'), look)).toBe('body-mars');
+    expect(resolveFrame(parseFrame('{"kind":"body","id":"PLUTO"}'), look)).toBe(EARTH_CENTRE);
+    expect(resolveFrame('iss', look)).toBe('iss');
+    expect(resolveFrame('removed', look)).toBe(EARTH_CENTRE);
+    expect(resolveFrame(null, look)).toBe(EARTH_CENTRE);
   });
   it('loads and saves through a storage, tolerating failures', () => {
     const data = new Map<string, string>();
     const store = { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v) };
     expect(loadFrame(store)).toBeNull();
-    expect(saveFrame(bodyCentre('SUN'), store)).toBe(true);
-    expect(data.get('eio.frame')).toBe('{"kind":"body","id":"SUN"}');
-    expect(loadFrame(store)).toEqual(bodyCentre('SUN'));
+    expect(saveFrame('body-sun', store)).toBe(true);
+    expect(data.get('eio.frame')).toBe('{"kind":"entity","id":"body-sun"}');
+    expect(loadFrame(store)).toBe('body-sun');
+    // a value written by the previous build still loads
+    data.set('eio.frame', '{"kind":"body","id":"MOON"}');
+    expect(loadFrame(store)).toBe('body-moon');
     const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('y'); } };
     expect(loadFrame(bad)).toBeNull();
     expect(saveFrame(EARTH_CENTRE, bad)).toBe(false);
     expect(saveFrame(EARTH_CENTRE, null)).toBe(false);
-  });
-});
-
-describe('bodyTabs', () => {
-  it('one tab per body entity in hierarchy order: Sun, Earth, Mars, Moon', () => {
-    const shuffled = [sat('iss'), byId('body-moon'), byId('body-sun'), byId('body-mars'), byId('body-earth')];
-    expect(bodyTabs(shuffled).map((t) => t.bodyId)).toEqual(['SUN', 'EARTH', 'MARS', 'MOON']);
-    expect(bodyTabs(shuffled)[3]).toEqual({ bodyId: 'MOON', name: 'Moon', entityId: 'body-moon' });
-  });
-  it('uses the registry before the catalog has arrived', () => {
-    expect(bodyTabs([sat('iss')]).map((t) => t.bodyId)).toEqual(['SUN', 'EARTH', 'MARS', 'MOON']);
-  });
-  it('follows the entities present', () => {
-    expect(bodyTabs([byId('body-earth'), byId('body-moon')]).map((t) => t.bodyId)).toEqual(['EARTH', 'MOON']);
-  });
-  it('the active tab is the body that is the frame', () => {
-    const tabs = bodyTabs(bodies);
-    expect(activeBodyTab(tabs, bodyCentre('MARS'))).toBe('MARS');
-    expect(activeBodyTab(tabs, EARTH_CENTRE)).toBe('EARTH');
-    expect(activeBodyTab(tabs, entityCentre('iss'))).toBeNull();
   });
 });
 

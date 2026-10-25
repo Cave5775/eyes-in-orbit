@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords, defaultBodies } from '@eio/core';
-import { bodyCentre, entityCentre } from '../src/lib/frame';
 import { bodyKey, bodyPathKeys, buildTreeRows, entityKey, groupKey, revealKeys, revealRowIndex, scrollTopToReveal, type TreeBody, type TreeItem, type TreeRow } from '../src/lib/entity-tree';
 
 const BODIES: TreeBody[] = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId }));
@@ -14,7 +13,8 @@ const CATALOG: TreeItem[] = [
   item('mars-probe-1', 'rover', 'MARS'),
 ];
 
-const base = { bodies: BODIES, frame: bodyCentre('EARTH') };
+/** the frame is an entity id; the caller says which body node its path ends at (the frame's own body, or an object's primary) */
+const base = { bodies: BODIES, frameId: 'body-earth', frameBodyId: 'EARTH' };
 const types = (rows: TreeRow[]) => rows.map((r) => (r.type === 'body' ? `B:${r.bodyId}` : r.type === 'group' ? `G:${r.kind}` : `E:${r.id}`));
 
 describe('entity tree rows', () => {
@@ -49,14 +49,14 @@ describe('entity tree rows', () => {
   });
 
   it('a body with few entities lists them directly (no kind groups), LRO under the Moon', () => {
-    const rows = buildTreeRows(CATALOG, { ...base, frame: bodyCentre('MOON') });
+    const rows = buildTreeRows(CATALOG, { ...base, frameId: 'body-moon', frameBodyId: 'MOON' });
     expect(types(rows)).toEqual(['B:SUN', 'B:EARTH', 'B:MOON', 'E:dsn-LRO', 'G:satellite', 'G:station', 'B:MARS']);
   });
 
   it('opens the path to an entity frame and its group', () => {
-    const rows = buildTreeRows(CATALOG, { ...base, frame: entityCentre('stn-1'), frameBodyId: 'EARTH' });
+    const rows = buildTreeRows(CATALOG, { ...base, frameId: 'stn-1', frameBodyId: 'EARTH' });
     expect(types(rows)).toContain('E:stn-1');
-    const rows2 = buildTreeRows(CATALOG, { ...base, frame: entityCentre('dsn-LRO'), frameBodyId: 'MOON' });
+    const rows2 = buildTreeRows(CATALOG, { ...base, frameId: 'dsn-LRO', frameBodyId: 'MOON' });
     expect(types(rows2)).toEqual(['B:SUN', 'B:EARTH', 'B:MOON', 'E:dsn-LRO', 'G:satellite', 'G:station', 'B:MARS']);
   });
 
@@ -177,8 +177,8 @@ describe('reveal a selected entity', () => {
   const opts = { bodies: BODIES };
   const find = (id: string) => all.find((i) => i.id === id)!;
   /** rows after opening the revealed keys on top of the defaults */
-  const rowsWith = (keys: string[], frame = base.frame) =>
-    buildTreeRows(all, { bodies: BODIES, frame, overrides: new Map(keys.map((k) => [k, true])) });
+  const rowsWith = (keys: string[], frameBodyId = base.frameBodyId) =>
+    buildTreeRows(all, { bodies: BODIES, frameId: `body-${frameBodyId.toLowerCase()}`, frameBodyId, overrides: new Map(keys.map((k) => [k, true])) });
 
   it('opens the body chain and the kind group of an Earth satellite so its row appears', () => {
     const keys = revealKeys(find('sat-3'), opts);
@@ -195,13 +195,13 @@ describe('reveal a selected entity', () => {
     expect(revealRowIndex(rowsWith(keys), 'mars-probe-1')).toBeGreaterThan(0);
     const moon = revealKeys(find('dsn-LRO'), opts);
     expect(moon.slice(0, 3)).toEqual([bodyKey('SUN'), bodyKey('EARTH'), bodyKey('MOON')]);
-    expect(revealRowIndex(rowsWith(moon, bodyCentre('MARS')), 'dsn-LRO')).toBeGreaterThan(0);
+    expect(revealRowIndex(rowsWith(moon, 'MARS'), 'dsn-LRO')).toBeGreaterThan(0);
   });
 
   it('a body entity reveals its own node: only the nodes above it open', () => {
     expect(revealKeys(find('body-moon'), opts)).toEqual([bodyKey('SUN'), bodyKey('EARTH')]);
     expect(revealKeys(find('body-sun'), opts)).toEqual([]);
-    const rows = rowsWith(revealKeys(find('body-moon'), opts), bodyCentre('MARS'));
+    const rows = rowsWith(revealKeys(find('body-moon'), opts), 'MARS');
     expect(revealRowIndex(rows, 'body-moon')).toBeGreaterThan(0);
     // a search hit that stands for a body (no provider) is the same
     expect(revealKeys({ id: 'hit', kind: 'moon' }, { ...opts, standsForBody: () => 'MOON' })).toEqual([bodyKey('SUN'), bodyKey('EARTH')]);

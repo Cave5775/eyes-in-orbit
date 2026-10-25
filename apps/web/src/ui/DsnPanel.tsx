@@ -7,7 +7,7 @@ import { useWallNow } from './hooks';
 export function DsnPanel() {
   const dsn = useStore((s) => s.dsn);
   const entities = useStore((s) => s.entities);
-  const select = useStore((s) => s.select);
+  const selectObject = useStore((s) => s.selectObject);
   const wall = useWallNow(1000);
 
   const active = (dsn?.links ?? []).filter((l) => l.downlink?.active || l.uplink?.active);
@@ -37,7 +37,7 @@ export function DsnPanel() {
                       const id = dsnEntityId(code);
                       const rec = entities.get(id);
                       return (
-                        <button key={code} className="chip link" disabled={!rec} onClick={() => select(id)} title={rec ? `Locate ${rec.name}` : `${code}: not in catalog`}>
+                        <button key={code} className="chip link" disabled={!rec} onClick={() => selectObject(id)} title={rec ? `Locate ${rec.name}` : `${code}: not in catalog`}>
                           {code}
                         </button>
                       );

@@ -4,9 +4,8 @@ import {
   type EntityRecord, type Sample, type Vec3,
 } from '@eio/core';
 import {
-  EARTH_CENTRE, bodyCentre, centreKey, centreLabel, centrePositionEci, centreStateEci, entityCentre, entityRelativeToCentre,
-  frameChainLabel, frameCrumbs, frameFor, frameForRec, framePathPoint, frameSampler, graphLookup, isEarthCentre, isOrbitableBody,
-  relativeState, sameCentre,
+  EARTH_CENTRE, centreLabel, centrePositionEci, centreStateEci, entityRelativeToCentre, frameChainLabel, frameCrumbs, frameForRec,
+  framePathPoint, frameSampler, graphLookup, isEarthCentre, relativeState,
 } from '../src/lib/frame';
 import { orbitPeriodSec } from '../src/lib/orbit';
 import { displayPosition, makePathBuffers, samplePath } from '../src/lib/paths';
@@ -15,6 +14,13 @@ import { mockSatellites } from '../src/mock/generators';
 
 const NOW = Date.parse('2026-10-22T12:00:00Z');
 const MIN = 60_000, HOUR = 3_600_000;
+/** the body entities as the catalog has them; a frame centre is an entity id, so these are what centres resolve to */
+const BODIES = bodyEntityRecords();
+const bodyGraph = (): EntityGraph => {
+  const g = new EntityGraph();
+  for (const r of BODIES) g.upsert(r);
+  return g;
+};
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const dist = (a: Vec3, b: Vec3): number => norm(sub(a, b));
 
@@ -35,91 +41,81 @@ function lroLike(radiusKm = MOON.radiusKm + 100, from = NOW - 2 * HOUR, to = NOW
 }
 
 describe('centres', () => {
-  const g = new EntityGraph();
+  const g = bodyGraph();
   const iss = mockSatellites(NOW).find((s) => s.id === 'sat-25544')!;
   g.upsert(iss);
   const lookup = graphLookup(g);
 
-  it('has the Earth as default and compares centres by kind and id', () => {
-    expect(EARTH_CENTRE).toEqual({ kind: 'body', id: 'EARTH' });
+  it('has the Earth entity as default; a centre is an entity id, compared by ===', () => {
+    expect(EARTH_CENTRE).toBe('body-earth');
     expect(isEarthCentre(EARTH_CENTRE)).toBe(true);
-    expect(isEarthCentre(bodyCentre('MOON'))).toBe(false);
-    expect(isEarthCentre(entityCentre('EARTH'))).toBe(false);
-    expect(sameCentre(bodyCentre('MOON'), bodyCentre('MOON'))).toBe(true);
-    expect(sameCentre(bodyCentre('MOON'), entityCentre('MOON'))).toBe(false);
-    expect(centreKey(entityCentre('x'))).toBe('entity:x');
-  });
-
-  it('knows which bodies can be a frame centre', () => {
-    expect(['EARTH', 'MOON', 'SUN', 'MARS'].every(isOrbitableBody)).toBe(true);
-    expect(isOrbitableBody('sat-25544')).toBe(false);
-    expect(isOrbitableBody('body-moon')).toBe(false); // registry ids, not entity ids
+    expect(isEarthCentre('body-moon')).toBe(false);
+    expect(isEarthCentre('EARTH')).toBe(false); // the registry id is not a centre
   });
 
   it('places Mars from the core body state (heliocentric, 5e7 to 4e8 km from the Earth)', () => {
-    const mars = centrePositionEci(bodyCentre('MARS'), NOW, lookup)!;
+    const mars = centrePositionEci('body-mars', NOW, lookup)!;
     expect(mars).toEqual(bodyStateEci('MARS', NOW).r);
     expect(norm(mars)).toBeGreaterThan(5e7);
     expect(norm(mars)).toBeLessThan(4e8);
-    expect(centreStateEci(bodyCentre('SUN'), NOW, lookup)!.v).toEqual(bodyStateEci('SUN', NOW).v);
+    expect(centreStateEci('body-sun', NOW, lookup)!.v).toEqual(bodyStateEci('SUN', NOW).v);
   });
 
-  it('places body centres from the same series the scene draws and entity centres from their state', () => {
+  it('places the Earth at the origin without a lookup, other centres from their entity state in the graph', () => {
+    expect(centrePositionEci(EARTH_CENTRE, NOW, () => null)).toEqual([0, 0, 0]);
+    expect(centreStateEci(EARTH_CENTRE, NOW, () => null)).toEqual({ r: [0, 0, 0], v: [0, 0, 0] });
     expect(centrePositionEci(EARTH_CENTRE, NOW, lookup)).toEqual([0, 0, 0]);
-    expect(centrePositionEci(bodyCentre('MOON'), NOW, lookup)).toEqual(moonPositionEci(NOW));
-    const sun = centrePositionEci(bodyCentre('SUN'), NOW, lookup)!;
+    expect(centrePositionEci('body-moon', NOW, lookup)).toEqual(moonPositionEci(NOW));
+    const sun = centrePositionEci('body-sun', NOW, lookup)!;
     expect(norm(sun)).toBeGreaterThan(1.45e8);
-    expect(centrePositionEci(bodyCentre('NOPE'), NOW, lookup)).toBeNull();
-    expect(centrePositionEci(entityCentre(iss.id), NOW, lookup)).toEqual(g.stateIn(iss.id, NOW, 'EARTH:inertial')!.r);
-    expect(centrePositionEci(entityCentre('unknown'), NOW, lookup)).toBeNull();
+    expect(centrePositionEci('body-nope', NOW, lookup)).toBeNull();
+    expect(centrePositionEci(iss.id, NOW, lookup)).toEqual(g.stateIn(iss.id, NOW, 'EARTH:inertial')!.r);
+    expect(centrePositionEci('unknown', NOW, lookup)).toBeNull();
   });
 
   it('expresses an entity relative to a body or entity centre (translation: velocities subtract)', () => {
     const other = mockSatellites(NOW).find((s) => s.id !== iss.id && s.kind === 'satellite')!;
     g.upsert(other);
     const a = g.stateIn(iss.id, NOW, 'EARTH:inertial')!, b = g.stateIn(other.id, NOW, 'EARTH:inertial')!;
-    const rel = entityRelativeToCentre(other.id, entityCentre(iss.id), NOW, lookup)!;
+    const rel = entityRelativeToCentre(other.id, iss.id, NOW, lookup)!;
     expect(rel.r).toEqual(sub(b.r, a.r));
     expect(rel.v).toEqual(sub(b.v!, a.v!));
     expect(relativeState({ r: [3, 2, 1] }, { r: [1, 1, 1], v: [1, 1, 1] }).v).toBeUndefined();
-    const moonRel = entityRelativeToCentre(iss.id, bodyCentre('MOON'), NOW, lookup)!;
+    const moonRel = entityRelativeToCentre(iss.id, 'body-moon', NOW, lookup)!;
     expect(moonRel.r).toEqual(sub(a.r, moonPositionEci(NOW)));
     expect(entityRelativeToCentre('unknown', EARTH_CENTRE, NOW, lookup)).toBeNull();
   });
 
   it('draws the entity that is the centre relative to its primary body instead of to itself', () => {
-    expect(frameFor(entityCentre('lro'), 'lro', 'MOON')).toEqual(bodyCentre('MOON'));
-    expect(frameFor(entityCentre('iss'), 'lro', 'MOON')).toEqual(entityCentre('iss'));
-    expect(frameFor(bodyCentre('SUN'), 'lro', 'MOON')).toEqual(bodyCentre('SUN'));
+    expect(frameForRec('lro', lroLike())).toBe('body-moon');
+    expect(frameForRec('iss', lroLike())).toBe('iss');
+    expect(frameForRec('body-sun', lroLike())).toBe('body-sun');
   });
 
   it('samples a body entity in its parent body frame whatever the active centre is (the Sun keeps the centre)', () => {
-    const recs = Object.fromEntries(bodyEntityRecords().map((r) => [r.id, r]));
-    for (const centre of [EARTH_CENTRE, bodyCentre('MOON'), bodyCentre('SUN'), entityCentre('body-moon'), entityCentre('sat-1')]) {
-      expect(frameForRec(centre, recs['body-moon'])).toEqual(bodyCentre('EARTH'));
-      expect(frameForRec(centre, recs['body-earth'])).toEqual(bodyCentre('SUN'));
-      expect(frameForRec(centre, recs['body-mars'])).toEqual(bodyCentre('SUN'));
-      expect(frameForRec(centre, recs['body-sun'])).toEqual(centre);
+    const recs = Object.fromEntries(BODIES.map((r) => [r.id, r]));
+    for (const centre of [EARTH_CENTRE, 'body-moon', 'body-sun', 'sat-1']) {
+      expect(frameForRec(centre, recs['body-moon'])).toBe('body-earth');
+      expect(frameForRec(centre, recs['body-earth'])).toBe('body-sun');
+      expect(frameForRec(centre, recs['body-mars'])).toBe('body-sun');
+      expect(frameForRec(centre, recs['body-sun'])).toBe(centre);
     }
-    expect(frameFor(entityCentre('body-moon'), 'body-moon', 'EARTH', 'MOON')).toEqual(bodyCentre('EARTH'));
     // ordinary records behave as before
-    expect(frameForRec(entityCentre('lro'), lroLike())).toEqual(bodyCentre('MOON'));
-    expect(frameForRec(bodyCentre('SUN'), lroLike())).toEqual(bodyCentre('SUN'));
+    expect(frameForRec('lro', lroLike())).toBe('body-moon');
+    expect(frameForRec('body-sun', lroLike())).toBe('body-sun');
   });
 
   it('draws the Moon entity path as a closed ellipse around the Earth, Earth and Mars around the Sun', () => {
-    const g = new EntityGraph();
-    const recs = bodyEntityRecords();
-    for (const r of recs) g.upsert(r);
+    const g = bodyGraph();
     const lookup = graphLookup(g);
-    const moon = recs.find((r) => r.id === 'body-moon')!;
+    const moon = BODIES.find((r) => r.id === 'body-moon')!;
     const period = bodyPeriodSec(defaultBodies.get('MOON'))! * 1000;
     expect(period / 86_400_000).toBeGreaterThan(27);
     expect(period / 86_400_000).toBeLessThan(27.8);
     // an active Moon centre does not change the sampling centre of the Moon's own orbit
     const buf = makePathBuffers();
     const res = samplePath(g, moon.id, { t0: NOW, t1: NOW + period }, moon.provider, buf, 'compressed',
-      frameSampler(frameForRec(bodyCentre('MOON'), moon), NOW, lookup));
+      frameSampler(frameForRec('body-moon', moon), NOW, lookup));
     expect(res.count).toBeGreaterThan(100);
     // around the Earth's centre (the origin): distances stay in the Moon's 356,000 to 407,000 km range, and the loop closes
     let lo = Infinity, hi = -Infinity;
@@ -134,9 +130,8 @@ describe('centres', () => {
     expect(dist([buf.pos[0], buf.pos[1], buf.pos[2]], [buf.pos[last * 3], buf.pos[last * 3 + 1], buf.pos[last * 3 + 2]])).toBeLessThan(0.12 * lo);
 
     // Earth in the Sun's frame: the offset from the Sun is about 1 AU all along (drawn around the Sun's current position)
-    const earth = recs.find((r) => r.id === 'body-earth')!;
-    const sunLookup = graphLookup(g);
-    const sampler = frameSampler(frameForRec(EARTH_CENTRE, earth), NOW, sunLookup)!;
+    const earth = BODIES.find((r) => r.id === 'body-earth')!;
+    const sampler = frameSampler(frameForRec(EARTH_CENTRE, earth), NOW, graphLookup(g))!;
     const sunNow = sampler.ref!;
     expect(norm(sunNow)).toBeGreaterThan(1.45e8);
     const eb = makePathBuffers();
@@ -158,37 +153,39 @@ describe('framePathPoint', () => {
 });
 
 describe('frame labels', () => {
-  const recs = new Map<string, { name: string; bodyId: string }>([
+  // the lookup the store gives the UI: the body entities plus whatever the catalog has
+  const recs = new Map<string, { name: string; bodyId: string; parentId?: string; provider?: { type: string } }>([
+    ...BODIES.map((b): [string, (typeof BODIES)[number]] => [b.id, b]),
     ['lro', { name: 'LRO', bodyId: 'MOON' }], ['iss', { name: 'ISS (ZARYA)', bodyId: 'EARTH' }],
   ]);
   const rec = (id: string) => recs.get(id);
 
-  it('chains a body centre through the body tree', () => {
-    expect(frameChainLabel(EARTH_CENTRE, rec)).toBe('SUN > EARTH');
-    expect(frameChainLabel(bodyCentre('MOON'), rec)).toBe('SUN > EARTH > MOON');
-    expect(frameChainLabel(bodyCentre('SUN'), rec)).toBe('SUN');
-    expect(frameChainLabel(bodyCentre('MARS'), rec)).toBe('SUN > MARS');
-    expect(frameChainLabel(bodyCentre('XYZ'), rec)).toBe('XYZ');
+  it('chains a body entity through the body tree', () => {
+    expect(frameChainLabel(EARTH_CENTRE, rec)).toBe('Sun > Earth');
+    expect(frameChainLabel('body-moon', rec)).toBe('Sun > Earth > Moon');
+    expect(frameChainLabel('body-sun', rec)).toBe('Sun');
+    expect(frameChainLabel('body-mars', rec)).toBe('Sun > Mars');
+    expect(frameChainLabel('body-xyz', rec)).toBe('body-xyz');
   });
 
-  it('shows an entity centre after its primary body chain', () => {
-    expect(frameChainLabel(entityCentre('lro'), rec)).toBe('SUN > EARTH > MOON > LRO');
-    expect(frameChainLabel(entityCentre('iss'), rec)).toBe('SUN > EARTH > ISS (ZARYA)');
-    expect(frameChainLabel(entityCentre('gone'), rec)).toBe('gone');
-    const crumbs = frameCrumbs(entityCentre('lro'), rec);
-    expect(crumbs.map((c) => c.centre)).toEqual([bodyCentre('SUN'), bodyCentre('EARTH'), bodyCentre('MOON'), entityCentre('lro')]);
+  it('shows another entity after its primary body chain; every crumb is an entity id', () => {
+    expect(frameChainLabel('lro', rec)).toBe('Sun > Earth > Moon > LRO');
+    expect(frameChainLabel('iss', rec)).toBe('Sun > Earth > ISS (ZARYA)');
+    expect(frameChainLabel('gone', rec)).toBe('gone');
+    const crumbs = frameCrumbs('lro', rec);
+    expect(crumbs.map((c) => c.id)).toEqual(['body-sun', 'body-earth', 'body-moon', 'lro']);
   });
 
   it('has short labels for readouts and the HUD', () => {
-    expect(centreLabel(bodyCentre('MOON'), rec)).toBe('Moon');
-    expect(centreLabel(entityCentre('iss'), rec)).toBe('ISS (ZARYA)');
-    expect(centreLabel(entityCentre('gone'), rec)).toBe('gone');
+    expect(centreLabel('body-moon', rec)).toBe('Moon');
+    expect(centreLabel('iss', rec)).toBe('ISS (ZARYA)');
+    expect(centreLabel('gone', rec)).toBe('gone');
   });
 });
 
 describe('paths sampled in the frame', () => {
   const lro = lroLike();
-  const g = new EntityGraph();
+  const g = bodyGraph();
   g.upsert(lro);
   const lookup = graphLookup(g);
   const period = 2 * Math.PI * Math.sqrt((MOON.radiusKm + 100) ** 3 / MOON.gm) * 1000;
@@ -209,7 +206,7 @@ describe('paths sampled in the frame', () => {
 
   it('draws a Moon orbiter as a closed circle around the Moon in the Moon frame, not in the Earth frame', () => {
     const buf = makePathBuffers();
-    const res = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler(bodyCentre('MOON'), NOW, lookup));
+    const res = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler('body-moon', NOW, lookup));
     expect(res.count).toBeGreaterThan(400);
     expect(res.centreRef).toEqual(moonPositionEci(NOW));
     const c = res.centreRef!;
@@ -238,7 +235,7 @@ describe('paths sampled in the frame', () => {
   it('follows the centre: the stored path is around the centre at build time, the scene shifts it by c(now) - ref', () => {
     const buf = makePathBuffers();
     const built = NOW;
-    const res = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler(bodyCentre('MOON'), built, lookup));
+    const res = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler('body-moon', built, lookup));
     const later = NOW + 20 * MIN;
     const shift = sub(moonPositionEci(later), res.centreRef!);
     expect(norm(shift)).toBeGreaterThan(1000); // the Moon moved ~1.2 km/s
@@ -250,17 +247,17 @@ describe('paths sampled in the frame', () => {
 
   it('is empty while the centre entity has no state at the build time, and skips samples it cannot place', () => {
     const buf = makePathBuffers();
-    const gone = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler(entityCentre('nobody'), NOW, lookup));
+    const gone = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler('nobody', NOW, lookup));
     expect(gone.count).toBe(0);
     expect(gone.moving).toBe(false);
   });
 
   it('an Earth satellite seen from the Moon is the true relative curve', () => {
     const iss = mockSatellites(NOW).find((s) => s.id === 'sat-25544')!;
-    const g2 = new EntityGraph();
+    const g2 = bodyGraph();
     g2.upsert(iss);
     const buf = makePathBuffers();
-    const res = samplePath(g2, iss.id, { t0: NOW, t1: NOW + 30 * MIN }, undefined, buf, 'compressed', frameSampler(bodyCentre('MOON'), NOW, graphLookup(g2)));
+    const res = samplePath(g2, iss.id, { t0: NOW, t1: NOW + 30 * MIN }, undefined, buf, 'compressed', frameSampler('body-moon', NOW, graphLookup(g2)));
     const t = buf.times[100];
     const r = g2.stateIn(iss.id, t, 'EARTH:inertial')!.r;
     const expected = framePathPoint(r, moonPositionEci(t), moonPositionEci(NOW));
@@ -330,7 +327,7 @@ describe('readouts relative to the frame centre', () => {
   g.upsert(other);
 
   it('measures range and speed from an entity centre', () => {
-    const tel = computeTelemetry(g, other, NOW, entityCentre(iss.id))!;
+    const tel = computeTelemetry(g, other, NOW, iss.id)!;
     const a = g.stateIn(iss.id, NOW, 'EARTH:inertial')!, b = g.stateIn(other.id, NOW, 'EARTH:inertial')!;
     expect(tel.refRangeKm).toBeCloseTo(dist(a.r, b.r), 6);
     expect(tel.refSpeedKmS).toBeCloseTo(dist(a.v!, b.v!), 9);
@@ -339,8 +336,8 @@ describe('readouts relative to the frame centre', () => {
   });
 
   it('adds no relative readout for the entity that is the centre, or when the centre has no state', () => {
-    expect(computeTelemetry(g, iss, NOW, entityCentre(iss.id))!.refRangeKm).toBeUndefined();
-    expect(computeTelemetry(g, iss, NOW, entityCentre('unknown'))!.refRangeKm).toBeUndefined();
+    expect(computeTelemetry(g, iss, NOW, iss.id)!.refRangeKm).toBeUndefined();
+    expect(computeTelemetry(g, iss, NOW, 'unknown')!.refRangeKm).toBeUndefined();
     expect(computeTelemetry(g, iss, NOW, EARTH_CENTRE)!.refRangeKm).toBeUndefined();
   });
 });

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { EntityGraph, EntityRecord, Vec3 } from '@eio/core';
 import type { DistanceScale } from '../lib/deepspace';
 import { fixedToInertial, type Spin } from '../lib/floating-origin';
-import { EARTH_CENTRE, centreKey, centrePositionEci, frameForRec, frameSampler, graphLookup, type Centre } from '../lib/frame';
+import { EARTH_CENTRE, centrePositionEci, frameForRec, frameSampler, graphLookup, type Centre } from '../lib/frame';
 import {
   PATH_MAX_PHASES, makePathBuffers, nowIndex, pathStale, planPathWindow, samplePath, type PathPlan, type PathResult,
 } from '../lib/paths';
@@ -112,13 +112,12 @@ export class PathOverlay {
     const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds });
     if (!plan) return this.hide();
 
-    const cKey = centreKey(centre);
-    if (key !== this.recKey || scale !== this.builtScale || cKey !== this.builtCentre || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
+    if (key !== this.recKey || scale !== this.builtScale || centre !== this.builtCentre || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
       const lookup = graphLookup(graph);
       this.res = samplePath(graph, rec.id, plan, rec.provider, this.buf, scale, frameSampler(centre, t, lookup));
       this.recKey = key;
       this.builtScale = scale;
-      this.builtCentre = cKey;
+      this.builtCentre = centre;
       this.builtAt = t;
       this.builtWall = wall;
       this.line.fixed = this.tickPos.fixed = this.res.frame === 'fixed';

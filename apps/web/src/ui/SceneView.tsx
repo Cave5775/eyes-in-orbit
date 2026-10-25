@@ -58,7 +58,7 @@ export function SceneView() {
   const closePick = useCallback(() => setPick(null), []);
   const choosePick = useCallback((id: string) => {
     setPick(null);
-    useStore.getState().select(id);
+    useStore.getState().selectObject(id);
   }, []);
   const highlightPick = useCallback((id: string | null) => scene.current?.setPreview(id), []);
   const showLegend = usePanels((s) => s.visible.legend);
@@ -150,7 +150,7 @@ export function SceneView() {
       pathLayer.update(pathItems, labels.length);
     };
     const ctl = new SceneController(host.current!, {
-      onPick: (id) => store.getState().select(id),
+      onPick: (id) => store.getState().selectObject(id),
       onPickMany: (ids, total, x, y) => {
         const ents = store.getState().entities;
         const items: PickItem[] = [];
@@ -158,7 +158,7 @@ export function SceneView() {
           const rec = ents.get(id);
           if (rec) items.push({ id, name: rec.name, kind: kindLabel(rec.kind), colorKey: colorKeyOf(rec) });
         }
-        if (items.length === 1) store.getState().select(items[0].id);
+        if (items.length === 1) store.getState().selectObject(items[0].id);
         else if (items.length > 0) setPick({ items, more: total - items.length, x, y });
       },
       onHover: (h) => {
@@ -209,6 +209,10 @@ export function SceneView() {
     ctl.setLaunches(s0.launches);
     ctl.setSelected(s0.selectedId);
     ctl.setFrame(s0.frame, s0.frameLocked);
+    // a camera request made before this controller existed (the frame restored from storage when the catalog was already there,
+    // a remount): the new controller starts at the home view, so replay it and then the follow flag the store holds
+    if (s0.focus) ctl.focus(s0.focus);
+    ctl.setFollow(s0.follow);
     // objects related to the selection are never scoped out (same lookup FIT uses)
     const syncRelated = (s: ReturnType<typeof store.getState>) => {
       const rec = s.selectedId ? s.entities.get(s.selectedId) : undefined;

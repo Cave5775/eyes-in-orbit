@@ -1,41 +1,7 @@
-import { bodyEntityRecords, defaultBodies, entityRank, type EntityRecord } from '@eio/core';
+import { defaultBodies, type EntityRecord } from '@eio/core';
 import { fmtDays, fmtKm, fmtNum } from './format';
-import { bodyCentre, sameCentre, type Centre } from './frame';
 
-/** Pure parts of the TopBar body tabs and the EntityBrowser filter chips. */
-
-// ---------------------------------------------------------------- body tabs
-
-export interface BodyTab {
-  /** registry body id (`MOON`) */
-  bodyId: string;
-  /** tab text, e.g. `Moon` */
-  name: string;
-  /** the body entity behind the tab (`body-moon`) */
-  entityId: string;
-}
-
-/**
- * One tab per body entity in the catalog, highest in the hierarchy first (`entityRank`: Sun, Earth, Mars, Moon). Before the
- * catalog has arrived (no body entity yet) the tabs come from the registry, so they are never missing.
- */
-export function bodyTabs(entities: Iterable<EntityRecord>): BodyTab[] {
-  const tabs: (BodyTab & { rank: number })[] = [];
-  const collect = (list: Iterable<EntityRecord>) => {
-    for (const e of list) {
-      const bodyId = e.provider?.type === 'body' ? e.provider.bodyId : undefined;
-      if (bodyId !== undefined && defaultBodies.has(bodyId)) tabs.push({ bodyId, name: e.name, entityId: e.id, rank: entityRank(e) });
-    }
-  };
-  collect(entities);
-  if (tabs.length === 0) collect(bodyEntityRecords());
-  tabs.sort((a, b) => a.rank - b.rank || (a.entityId < b.entityId ? -1 : 1));
-  return tabs.map(({ bodyId, name, entityId }) => ({ bodyId, name, entityId }));
-}
-
-/** The tab of the body that is the frame (none for an entity centre). */
-export const activeBodyTab = (tabs: readonly BodyTab[], frame: Centre): string | null =>
-  tabs.find((t) => sameCentre(frame, bodyCentre(t.bodyId)))?.bodyId ?? null;
+/** Pure parts of the detail panel's body facts and the EntityBrowser filter chips. */
 
 // ---------------------------------------------------------------- body attributes (detail panel)
 

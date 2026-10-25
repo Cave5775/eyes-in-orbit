@@ -1,80 +1,50 @@
-import { bodyStateEci as coreBodyStateEci, defaultBodies, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
+import { bodyEntityId, isBodyEntity, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
 
 /**
- * Frame of reference (see docs/frames.md). The frame is a centre, a body or an entity. Frames are translations only
- * (no rotation): the centre is a point `c(t)` in Earth-inertial coordinates. Entities stay stored and drawn in
- * Earth-inertial space; the frame changes what depends on time: paths, trails and orbit lines are sampled relative to
- * the centre at each sample time and drawn around the centre's current position, and readouts are relative to it.
+ * Frame of reference (see docs/frames.md). The frame is a centre, and a centre is an ENTITY ID: a body entity (`body-moon`)
+ * or any other entity (an orbitable asteroid, a satellite the user locked the frame to). There is no second, registry-id
+ * representation of a body here. Frames are translations only (no rotation): the centre is a point `c(t)` in Earth-inertial
+ * coordinates. Entities stay stored and drawn in Earth-inertial space; the frame changes what depends on time: paths,
+ * trails and orbit lines are sampled relative to the centre at each sample time and drawn around the centre's current
+ * position, and readouts are relative to it.
  */
-export type Centre = { kind: 'body'; id: string } | { kind: 'entity'; id: string };
+export type Centre = string;
 
-/** The default frame: the Earth. With it every output equals the pre-frame behaviour (c(t) = 0). */
-export const EARTH_CENTRE: Centre = { kind: 'body', id: 'EARTH' };
+/** The default frame: the Earth. With it every output equals the pre-frame behaviour (c(t) = 0, the identity fast path). */
+export const EARTH_CENTRE: Centre = bodyEntityId('EARTH');
 
-export const bodyCentre = (id: string): Centre => ({ kind: 'body', id });
-export const entityCentre = (id: string): Centre => ({ kind: 'entity', id });
-
-export const isEarthCentre = (c: Centre): boolean => c.kind === 'body' && c.id === 'EARTH';
-
-export const sameCentre = (a: Centre, b: Centre): boolean => a.kind === b.kind && a.id === b.id;
+export const isEarthCentre = (c: Centre): boolean => c === EARTH_CENTRE;
 
 /**
  * The frame an entity's own paths and orbit line are drawn in: the active centre, except that
  * - nothing can be drawn relative to itself (a single point), so the entity that is the centre is drawn relative to its
  *   primary body, and
- * - a body ENTITY (`standsForBody` given: the registry id its provider names) always draws its orbit in its parent
- *   body's frame whatever the active centre is: the Moon as an ellipse around the Earth, Earth and Mars around the Sun's
- *   current position. The Sun orbits nothing (its `bodyId` names itself) and keeps the active centre.
- * Callers with a record use `frameForRec`.
+ * - a body ENTITY always draws its orbit in its parent body's frame whatever the active centre is: the Moon as an ellipse
+ *   around the Earth, Earth and Mars around the Sun's current position. The Sun orbits nothing (its `bodyId` names itself)
+ *   and keeps the active centre.
  */
-export const frameFor = (centre: Centre, entityId: string, primaryBodyId: string, standsForBody?: string): Centre => {
-  if (standsForBody !== undefined) return standsForBody === primaryBodyId ? centre : bodyCentre(primaryBodyId);
-  return centre.kind === 'entity' && centre.id === entityId ? bodyCentre(primaryBodyId) : centre;
-};
-
-/** `frameFor` from a record: a record with provider type `body` uses `{kind:'body', id: rec.bodyId}` as its sampling centre. */
-export const frameForRec = (centre: Centre, rec: Pick<EntityRecord, 'id' | 'bodyId' | 'provider'>): Centre =>
-  frameFor(centre, rec.id, rec.bodyId, rec.provider?.type === 'body' ? rec.provider.bodyId : undefined);
-
-/** Stable string for a centre (cache keys). */
-export const centreKey = (c: Centre): string => `${c.kind}:${c.id}`;
-
-/**
- * Bodies a frame can centre on: every body of the core registry (Sun, Earth, Moon, Mars). Used by `select` to decide
- * whether selecting something re-centres the frame.
- */
-export const isOrbitableBody = (id: string): boolean => defaultBodies.has(id);
+export function frameForRec(centre: Centre, rec: Pick<EntityRecord, 'id' | 'bodyId' | 'provider'>): Centre {
+  const primary = bodyEntityId(rec.bodyId);
+  if (isBodyEntity(rec)) return primary === rec.id ? centre : primary;
+  return centre === rec.id ? primary : centre;
+}
 
 /** The Earth-inertial state of an entity at `tMs` (null: no state at that time or unknown entity). */
 export type EntityLookup = (id: string, tMs: number) => StateVector | null;
 
-/** Lookup over an `EntityGraph` (the entity must have been upserted into it). */
+/** Lookup over an `EntityGraph` (the entity must have been upserted into it; body entities are, see SceneController). */
 export const graphLookup = (graph: EntityGraph): EntityLookup => (id, t) => graph.stateIn(id, t, 'EARTH:inertial');
 
-/**
- * Position and velocity of a body's centre in Earth-inertial coordinates, or null for an unknown body. Core's
- * `bodyStateEci`: the same almanac series the scene draws for the Moon and the Sun.
- */
-function bodyStateEci(id: string, t: number): { r: Vec3; v?: Vec3 } | null {
-  if (!defaultBodies.has(id)) return null;
-  try {
-    const s = coreBodyStateEci(id, t);
-    return { r: s.r, v: s.v };
-  } catch {
-    return null;
-  }
-}
-
-/** Position of the centre at `tMs` in Earth-inertial coordinates, km, or null when it has no state then. */
+/** Position of the centre at `tMs` in Earth-inertial coordinates, km, or null when it has no state then. The Earth is the origin. */
 export function centrePositionEci(centre: Centre, tMs: number, lookup: EntityLookup): Vec3 | null {
-  if (centre.kind === 'body') return bodyStateEci(centre.id, tMs)?.r ?? null;
-  return lookup(centre.id, tMs)?.r ?? null;
+  if (isEarthCentre(centre)) return [0, 0, 0];
+  return lookup(centre, tMs)?.r ?? null;
 }
 
 /** Position and (when known) velocity of the centre in Earth-inertial coordinates. */
 export function centreStateEci(centre: Centre, tMs: number, lookup: EntityLookup): { r: Vec3; v?: Vec3 } | null {
-  if (centre.kind === 'body') return bodyStateEci(centre.id, tMs);
-  const s = lookup(centre.id, tMs);
+  if (isEarthCentre(centre)) return { r: [0, 0, 0], v: [0, 0, 0] };
+  const s = lookup(centre, tMs);
   return s ? { r: s.r, v: s.v } : null;
 }
 
@@ -130,48 +100,36 @@ export function frameSampler(centre: Centre, refMs: number, lookup: EntityLookup
 export interface RecLabel {
   name: string;
   bodyId: string;
+  /** entity id of the parent body (set on body entities) */
+  parentId?: string;
+  provider?: { type: string };
 }
 export type RecLookup = (id: string) => RecLabel | undefined;
 
-function bodyName(id: string): string {
-  try {
-    return defaultBodies.get(id).name;
-  } catch {
-    return id;
-  }
-}
-
-/** Short label of a centre: `Moon` for a body, the entity's name for an entity (its id when unknown). */
-export function centreLabel(centre: Centre, rec: RecLookup): string {
-  return centre.kind === 'body' ? bodyName(centre.id) : rec(centre.id)?.name ?? centre.id;
-}
+/** Short label of a centre: the entity's name (its id when unknown). */
+export const centreLabel = (centre: Centre, rec: RecLookup): string => rec(centre)?.name ?? centre;
 
 export interface Crumb {
   label: string;
-  /** the centre a click on this crumb would set */
-  centre: Centre;
-}
-
-/** Body ids from the root down to `id` (`SUN, EARTH, MOON`); just `[id]` for an unknown body. */
-function bodyChain(id: string): string[] {
-  try {
-    return defaultBodies.lineage(id).map((b) => b.id).reverse();
-  } catch {
-    return [id];
-  }
+  /** the entity a click on this crumb would select (and, when orbitable, make the frame) */
+  id: Centre;
 }
 
 /**
- * The breadcrumb of a frame: for a body its lineage from the root (`SUN > EARTH > MOON`), for an entity its primary
- * body's lineage and then the entity itself (`SUN > EARTH > MOON > LRO`).
+ * The breadcrumb of a frame, root first, one crumb per entity: for a body entity its ancestors (`Sun > Earth > Moon`), for any
+ * other entity its primary body's ancestors and then the entity itself (`Sun > Earth > Moon > LRO`). The chain follows the
+ * body entities' `parentId`; it stops at an ancestor that is not in the lookup.
  */
 export function frameCrumbs(centre: Centre, rec: RecLookup): Crumb[] {
-  if (centre.kind === 'body') return bodyChain(centre.id).map((id) => ({ label: id, centre: bodyCentre(id) }));
-  const r = rec(centre.id);
-  const crumbs = r ? bodyChain(r.bodyId).map((id) => ({ label: id, centre: bodyCentre(id) })) : [];
-  crumbs.push({ label: r?.name ?? centre.id, centre });
-  return crumbs;
+  const ids: string[] = [centre];
+  const r = rec(centre);
+  let up: string | undefined = r ? (r.provider?.type === 'body' ? r.parentId : bodyEntityId(r.bodyId)) : undefined;
+  while (up && !ids.includes(up) && rec(up)) {
+    ids.unshift(up);
+    up = rec(up)?.parentId;
+  }
+  return ids.map((id) => ({ label: rec(id)?.name ?? id, id }));
 }
 
-/** `SUN > EARTH > MOON` (see `frameCrumbs`). */
+/** `Sun > Earth > Moon` (see `frameCrumbs`). */
 export const frameChainLabel = (centre: Centre, rec: RecLookup): string => frameCrumbs(centre, rec).map((c) => c.label).join(' > ');

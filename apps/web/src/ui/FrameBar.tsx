@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react';
-import { isOrbitableBody } from '../lib/frame';
 import { clock, ensureInGraph, graph } from '../state/runtime';
 import { useFrameInfo, useStore } from '../state/store';
 
 /**
- * Frame of reference in the scene: the breadcrumb `SUN > EARTH > MOON > LRO` (root first), a click on a crumb makes it the
- * frame and flies there, and the lock toggle keeps the frame while other objects are selected (docs/frames.md).
+ * Frame of reference in the scene: the breadcrumb `SUN > EARTH > MOON > LRO` (root first, one crumb per entity), a click on a
+ * crumb selects that entity (`selectObject`: it becomes the frame when it can be one, and the camera flies there), and the lock
+ * toggle keeps the frame while other objects are selected (docs/frames.md).
  */
 export function FrameBar() {
   const frame = useFrameInfo();
-  const setFrame = useStore((s) => s.setFrame);
+  const selectObject = useStore((s) => s.selectObject);
   const setFrameLocked = useStore((s) => s.setFrameLocked);
-  const centreId = frame.centre.kind === 'entity' ? frame.centre.id : null;
-  const centreRec = useStore((s) => (centreId ? s.entities.get(centreId) : undefined));
-  const noState = useCentreWithoutState(centreId);
+  const entities = useStore((s) => s.entities);
+  const noState = useCentreWithoutState(frame.isDefault ? null : frame.centre);
 
   const last = frame.crumbs.length - 1;
   return (
@@ -21,15 +20,14 @@ export function FrameBar() {
       <span className="frame-label" title="Frame of reference: orbit lines, trails, paths and range / speed readouts are relative to this centre">FRAME</span>
       <ol className="frame-crumbs">
         {frame.crumbs.map((c, i) => {
-          const body = c.centre.kind === 'body';
-          const usable = body ? isOrbitableBody(c.centre.id) : !!centreRec;
+          const usable = entities.has(c.id);
           return (
-            <li key={`${c.centre.kind}:${c.centre.id}`}>
+            <li key={c.id}>
               {i > 0 && <span className="frame-sep" aria-hidden="true">&gt;</span>}
               <button
                 className={i === last ? 'frame-crumb cur' : 'frame-crumb'} disabled={!usable} aria-current={i === last ? 'location' : undefined}
-                onClick={() => setFrame(c.centre, { fly: true })}
-                title={usable ? `Make ${c.label} the frame of reference and fly there` : `${c.label} is not in the catalog: it cannot be the frame of reference`}>
+                onClick={() => selectObject(c.id)}
+                title={usable ? `Select ${c.label} and fly there (it becomes the frame of reference unless the frame is locked)` : `${c.label} is not in the catalog`}>
                 {c.label.toUpperCase()}
               </button>
             </li>

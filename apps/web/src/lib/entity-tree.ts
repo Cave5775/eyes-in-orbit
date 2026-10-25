@@ -1,5 +1,3 @@
-import type { Centre } from './frame';
-
 /**
  * The hierarchical entity browser (docs/frames.md, UI): entities grouped under their primary body (`bodyId`), the bodies
  * nested like the body tree (SUN > EARTH > MOON, SUN > MARS). Everything here is pure: `buildTreeRows` turns the (already
@@ -35,9 +33,9 @@ export type TreeRow =
 
 export interface TreeOptions<T extends TreeItem> {
   bodies: readonly TreeBody[];
-  /** the active frame: its path (and the node of an entity centre) is open by default */
-  frame: Centre;
-  /** the primary body of an entity centre (its record's `bodyId`) */
+  /** the active frame (an entity id): the path to its body is open by default, and its own row keeps its group open */
+  frameId: string;
+  /** registry id of the body node that path ends at: the frame's own body (`MOON` for `body-moon`), for an object its primary body (default `EARTH`) */
   frameBodyId?: string;
   /** a query or a filter is active: every node that has a hit is open by default */
   openAll?: boolean;
@@ -149,9 +147,8 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
 
   // open by default: the path to the frame (and its own node), and everything with a hit while filtering
   const auto = new Set<string>();
-  if (opts.frame.kind === 'body') for (const k of bodyPathKeys(opts.bodies, opts.frame.id)) auto.add(k);
-  else for (const k of bodyPathKeys(opts.bodies, opts.frameBodyId ?? 'EARTH')) auto.add(k);
-  const frameEntity = opts.frame.kind === 'entity' ? opts.frame.id : null;
+  for (const k of bodyPathKeys(opts.bodies, opts.frameBodyId ?? 'EARTH')) auto.add(k);
+  const frameEntity = opts.frameId;
   const isOpen = (key: string): boolean => {
     const o = overrides?.get(key);
     if (o !== undefined) return o;
@@ -183,7 +180,7 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
     for (const [kind, list] of kinds) {
       const gkey = groupKey(n.id, kind);
       // the frame's own entity keeps its group open so it can be seen
-      const gopen = isOpen(gkey) || (!overrides?.has(gkey) && frameEntity !== null && list.some((it) => it.id === frameEntity));
+      const gopen = isOpen(gkey) || (!overrides?.has(gkey) && list.some((it) => it.id === frameEntity));
       rows.push({ type: 'group', key: gkey, kind, depth: depth + 1, count: list.length, open: gopen });
       if (gopen) for (const it of list) rows.push({ type: 'entity', key: entityKey(n.id, it.id), id: it.id, depth: depth + 2 });
     }

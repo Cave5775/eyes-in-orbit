@@ -23,9 +23,9 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
   const iss = useStore((s) => s.iss);
   const dsn = useStore((s) => s.dsn);
   const frame = useFrameInfo();
-  const centreRec = useStore((s) => (s.frame.kind === 'entity' ? s.entities.get(s.frame.id) : undefined));
+  const centreRec = useStore((s) => s.entities.get(s.frame));
   ensureInGraph(rec);
-  if (centreRec) ensureInGraph(centreRec); // an entity centre is looked up in the graph
+  if (centreRec) ensureInGraph(centreRec); // the centre entity is looked up in the graph
   const tel = computeTelemetry(graph, rec, now, frame.centre);
   const range = tel ? undefined : graph.provider(rec.id)?.validRange;
   const conf = confidenceLabel(tel?.confidence);

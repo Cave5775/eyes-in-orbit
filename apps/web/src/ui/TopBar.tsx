@@ -1,7 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { activeBodyTab, bodyTabs } from '../lib/browser-ui';
+import { useEffect, useRef, useState } from 'react';
 import { fmtUtc } from '../lib/format';
-import { bodyCentre } from '../lib/frame';
 import {
   digitsOnly, offsetFields, offsetMs, parseOffsetFields, parseOffsetText, simTimeAt, type OffsetFields,
 } from '../lib/time-offset';
@@ -26,12 +24,6 @@ type Edit = OffsetFields & { dirty: boolean };
 
 export function TopBar() {
   const snap = useStore((s) => s.clock);
-  const frame = useStore((s) => s.frame);
-  const setFrame = useStore((s) => s.setFrame);
-  // the body tabs are generated from the body entities (Sun, Earth, Mars, Moon by hierarchy rank)
-  const entities = useStore((s) => s.entities);
-  const tabs = useMemo(() => bodyTabs(entities.values()), [entities]);
-  const activeBody = activeBodyTab(tabs, frame);
   const now = useSimNow(200); // also re-renders the offset fields about 5 times a second
   const [pref, setPref] = useState<RatePref>({ speed: 1, reverse: false });
   const [edit, setEditState] = useState<Edit | null>(null);
@@ -106,20 +98,6 @@ export function TopBar() {
       <div className="brand">
         <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.4" /><circle cx="8" cy="8" r="2" fill="currentColor" /></svg>
         <span className="brand-text"><b>EYES</b>IN<b>ORBIT</b></span>
-      </div>
-
-      <div className="bodies" role="tablist" aria-label="Body">
-        {tabs.map((t) => {
-          const on = t.bodyId === activeBody;
-          return (
-            <button
-              key={t.bodyId} role="tab" aria-selected={on} className={on ? 'btn active' : 'btn'}
-              onClick={() => setFrame(bodyCentre(t.bodyId), { fly: true })}
-              title={`Set the frame of reference to the ${t.name}: the view centres on it, and orbit lines, trails, paths and readouts are relative to it`}>
-              {t.name.toUpperCase()}
-            </button>
-          );
-        })}
       </div>
 
       <div className="clock">

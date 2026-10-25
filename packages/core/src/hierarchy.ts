@@ -52,12 +52,20 @@ export function bodyEntityRecords(registry: BodyRegistry = defaultBodies, update
 export const isBodyEntity = (rec: Pick<EntityRecord, 'provider'>): boolean => rec.provider?.type === 'body';
 
 /**
- * Registry id of the body a frame centred on `rec` is expressed in, or the entity's own id when the entity is flagged
- * orbitable (`attrs.orbitable === true`, e.g. a large asteroid), else undefined (a plain satellite is not orbitable).
+ * The ONE converter from a body entity to the registry: the registry id the entity stands for (`body-moon` -> `MOON`), or
+ * undefined for any other record. Everything outside core and `lib/ref-body.ts` works with entity ids; this is where the
+ * two meet.
  */
-export function orbitableBodyId(rec: Pick<EntityRecord, 'id' | 'provider' | 'attrs'>): string | undefined {
-  if (rec.provider?.type === 'body') return rec.provider.bodyId;
-  return rec.attrs?.orbitable === true ? rec.id : undefined;
+export function bodyOf(rec: Pick<EntityRecord, 'provider'>): string | undefined {
+  return rec.provider?.type === 'body' ? rec.provider.bodyId : undefined;
+}
+
+/**
+ * Can the view be centred on this entity, i.e. can it be the frame of reference? A body entity, or an entity flagged
+ * `attrs.orbitable === true` (e.g. a large asteroid). A plain satellite is not.
+ */
+export function isOrbitable(rec: Pick<EntityRecord, 'provider' | 'attrs'>): boolean {
+  return rec.provider?.type === 'body' || rec.attrs?.orbitable === true;
 }
 
 /** Number of ancestors of a registry body: lineage length minus 1 (Sun 0, Earth and Mars 1, Moon 2). */

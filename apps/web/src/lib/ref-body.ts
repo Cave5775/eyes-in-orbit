@@ -1,4 +1,5 @@
 import { EARTH, bodyStateEci, defaultBodies, type Vec3 } from '@eio/core';
+import { MIN_ALT_KM } from './camera';
 import { shellRadius, type DistanceScale } from './deepspace';
 
 /**
@@ -9,12 +10,6 @@ import { shellRadius, type DistanceScale } from './deepspace';
  * Any registry body id works (`MARS` too); the literal names keep their autocompletion, other strings are accepted.
  */
 export type RefBody = 'EARTH' | 'MOON' | 'SUN' | (string & {});
-
-/** The bodies the scene has drawn since the first frame work (Earth, Moon, Sun); the registry may hold more. */
-export const REF_BODIES: readonly RefBody[] = ['EARTH', 'MOON', 'SUN'];
-
-/** True for the three original reference bodies. For "is this a body of the registry" use `isRegistryBody`. */
-export const isRefBody = (s: unknown): s is RefBody => s === 'EARTH' || s === 'MOON' || s === 'SUN';
 
 /** True for any body of the core registry (Sun, Earth, Moon, Mars, ...). */
 export const isRegistryBody = (s: unknown): s is RefBody => typeof s === 'string' && defaultBodies.has(s);
@@ -51,8 +46,11 @@ export function refDisplay(body: RefBody, tMs: number, scale: DistanceScale): { 
 /** Camera distance (from the body's centre) that frames the whole body when the view is centred on it. `k`: see refDisplay. */
 export const refViewDistKm = (body: RefBody, k = 1): number => (body === 'EARTH' ? 24000 : refRadiusKm(body) * k * 4);
 
-/** Closest the camera may come to the body's centre while it is the view centre: just above its (displayed) surface. */
-export const refMinDistKm = (body: RefBody, k = 1): number => refRadiusKm(body) * k * 1.02;
+/**
+ * Closest the camera may come to the body's centre while it is the view centre: just above its (displayed) surface (the
+ * Earth: the camera's usual minimum altitude, the same as when nothing is followed).
+ */
+export const refMinDistKm = (body: RefBody, k = 1): number => (body === 'EARTH' ? EARTH.radiusKm + MIN_ALT_KM : refRadiusKm(body) * k * 1.02);
 
 /** A body that orbits the Sun directly and is not the Earth: far away in the true scale (Mars, later asteroids). */
 function isHeliocentricFar(body: RefBody): boolean {

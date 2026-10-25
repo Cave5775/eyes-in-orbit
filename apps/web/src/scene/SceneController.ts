@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import {
-  DEG, EARTH, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, orbitableBodyId, sunDirectionEci,
+  DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci,
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
 import { bodyLineIds, bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
 import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
-import { isRegistryBody, refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } from '../lib/ref-body';
+import { refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, maxDistKm, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
@@ -152,11 +152,6 @@ function makePointSet(n: number, material: THREE.Material, world?: Float64Array,
   return { geo, points, pos, color, size, glyph, show };
 }
 
-/** Registry id a body entity stands for (`body-mars` -> `MARS`), undefined for any other record. */
-function bodyOfEntity(rec: EntityRecord | undefined): string | undefined {
-  return rec && isBodyEntity(rec) ? orbitableBodyId(rec) : undefined;
-}
-
 /** Distance (km) and angles at which a fly-to settles for a target at world position `p`. */
 function viewFor(p: THREE.Vector3): { dist: number; az: number; el: number } {
   const r = p.length();
@@ -183,14 +178,12 @@ export class SceneController {
   private earthGroup = new THREE.Group();
   private atmo: THREE.Mesh;
   private celestial: CelestialLayer;
-  /** a registry body (Moon, Sun, Mars ...) while the camera is centred on it (the followFn tracks its centre), else null */
-  private bodyTarget: RefBody | null = null;
-  /** body entity id -> registry id (`body-moon` -> `MOON`): these are drawn by the CelestialLayer, not as points */
-  private bodyRegId = new Map<string, string>();
-  /** body entities whose orbit line is drawn now (selected / followed / frame centre, see lib/body-scene.ts) and their key */
+  /** ids of the body entities (`body-moon`): these are drawn by the CelestialLayer, not as points */
+  private bodyIds = new Set<string>();
+  /** body entities whose orbit line is drawn now (selected / frame centre and their children, see lib/body-scene.ts) and their key */
   private bodyLines: string[] = [];
   private bodyLineKey = '';
-  /** frame of reference: paths, trails and orbit lines are sampled relative to this centre (set by `setFrame`, independent of the camera) */
+  /** frame of reference (an entity id): paths, trails and orbit lines are sampled relative to this centre (set by `setFrame`, independent of the camera) */
   private frameCentre: Centre = EARTH_CENTRE;
   private frameLocked = false;
   private earthMat: THREE.ShaderMaterial;
@@ -273,7 +266,7 @@ export class SceneController {
   private issTracker = new IssArrayTracker();
   private issSources: ArraySources = { sarj: 'STATIC', bga: 'STATIC', attitude: false };
   private issJointsNow: IssJoints | null = null;
-  /** entity the camera follows, if any (a followed model may be approached closer than a plain point) */
+  /** the focus entity the camera follows while `follow` (any entity, a body too; a followed model may be approached closer than a plain point) */
   private followId: string | null = null;
   private selectedId: string | null = null;
   private hoverId: string | null = null;
@@ -403,14 +396,12 @@ export class SceneController {
       if (prev === rec) continue;
       this.recs.set(rec.id, rec);
       if (prev && isBodyEntity(prev) && !isBodyEntity(rec)) {
-        this.bodyRegId.delete(rec.id);
+        this.bodyIds.delete(rec.id);
         bodiesChanged = true;
       }
       if (isBodyEntity(rec)) {
-        // a celestial body: drawn by the CelestialLayer, never a point; in the graph so worldPos and the orbit line work
-        const reg = orbitableBodyId(rec);
-        if (reg) this.bodyRegId.set(rec.id, reg);
-        else this.bodyRegId.delete(rec.id);
+        // a celestial body: drawn by the CelestialLayer, never a point; in the graph so worldPos, the frame and the orbit line work
+        this.bodyIds.add(rec.id);
         if (prev && !isBodyEntity(prev)) {
           if (isSgp4(prev)) gone.push(rec.id);
           dynChanged = true;
@@ -435,7 +426,7 @@ export class SceneController {
       this.recs.delete(id);
       graph.remove(id);
       if (this.satSet.delete(id)) gone.push(id);
-      else if (this.bodyRegId.delete(id)) bodiesChanged = true;
+      else if (this.bodyIds.delete(id)) bodiesChanged = true;
       else dynChanged = true;
     }
     this.pickMetaCache = null; // ranks and creation times for picking, rebuilt on the next click
@@ -500,8 +491,9 @@ export class SceneController {
     this.rig.maxDist = maxDistKm(scale);
     this.scopeDirty = true;
     // whatever the camera was framing out there has moved: follow it with a fresh view, or fall back to the Earth
-    if (this.bodyTarget && refDisplay(this.bodyTarget, clock.now(), 'compressed').k !== 1) {
-      this.focusBody(this.bodyTarget); // the Sun moved between its shell and its true place (and changed size with it)
+    const body = this.followedBody();
+    if (body && refDisplay(body, clock.now(), 'compressed').k !== 1) {
+      this.focusEntity(this.recs.get(this.followId!)!); // the Sun moved between its shell and its true place (and changed size with it)
     } else if (this.follow && this.followFn?.(this.anchor, clock.now())) {
       if (this.anchor.length() > SHELL_THRESHOLD_KM * 0.5) this.rig.flyTo(viewFor(this.anchor));
     } else if (!this.follow && this.freeTarget.length() > SHELL_THRESHOLD_KM * 0.5) {
@@ -578,10 +570,8 @@ export class SceneController {
 
   /** The centre entity needs a live provider in the graph to be looked up (the selection and hints are put there too). */
   private ensureCentreInGraph(): void {
-    const c = this.frameCentre;
-    if (c.kind !== 'entity') return;
-    const rec = this.recs.get(c.id);
-    if (rec && graph.get(c.id) !== rec) graph.upsert(rec);
+    const rec = this.recs.get(this.frameCentre);
+    if (rec && graph.get(rec.id) !== rec) graph.upsert(rec);
   }
 
   setFollow(follow: boolean): void {
@@ -592,32 +582,30 @@ export class SceneController {
     this.follow = follow;
     if (this.surfaceOn) {
       if (!follow && this.surfaceSrc?.kind === 'entity') this.freezeSurfaceSource();
-      else if (follow && this.selectedId && this.recs.has(this.selectedId)) this.surfaceSrc = { kind: 'entity', id: this.selectedId };
+      else if (follow && this.selectedId && this.recs.has(this.selectedId) && !this.bodyIds.has(this.selectedId)) this.surfaceSrc = { kind: 'entity', id: this.selectedId };
     }
   }
 
+  /** The entity the camera is following now (the focus), if any. */
+  private followedRec(): EntityRecord | undefined {
+    return this.follow && this.followId ? this.recs.get(this.followId) : undefined;
+  }
+
+  /** Registry id of the body the camera is following (a followed body entity), else undefined. Derived, so it can never be stale. */
+  private followedBody(): string | undefined {
+    const rec = this.followedRec();
+    return rec && bodyOf(rec);
+  }
+
+  /**
+   * One-shot camera request from the store (`selectObject`, `resetView`, `focusLaunch`): an entity (a body is one like any
+   * other) is followed, a ground point is followed, neither is the home view (free camera over the Earth).
+   */
   focus(req: FocusRequest): void {
     this.groundLock = null;
-    // a frame centre (setFrame with fly): a body pivots the camera on the body, an entity is followed like a selection
-    const c = req.centre;
-    // a body entity (`body-mars`) focused by id is the same as its body centre; the Earth is the home view
-    const idBody = req.id && !c ? bodyOfEntity(this.recs.get(req.id)) : undefined;
-    const bodyId = c?.kind === 'body' ? c.id : idBody;
-    if (bodyId && bodyId !== 'EARTH' && isRegistryBody(bodyId)) {
-      this.focusBody(bodyId);
-      return;
-    }
-    this.bodyTarget = null;
-    const entityId = idBody ? undefined : req.id ?? (c?.kind === 'entity' ? c.id : undefined);
-    if (entityId) {
-      const rec = this.recs.get(entityId);
-      if (!rec) return;
-      graph.upsert(rec);
-      const id = entityId;
-      this.followId = id;
-      this.focusLatLon = null;
-      this.followFn = (out, t) => this.worldPos(id, t, out);
-      if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
+    if (req.id) {
+      const rec = this.recs.get(req.id);
+      if (rec) this.focusEntity(rec, req);
     } else if (req.lat !== undefined && req.lon !== undefined) {
       const lat = req.lat * DEG, lon = req.lon * DEG;
       this.followId = null;
@@ -627,6 +615,9 @@ export class SceneController {
         return true;
       };
       if (this.surfaceOn) this.surfaceSrc = { kind: 'latlon', lat, lon };
+      this.follow = true;
+      if (!this.surfaceOn && this.followFn(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+      this.applyAutoSurface(req);
     } else {
       if (this.surfaceOn) this.setSurfaceMode(false);
       this.followFn = null;
@@ -635,28 +626,31 @@ export class SceneController {
       this.freeTarget.set(0, 0, 0);
       this.follow = false;
       this.rig.flyTo({ dist: Math.max(20000, Math.min(this.rig.dist, 60000)), az: this.rig.az, el: this.rig.el * 0.6 });
-      return;
     }
-    this.follow = true;
-    if (!this.surfaceOn && this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
-    this.applyAutoSurface(req);
   }
 
-  /** Centre the view on a registry body (Moon, Sun, Mars ...) and follow it (they move); everything is then seen relative to that body. */
-  private focusBody(body: RefBody): void {
-    if (this.surfaceOn) this.setSurfaceMode(false);
-    this.followId = null;
+  /**
+   * Centre the view on an entity and follow it (they move). A body: leave the surface view, pivot on it at the distance that
+   * frames the whole body, and everything is seen relative to it. Any other entity: the usual fly-to and, near the Earth, the
+   * surface orientation (`applyAutoSurface`, skipped for the internal refocuses that pass no request).
+   */
+  private focusEntity(rec: EntityRecord, req?: FocusRequest): void {
+    const id = rec.id;
+    if (graph.get(id) !== rec) graph.upsert(rec);
+    this.followId = id;
     this.focusLatLon = null;
-    this.bodyTarget = body;
-    this.followFn = (out, t) => {
-      const p = refDisplay(body, t, this.distScale).r;
-      out.set(p[0], p[1], p[2]);
-      return true;
-    };
+    this.followFn = (out, t) => this.worldPos(id, t, out);
     this.follow = true;
-    this.cb.onFollowChange?.(true);
-    const sun = sunDirectionEci(clock.now());
-    this.rig.flyTo({ dist: refViewDistKm(body, refDisplay(body, clock.now(), this.distScale).k), az: Math.atan2(sun[1], sun[0]) + 0.5, el: 0.35 });
+    const body = bodyOf(rec);
+    if (body !== undefined) {
+      if (this.surfaceOn) this.setSurfaceMode(false);
+      const sun = sunDirectionEci(clock.now());
+      this.rig.flyTo({ dist: refViewDistKm(body, refDisplay(body, clock.now(), this.distScale).k), az: Math.atan2(sun[1], sun[0]) + 0.5, el: 0.35 });
+      return;
+    }
+    if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
+    else if (this.followFn(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+    if (req) this.applyAutoSurface(req);
   }
 
   // ------------------------------------------------------------------ camera modes and fit
@@ -676,11 +670,14 @@ export class SceneController {
   }
 
   /**
-   * The surface view is Earth-only: not while the camera is centred on the Moon or the Sun, nor while the frame of
-   * reference is a body other than the Earth (an entity as the frame is fine). The one place to adapt for other bodies.
+   * The surface view is Earth-only: not while the camera follows a body other than the Earth (the focus entity, read from
+   * `followId`, so it is never a stale body), nor while the frame of reference is such a body (any other entity as the frame
+   * is fine). The one place to adapt for other bodies.
    */
   private surfaceAvailable(): boolean {
-    return !this.bodyTarget && (this.frameCentre.kind === 'entity' || isEarthCentre(this.frameCentre));
+    const followed = this.followedRec();
+    if (followed && isBodyEntity(followed) && !isEarthCentre(followed.id)) return false;
+    return isEarthCentre(this.frameCentre) || !this.bodyIds.has(this.frameCentre);
   }
 
   /**
@@ -778,7 +775,7 @@ export class SceneController {
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const rec of this.recs.values()) {
-      if (this.bodyRegId.has(rec.id)) continue; // the bodies are scenery here: the Sun on its shell would make FIT VISIBLE a deep-space view
+      if (this.bodyIds.has(rec.id)) continue; // the bodies are scenery here: the Sun on its shell would make FIT VISIBLE a deep-space view
       if (!matchesFilters(rec, this.filters) || isHiddenRec(rec, this.filters)) continue;
       if (this.fitPos(rec.id, v)) pts.push(v.x, v.y, v.z);
     }
@@ -797,7 +794,6 @@ export class SceneController {
     const dist = view?.dist ?? fitDistanceClamped(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN, MIN_TARGET_DIST_KM, this.distScale);
     const look = view ?? fitAngles(c, radius);
     this.follow = false;
-    this.bodyTarget = null;
     this.freeTarget.set(c[0], c[1], c[2]);
     this.rig.pan.set(0, 0, 0);
     this.rig.flyTo({ dist, az: look?.az ?? this.rig.az, el: look?.el ?? this.rig.el });
@@ -828,7 +824,8 @@ export class SceneController {
   /** Where a fresh surface view centres: the followed object, the focused pad, else the ground point under the view centre. */
   private pickSurfaceSource(): SurfaceSource | null {
     const id = this.follow ? this.followId ?? (this.focusLatLon ? null : this.selectedId) : null;
-    if (id && this.worldPos(id, clock.now(), this.tmp)) return { kind: 'entity', id };
+    // a followed body (the Earth) is no object to stand on: the ground point under the view centre is used instead
+    if (id && !this.bodyIds.has(id) && this.worldPos(id, clock.now(), this.tmp)) return { kind: 'entity', id };
     if (this.follow && this.focusLatLon) return { kind: 'latlon', ...this.focusLatLon };
     const dir = this.camera.getWorldDirection(new THREE.Vector3());
     const c = this.camera.position;
@@ -879,7 +876,7 @@ export class SceneController {
    */
   private applyAutoSurface(req: FocusRequest): void {
     if (req.nonce === 0) return;
-    const id = req.id ?? (req.centre?.kind === 'entity' ? req.centre.id : undefined);
+    const id = req.id;
     const rec = id ? this.recs.get(id) ?? null : null;
     const alt = id ? this.entityAltKm(id) : 0;
     const want = shouldAutoSurface(rec, alt, { pref: this.surfaceAuto, earthCentred: this.surfaceAvailable() });
@@ -1057,7 +1054,7 @@ export class SceneController {
 
   private rebuildDyn(): void {
     const ids: string[] = [];
-    for (const rec of this.recs.values()) if (!isSgp4(rec) && rec.provider && !this.bodyRegId.has(rec.id)) ids.push(rec.id);
+    for (const rec of this.recs.values()) if (!isSgp4(rec) && rec.provider && !this.bodyIds.has(rec.id)) ids.push(rec.id);
     this.dynIds = ids;
     this.dynIndex = new Map(ids.map((id, i) => [id, i]));
     this.scene.remove(this.dyn.points);
@@ -1131,7 +1128,7 @@ export class SceneController {
     let hinted = 0;
     for (const rec of this.recs.values()) {
       // body entities have their own rule (selected / followed / frame centre), below
-      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyRegId.has(rec.id) && !isHiddenRec(rec, this.filters)) {
+      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyIds.has(rec.id) && !isHiddenRec(rec, this.filters)) {
         want.set(rec.id, false);
         hinted++;
         graph.upsert(rec);
@@ -1159,7 +1156,7 @@ export class SceneController {
     this.fullOverlays = new Set([...want].filter(([, full]) => full).map(([id]) => id));
 
     // trajectory path for a selected entity that has no SGP4 orbit of its own
-    const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' && !this.bodyRegId.has(sel.id) ? sel.id : null;
+    const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' && !this.bodyIds.has(sel.id) ? sel.id : null;
     if (pathId !== this.pathOverlayId) {
       this.pathOverlay?.dispose();
       this.pathOverlay = null;
@@ -1172,8 +1169,8 @@ export class SceneController {
 
   /** Body entities that get an orbit line now (lib/body-scene.ts `bodyLineIds`). */
   private currentBodyLines(): string[] {
-    if (this.bodyRegId.size === 0) return [];
-    return bodyLineIds(this.recs.values(), { selectedId: this.selectedId, focusBodyId: this.bodyTarget, frame: this.frameCentre, scale: this.distScale });
+    if (this.bodyIds.size === 0) return [];
+    return bodyLineIds(this.recs.values(), { selectedId: this.selectedId, frame: this.frameCentre, scale: this.distScale });
   }
 
   // ------------------------------------------------------------------ geometry queries
@@ -1183,9 +1180,10 @@ export class SceneController {
    * `refDisplay`, the shell-compressed position in the compressed scale, so focus, follow, frame and orbit lines agree.
    */
   private worldPos(id: string, t: number, out: THREE.Vector3): boolean {
-    const reg = this.bodyRegId.get(id);
-    if (reg !== undefined) {
-      const d = refDisplay(reg, t, this.distScale);
+    const rec = this.recs.get(id);
+    const body = rec && bodyOf(rec);
+    if (body !== undefined) {
+      const d = refDisplay(body, t, this.distScale);
       out.set(d.r[0], d.r[1], d.r[2]);
       this.lastCompressed = d.k !== 1;
       return true;
@@ -1208,7 +1206,7 @@ export class SceneController {
       out.set(w[si * 3], w[si * 3 + 1], w[si * 3 + 2]);
       return true;
     }
-    if (this.bodyRegId.has(id)) return this.worldPos(id, clock.now(), out); // a drawn body (hover ring)
+    if (this.bodyIds.has(id)) return this.worldPos(id, clock.now(), out); // a drawn body (hover ring)
     const di = this.dynIndex.get(id);
     if (di === undefined || this.dyn.size.getX(di) === 0) return false;
     const w = this.dyn.pos.world;
@@ -1309,7 +1307,7 @@ export class SceneController {
       const { ids, total } = this.pickAll(p.x, p.y, POPUP_MAX, true);
       // the trajectory is the lowest priority: below every object and the popup. Over a body alone (zoomed in, the Earth's
       // disc covers the view) it still wins, or a path over the globe could not be clicked
-      if (ids.every((id) => this.bodyRegId.has(id))) {
+      if (ids.every((id) => this.bodyIds.has(id))) {
         const hit = this.pathHitAt(p.x, p.y);
         if (hit && this.cb.onPathSeek) {
           this.setHover(null);
@@ -1419,6 +1417,7 @@ export class SceneController {
 
     // camera
     let anchored: boolean;
+    let focusBody: string | undefined;
     if (this.surfaceOn) {
       anchored = this.surfaceTarget(this.anchor, t);
       if (!anchored) this.setSurfaceMode(false); // the anchored object lost its position: back to the globe
@@ -1430,10 +1429,11 @@ export class SceneController {
       if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget, t);
       // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
       const modelMin = anchored ? this.models.defOf(this.followId)?.minViewKm : undefined;
-      const bodyMin = anchored && this.bodyTarget ? refMinDistKm(this.bodyTarget, refDisplay(this.bodyTarget, t, this.distScale).k) : undefined;
+      focusBody = anchored ? this.followedBody() : undefined;
+      const bodyMin = focusBody ? refMinDistKm(focusBody, refDisplay(focusBody, t, this.distScale).k) : undefined;
       this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? bodyMin ?? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
     }
-    this.rig.maxDist = refMaxDistKm(anchored && this.bodyTarget ? this.bodyTarget : 'EARTH', maxDistKm(this.distScale), this.distScale);
+    this.rig.maxDist = refMaxDistKm(focusBody ?? 'EARTH', maxDistKm(this.distScale), this.distScale);
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
     this.updateDetail(wall);
 
@@ -1445,7 +1445,7 @@ export class SceneController {
       this.lastPickAt = wall;
       const id = this.pick(this.mouse.x, this.mouse.y);
       // the trajectory under the cursor wins over a body (the Earth's disc covers the view) but never over an object
-      const onPath = !this.previewId && (!id || this.bodyRegId.has(id)) ? this.pathHitAt(this.mouse.x, this.mouse.y) : null;
+      const onPath = !this.previewId && (!id || this.bodyIds.has(id)) ? this.pathHitAt(this.mouse.x, this.mouse.y) : null;
       if (onPath) {
         if (this.hoverId) this.setHover(null);
       } else if (id || this.hoverId) this.setHover(id, this.mouse.x, this.mouse.y);
@@ -1499,7 +1499,7 @@ export class SceneController {
     // small, far bodies hide the non-exempt points over their disc: one cone per drawn body (a uniform update, no buffer upload)
     const o = f.originV3;
     this.discCones = discGroups(
-      this.celestial.bodies().map((b) => ({ rel: [b.c[0] - o[0], b.c[1] - o[1], b.c[2] - o[2]] as V3, radiusKm: b.radiusKm, k: b.k, reachKm: b.bodyId === 'EARTH' ? EARTH_SYSTEM_REACH_KM : 0, depthKm: b.bodyId === 'EARTH' ? EARTH_SYSTEM_DEPTH_KM : 0 })),
+      this.celestial.bodies().map((b) => ({ rel: [b.c[0] - o[0], b.c[1] - o[1], b.c[2] - o[2]] as V3, radiusKm: b.radiusKm, k: b.k, reachKm: isEarthCentre(b.entityId) ? EARTH_SYSTEM_REACH_KM : 0, depthKm: isEarthCentre(b.entityId) ? EARTH_SYSTEM_DEPTH_KM : 0 })),
       this.camera.fov, this.container.clientHeight,
     );
     this.discCones.forEach((g, i) => {
@@ -1638,7 +1638,7 @@ export class SceneController {
     // light overlays (orbit line, footprint) of entities that are scoped out are not drawn either
     this.overlayInScope.clear();
     for (const id of this.overlays.keys()) {
-      const keep = id === sel || this.related.has(id) || this.bodyRegId.has(id); // a body line is already limited to what is looked at
+      const keep = id === sel || this.related.has(id) || this.bodyIds.has(id); // a body line is already limited to what is looked at
       let d = 0;
       if (!keep && this.pointPos(id, tmp)) d = Math.hypot(tmp.x - focus.x, tmp.y - focus.y, tmp.z - focus.z);
       this.overlayInScope.set(id, inScope({ d, key: 0, bulk: false, keep }, radius, mode));
@@ -1695,8 +1695,8 @@ export class SceneController {
   private updateOverlays(t: number, wall: number): void {
     const centre = this.frameCentre;
     this.ensureCentreInGraph(); // the record may have been replaced by a refresh
-    // the body lines depend on the selection, the camera's body, the frame and the distance scale: re-evaluate every frame (4 records)
-    if (this.bodyRegId.size && this.currentBodyLines().join(',') !== this.bodyLineKey) this.refreshHints();
+    // the body lines depend on the selection, the frame and the distance scale: re-evaluate every frame (4 records)
+    if (this.bodyIds.size && this.currentBodyLines().join(',') !== this.bodyLineKey) this.refreshHints();
     for (const [id, o] of this.overlays) {
       const rec = this.recs.get(id);
       if (!rec) continue;
@@ -1740,7 +1740,7 @@ export class SceneController {
     let set = this.labelFeatured;
     if (!set) {
       set = this.labelFeatured = new Set();
-      for (const rec of this.recs.values()) if (rec.render?.label === true && !this.bodyRegId.has(rec.id)) set.add(rec.id);
+      for (const rec of this.recs.values()) if (rec.render?.label === true && !this.bodyIds.has(rec.id)) set.add(rec.id);
     }
     return set;
   }
@@ -1849,7 +1849,7 @@ export class SceneController {
 
     const sel = this.selectedId, hov = this.hoverId;
     // the selection (drawn from the highlight set whatever it is); a selected body is a body label
-    if (sel && this.selOk && !this.bodyRegId.has(sel)) {
+    if (sel && this.selOk && !this.bodyIds.has(sel)) {
       const a = this.hi.pos.attr;
       this.projectLabel(a.getX(0), a.getY(0), a.getZ(0), sel, labelText(this.recs.get(sel)?.name ?? sel), 'selected', 14);
     }

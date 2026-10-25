@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { EARTH, EntityGraph, MOON, bodyEntityRecords, bodyStateEci, moonPositionEci, norm, type EntityRecord, type Sample, type Vec3 } from '@eio/core';
-import { EARTH_CENTRE, bodyCentre, framePathPoint, type Centre } from '../src/lib/frame';
+import { EARTH_CENTRE, framePathPoint, type Centre } from '../src/lib/frame';
 import { refDisplay } from '../src/lib/ref-body';
 import { mockLaunches, mockSatellites } from '../src/mock/generators';
 import { EntityOverlay } from '../src/scene/overlays';
@@ -22,6 +22,7 @@ const drawn = (o: EntityOverlay) => peek(o).orbit.obj.geometry.drawRange;
 
 function setup(recs: EntityRecord[]) {
   const graph = new EntityGraph();
+  for (const r of bodies) graph.upsert(r); // a frame centre is an entity: the body entities are in the graph, as in the scene
   for (const r of recs) graph.upsert(r);
   const overlay = new EntityOverlay(new THREE.Group(), new THREE.Color(0xffffff));
   let wall = 0;
@@ -63,7 +64,7 @@ describe('EntityOverlay: Earth satellites', () => {
     const def = setup([iss]);
     def.update(iss, NOW, true);
     const moon = setup([iss]);
-    moon.update(iss, NOW, true, bodyCentre('MOON'));
+    moon.update(iss, NOW, true, 'body-moon');
     const a = peek(def.overlay), b = peek(moon.overlay);
     expect(moon.overlay.hasOrbit).toBe(true);
     expect(b.orbit.n).toBe(a.orbit.n);
@@ -86,7 +87,7 @@ describe('EntityOverlay: Earth satellites', () => {
     const { overlay, update } = setup([iss]);
     update(iss);
     const w0 = point(peek(overlay).orbit.pos.world, 5);
-    update(iss, NOW + 1000, false, bodyCentre('SUN')); // the frame changed: the line is not rebuilt (same primary)
+    update(iss, NOW + 1000, false, 'body-sun'); // the frame changed: the line is not rebuilt (same primary)
     expect(point(peek(overlay).orbit.pos.world, 5)).toEqual(w0);
     expect(Array.from(peek(overlay).orbit.pos.shift)).toEqual([0, 0, 0]);
   });
@@ -107,7 +108,7 @@ describe('EntityOverlay: Earth satellites', () => {
 describe('EntityOverlay: a Moon orbiter', () => {
   it('is a closed ellipse round the Moon in every frame', () => {
     const lro = lroLike();
-    for (const centre of [EARTH_CENTRE, bodyCentre('MOON'), bodyCentre('SUN')]) {
+    for (const centre of [EARTH_CENTRE, 'body-moon', 'body-sun']) {
       const { overlay, update } = setup([lro]);
       update(lro, NOW, false, centre);
       expect(overlay.hasOrbit).toBe(true);

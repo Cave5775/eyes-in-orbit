@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { isBodyEntity, orbitableBodyId } from '@eio/core';
 import { emptyHint } from '../lib/browser-ui';
 import { kindLabel, launchOf } from '../lib/entity';
-import { bodyCentre, entityCentre, sameCentre, type Centre } from '../lib/frame';
 import { usePanels } from '../state/panels';
 import { useStore } from '../state/store';
 import { LaunchTab } from './detail/LaunchTab';
@@ -16,7 +14,7 @@ export function DetailPanel() {
   const selectedId = useStore((s) => s.selectedId);
   const rec = useStore((s) => (s.selectedId ? s.entities.get(s.selectedId) : undefined));
   const launches = useStore((s) => s.launches);
-  const select = useStore((s) => s.select);
+  const selectObject = useStore((s) => s.selectObject);
   const frame = useStore((s) => s.frame);
   const frameLocked = useStore((s) => s.frameLocked);
   const setFrame = useStore((s) => s.setFrame);
@@ -48,15 +46,11 @@ export function DetailPanel() {
       </aside>
     );
   }
-  // a body entity locks the BODY centre it stands for (the Earth, not the entity `body-earth`), any other object itself
-  const bodyId = orbitableBodyId(rec);
-  const lockCentre: Centre = bodyId !== undefined && isBodyEntity(rec) ? bodyCentre(bodyId) : entityCentre(rec.id);
-
   return (
     <aside className="panel right">
       <div className="panel-head">
         <span className="detail-name" title={rec.name}>{rec.name}</span>
-        <button className="btn icon" onClick={() => select(null)} aria-label="Clear selection" title="Clear selection">&times;</button>
+        <button className="btn icon" onClick={() => selectObject(null)} aria-label="Clear selection" title="Clear selection">&times;</button>
       </div>
       <div className="detail-sub">
         <span className="chip">{kindLabel(rec.kind)}</span>
@@ -64,15 +58,15 @@ export function DetailPanel() {
         <span className="mono dim">{rec.id}</span>
       </div>
       {/* LOCK FRAME: this object becomes the frame of reference and stays it while other objects are selected */}
-      {frameLocked && sameCentre(frame, lockCentre) ? (
+      {frameLocked && frame === rec.id ? (
         <button
           className="btn frame-action on" onClick={() => setFrameLocked(false)}
-          title={`The frame of reference is locked on ${rec.name}: selecting other objects does not change it. Unlock to let the body tabs and body selection take it over again; the frame stays on this object until you pick another in the FRAME bar.`}>
+          title={`The frame of reference is locked on ${rec.name}: selecting other objects does not change it. Unlock to let selecting a body take it over again; the frame stays on this object until you select another body.`}>
           UNLOCK FRAME
         </button>
       ) : (
         <button
-          className="btn frame-action" onClick={() => setFrame(lockCentre, { lock: true, fly: lockCentre.kind === 'entity' })} /* a body fly would clear the selection (and this panel) */
+          className="btn frame-action" onClick={() => setFrame(rec.id, true)}
           title={`Make ${rec.name} the frame of reference and lock it: orbit lines, trails, paths and range / speed readouts of every object you select next are relative to it. Selecting other objects does not change the frame.`}>
           LOCK FRAME TO THIS OBJECT
         </button>

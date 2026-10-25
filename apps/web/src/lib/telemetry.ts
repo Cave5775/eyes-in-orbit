@@ -1,5 +1,5 @@
 import {
-  CompositeProvider, DEG, Sgp4Provider, norm, stateToGeodetic, type EntityGraph, type EntityRecord, type FrameId,
+  CompositeProvider, DEG, Sgp4Provider, norm, stateToGeodetic, type EntityGraph, type EntityRecord,
 } from '@eio/core';
 import { SHELL_THRESHOLD_KM } from './deepspace';
 import { EARTH_CENTRE, entityRelativeToCentre, graphLookup, isEarthCentre, type Centre } from './frame';
@@ -26,8 +26,8 @@ export interface Telemetry {
 
 /**
  * Live state of an entity from the shared graph at sim time `t`, in display-ready units. `centre` is the frame of
- * reference: a body (the core frame hop re-expresses the state in its inertial frame) or an entity (difference of two
- * Earth-inertial states, the centre entity must be in the graph).
+ * reference, an entity id (difference of two Earth-inertial states; the centre entity must be in the graph, body entities
+ * are, and the Earth is the origin).
  */
 export function computeTelemetry(graph: EntityGraph, rec: EntityRecord, t: number, centre: Centre = EARTH_CENTRE): Telemetry | null {
   const s = graph.stateOf(rec.id, t);
@@ -37,10 +37,8 @@ export function computeTelemetry(graph: EntityGraph, rec: EntityRecord, t: numbe
   const shell = rangeKm > SHELL_THRESHOLD_KM;
   const out: Telemetry = { rangeKm, shell, confidence: s.confidence, speedKmS: inertial?.v ? norm(inertial.v) : undefined };
 
-  if (!isEarthCentre(centre) && !(centre.kind === 'entity' && centre.id === rec.id)) {
-    const rel = centre.kind === 'body'
-      ? graph.stateIn(rec.id, t, `${centre.id}:inertial` as FrameId)
-      : entityRelativeToCentre(rec.id, centre, t, graphLookup(graph));
+  if (!isEarthCentre(centre) && centre !== rec.id) {
+    const rel = entityRelativeToCentre(rec.id, centre, t, graphLookup(graph));
     if (rel) {
       out.refRangeKm = norm(rel.r);
       out.refSpeedKmS = rel.v ? norm(rel.v) : undefined;

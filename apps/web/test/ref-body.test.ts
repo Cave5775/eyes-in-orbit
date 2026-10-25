@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { EARTH, EntityGraph, bodyStateEci, moonPositionEci, norm, type Vec3 } from '@eio/core';
-import { bodyCentre } from '../src/lib/frame';
+import { EARTH, EntityGraph, bodyEntityRecords, bodyStateEci, moonPositionEci, norm, type Vec3 } from '@eio/core';
 import { computeTelemetry } from '../src/lib/telemetry';
 import { mockSatellites } from '../src/mock/generators';
 import {
-  REF_BODIES, REF_LABEL, REF_RADIUS_KM, isRefBody, isRegistryBody, refDisplay, refMaxDistKm, refMinDistKm, refPositionEci, refRadiusKm,
+  REF_LABEL, REF_RADIUS_KM, isRegistryBody, refDisplay, refMaxDistKm, refMinDistKm, refPositionEci, refRadiusKm,
   refViewDistKm, relativeToRef, type RefBody,
 } from '../src/lib/ref-body';
 import { SHELL_THRESHOLD_KM, shellRadius } from '../src/lib/deepspace';
@@ -13,13 +12,6 @@ const NOW = Date.parse('2026-10-22T12:00:00Z');
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
 describe('reference bodies', () => {
-  it('knows the Earth, Moon and Sun and rejects anything else', () => {
-    expect(REF_BODIES).toEqual(['EARTH', 'MOON', 'SUN']);
-    expect(isRefBody('MOON')).toBe(true);
-    expect(isRefBody('MARS')).toBe(false);
-    expect(isRefBody(undefined)).toBe(false);
-  });
-
   it('puts each body centre at its ephemeris position in Earth-inertial coordinates', () => {
     expect(refPositionEci('EARTH', NOW)).toEqual([0, 0, 0]);
     expect(refPositionEci('MOON', NOW)).toEqual(moonPositionEci(NOW));
@@ -102,16 +94,17 @@ describe('reference bodies from the registry (Mars)', () => {
 describe('readouts relative to the reference body', () => {
   const iss = mockSatellites(NOW).find((s) => s.id === 'sat-25544')!;
   const g = new EntityGraph();
+  for (const r of bodyEntityRecords()) g.upsert(r); // the frame centre is an entity in the graph
   g.upsert(iss);
 
-  it('adds range and speed relative to the Moon through the core frame hop', () => {
-    const tel = computeTelemetry(g, iss, NOW, bodyCentre('MOON'))!;
+  it('adds range and speed relative to the Moon (the body entity as the frame centre)', () => {
+    const tel = computeTelemetry(g, iss, NOW, 'body-moon')!;
     const earthState = g.stateIn(iss.id, NOW, 'EARTH:inertial')!;
     const moonState = g.stateIn(iss.id, NOW, 'MOON:inertial')!;
     // position: Earth-relative minus the Moon's position; velocity: minus the Moon's velocity (about 1 km/s)
     const expected = norm(sub(earthState.r, moonPositionEci(NOW)));
     expect(tel.refRangeKm).toBeCloseTo(expected, 3);
-    expect(tel.refRangeKm).toBe(norm(moonState.r));
+    expect(tel.refRangeKm).toBeCloseTo(norm(moonState.r), 3); // the core frame hop gives the same
     expect(tel.refSpeedKmS).toBeGreaterThan(6.5); // 7.7 km/s orbit against a ~1 km/s Moon
     expect(tel.refSpeedKmS).toBeLessThan(8.8);
     // the Earth-based readouts are untouched
@@ -123,7 +116,7 @@ describe('readouts relative to the reference body', () => {
     const earth = computeTelemetry(g, iss, NOW)!;
     expect(earth.refRangeKm).toBeUndefined();
     expect(earth.refSpeedKmS).toBeUndefined();
-    const sun = computeTelemetry(g, iss, NOW, bodyCentre('SUN'))!;
+    const sun = computeTelemetry(g, iss, NOW, 'body-sun')!;
     expect(sun.refRangeKm).toBeGreaterThan(1.45e8);
     expect(sun.refRangeKm).toBeLessThan(1.55e8);
     expect(sun.refSpeedKmS).toBeGreaterThan(25); // the Earth's 29.8 km/s dominates

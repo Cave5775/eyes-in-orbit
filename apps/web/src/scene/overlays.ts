@@ -1,10 +1,9 @@
 import * as THREE from 'three';
-import { EARTH, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
+import { EARTH, bodyEntityId, bodyOf, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
 import { bodyLineAllowed } from '../lib/body-scene';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import {
-  EARTH_CENTRE, bodyCentre, centreKey, centrePositionEci, framePathPoint, frameForRec, frameSampler, graphLookup, type Centre, type EntityLookup,
-  type FrameSampler,
+  EARTH_CENTRE, centrePositionEci, framePathPoint, frameForRec, frameSampler, graphLookup, type Centre, type EntityLookup, type FrameSampler,
 } from '../lib/frame';
 import { chordSagKm } from '../lib/occlusion';
 import { orbitPeriodSec } from '../lib/orbit';
@@ -132,10 +131,12 @@ export class EntityOverlay {
     const period = orbitPeriodSec(graph, rec, s, t);
     const trailCentre = frameForRec(centre, rec);
     // the orbit line: a body entity's parent frame (the same as the trail's), any other object's primary body
-    const orbitCentre = isBody ? trailCentre : bodyCentre(rec.bodyId);
+    const orbitCentre = isBody ? trailCentre : bodyEntityId(rec.bodyId);
     // a heliocentric body line in the compressed scale is drawn shrunk about the Earth by the displayed centre's factor
-    const k = isBody && scale === 'compressed' && orbitCentre.kind === 'body' ? refDisplay(orbitCentre.id, t, scale).k : 1;
-    const key = `${centreKey(orbitCentre)}|${k === 1 ? 'm' : 'k'}`;
+    const centreRec = isBody && scale === 'compressed' ? graph.get(orbitCentre) : undefined;
+    const centreBody = centreRec && bodyOf(centreRec);
+    const k = centreBody ? refDisplay(centreBody, t, scale).k : 1;
+    const key = `${orbitCentre}|${k === 1 ? 'm' : 'k'}`;
     if (period !== this.period || key !== this.centreKeyBuilt) {
       this.period = period;
       this.centreKeyBuilt = key;

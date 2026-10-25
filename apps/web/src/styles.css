@@ -135,7 +135,6 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .brand svg { color: var(--accent); margin-right: 2px; }
 .brand b { color: var(--text); font-weight: 600; }
 .brand-text { display: flex; gap: 7px; }
-.bodies { display: flex; gap: 4px; }
 .clock { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; flex: none; }
 .clock .mode { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; border: 1px solid currentColor; border-radius: 3px; padding: 1px 6px; min-width: 66px; text-align: center; display: inline-block; }
 .utc { font-size: 19px; font-variant-numeric: tabular-nums; color: #e6edf5; letter-spacing: 0.03em; }
@@ -447,7 +446,6 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 
 @media (max-width: 1100px) {
   .app { --left-w: 240px; --right-w: 320px; --dsn-w: 360px; }
-  .bodies { display: none; }
   /* top bar time controls, compact form */
   .topbar { gap: 8px; padding: 0 8px; }
   .brand-text, .utc small, .rew-text { display: none; }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BodyProvider, bodyDepth, bodyEntityRecords, bodyPeriodSec, bodyStateEci, compareHierarchy, convert, defaultBodies,
-  entityRank, isBodyEntity, moonPositionEci, moonStateEci, orbitableBodyId, providerFromSpec, sunPositionEci,
+  BodyProvider, bodyDepth, bodyEntityId, bodyEntityRecords, bodyOf, bodyPeriodSec, bodyStateEci, compareHierarchy, convert,
+  defaultBodies, entityRank, isBodyEntity, isOrbitable, moonPositionEci, moonStateEci, providerFromSpec, sunPositionEci,
   type EntityRecord,
 } from '../src';
 
@@ -154,14 +154,24 @@ describe('hierarchy', () => {
     expect(entityRank(obj('x', 'PLUTO'))).toBeGreaterThan(entityRank(obj('y', 'MOON')));
   });
 
-  it('isBodyEntity and orbitableBodyId', () => {
+  it('bodyOf is the one converter from a body entity to its registry id', () => {
     expect(isBodyEntity(recs['body-moon'])).toBe(true);
-    expect(orbitableBodyId(recs['body-moon'])).toBe('MOON');
-    expect(orbitableBodyId(recs['body-sun'])).toBe('SUN');
+    expect(bodyOf(recs['body-moon'])).toBe('MOON');
+    expect(bodyOf(recs['body-sun'])).toBe('SUN');
+    expect(bodyOf(recs['body-earth'])).toBe('EARTH');
     expect(isBodyEntity(obj('sat-1', 'EARTH'))).toBe(false);
-    expect(orbitableBodyId(obj('sat-1', 'EARTH'))).toBeUndefined();
-    const asteroid = obj('ast-1', 'SUN', { kind: 'asteroid', attrs: { orbitable: true } });
-    expect(orbitableBodyId(asteroid)).toBe('ast-1');
-    expect(orbitableBodyId(obj('x', 'SUN', { attrs: { orbitable: false } }))).toBeUndefined();
+    expect(bodyOf(obj('sat-1', 'EARTH'))).toBeUndefined();
+    // a flagged entity is orbitable but is not a body: no registry id
+    expect(bodyOf(obj('ast-1', 'SUN', { kind: 'asteroid', attrs: { orbitable: true } }))).toBeUndefined();
+    // and the entity id is the registry id lower-cased with the body- prefix
+    for (const b of defaultBodies.all()) expect(bodyOf(recs[bodyEntityId(b.id)])).toBe(b.id);
+  });
+
+  it('isOrbitable: body entities and entities flagged attrs.orbitable', () => {
+    for (const id of ['body-sun', 'body-earth', 'body-moon', 'body-mars']) expect(isOrbitable(recs[id])).toBe(true);
+    expect(isOrbitable(obj('sat-1', 'EARTH'))).toBe(false);
+    expect(isOrbitable(obj('ast-1', 'SUN', { kind: 'asteroid', attrs: { orbitable: true } }))).toBe(true);
+    expect(isOrbitable(obj('x', 'SUN', { attrs: { orbitable: false } }))).toBe(false);
+    expect(isOrbitable(obj('y', 'SUN', { attrs: { orbitable: 'yes' } }))).toBe(false); // only the boolean true counts
   });
 });

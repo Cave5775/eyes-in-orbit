@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { EARTH, MOON, SUN, inertialToFixedMatrix, isBodyEntity, orbitableBodyId, transpose, type EntityRecord } from '@eio/core';
+import { EARTH, MOON, SUN, inertialToFixedMatrix, bodyOf, isBodyEntity, transpose, type EntityRecord } from '@eio/core';
 import type { DrawnBody } from '../lib/body-scene';
 import type { DistanceScale } from '../lib/deepspace';
 import type { OccluderSphere } from '../lib/occlusion';
@@ -28,7 +28,8 @@ interface Drawn {
 }
 
 /**
- * The celestial bodies as the scene draws them, fed by the body ENTITIES (`setBodies`): a map keyed by registry id.
+ * The celestial bodies as the scene draws them, fed by the body ENTITIES (`setBodies`): a map keyed by registry id (each
+ * entity's `bodyOf`, the one place the two meet here; the mesh to build depends on the body).
  * - the Moon (textured when /textures/moon.jpg loads, else procedural, IAU rotation) and the Sun (emissive disc and glow)
  *   look and sit exactly as before; Mars (and any other registry body) is a plain tinted sphere lit from the Sun's direction;
  * - the Earth is NOT drawn here (SceneController keeps its own mesh group); the layer only knows its centre and radius, so
@@ -55,7 +56,7 @@ export class CelestialLayer {
     const want = new Map<string, string>();
     for (const rec of recs) {
       if (!isBodyEntity(rec)) continue;
-      const bodyId = orbitableBodyId(rec);
+      const bodyId = bodyOf(rec);
       if (bodyId && isRegistryBody(bodyId)) want.set(bodyId, rec.id);
     }
     for (const [bodyId, d] of this.drawn) {
@@ -228,7 +229,7 @@ export class CelestialLayer {
 
   /** Every body in the layer, Earth included, as displayed at the last `update` (for picking and labels). */
   bodies(): DrawnBody[] {
-    return [...this.drawn.values()].map((d) => ({ entityId: d.entityId, bodyId: d.bodyId, c: d.c, radiusKm: d.radiusKm, k: d.k }));
+    return [...this.drawn.values()].map((d) => ({ entityId: d.entityId, c: d.c, radiusKm: d.radiusKm, k: d.k }));
   }
 
   /** Visit every body, Earth included, without allocating (the label pass runs every frame): entity id, display centre, true radius and shrink factor. */
@@ -239,7 +240,7 @@ export class CelestialLayer {
   /** The Earth as the layer knows it (display centre and radius), or null before the Earth entity has arrived. */
   earth(): DrawnBody | null {
     const d = this.drawn.get('EARTH');
-    return d ? { entityId: d.entityId, bodyId: 'EARTH', c: d.c, radiusKm: EARTH.radiusKm, k: 1 } : null;
+    return d ? { entityId: d.entityId, c: d.c, radiusKm: EARTH.radiusKm, k: 1 } : null;
   }
 
   dispose(): void {

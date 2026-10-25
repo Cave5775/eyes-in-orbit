@@ -1,4 +1,4 @@
-import { bodyEntityId, defaultBodies } from '@eio/core';
+import { bodyEntityId, bodyOf, defaultBodies } from '@eio/core';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { api } from '../api/client';
 import { BODY_CATEGORY_KINDS, CATEGORIES, categoryCounts, categoryLabel } from '../lib/browser-ui';
@@ -7,7 +7,7 @@ import { colorKeyOf, kindLabel } from '../lib/entity';
 import {
   browseOrder, buildLaunchGroups, facetCounts, filtersActive, isHiddenRec, matchesFilters, rankEntities, type SearchHit,
 } from '../lib/filters';
-import { bodyCentre, sameCentre } from '../lib/frame';
+import { isEarthCentre } from '../lib/frame';
 import {
   acceptTag, activeTag, hiddenCount, hiddenTokens, isTagHidden, parseQuery, parseToken, splitCommitted, suggestTags, tagsActive,
   type TagKey, type TagSuggestion,
@@ -65,7 +65,7 @@ export function EntityBrowser() {
   const results = useStore((s) => s.searchResults);
   const selectedId = useStore((s) => s.selectedId);
   const frame = useStore((s) => s.frame);
-  const { setQuery, setSearchResults, setTags, select, clearFilters, setFrame, toggleHidden, showAll } = useStore.getState();
+  const { setQuery, setSearchResults, setTags, selectObject, clearFilters, toggleHidden, showAll } = useStore.getState();
   /** the free text and the tag word being typed */
   const [input, setInput] = useState(query);
   /** finished tag words (`group:starlink`, `-kind:debris`), shown as chips in the field */
@@ -164,7 +164,7 @@ export function EntityBrowser() {
   const filtering = !!query || filtersActive(filters);
   const pick = (id: string) => {
     ownSelect.current = id;
-    select(id);
+    selectObject(id);
   };
 
   const treeRows = useMemo(() => {
@@ -175,19 +175,19 @@ export function EntityBrowser() {
       return entities.has(entityId) ? { ...b, entityId } : b;
     });
     const recOf = (r: { id: string }) => entities.get(r.id);
+    const frameRec = entities.get(frame);
     return buildTreeRows(rows, {
-      bodies, frame, frameBodyId: frame.kind === 'entity' ? entities.get(frame.id)?.bodyId : undefined,
+      bodies, frameId: frame, frameBodyId: frameRec ? bodyOf(frameRec) ?? frameRec.bodyId : undefined,
       openAll: filtering, overrides, kindName: kindLabel, bodyOf: (r) => recOf(r)?.bodyId,
       standsForBody: (r) => { const p = recOf(r)?.provider; return p?.type === 'body' ? p.bodyId : undefined; },
     });
   }, [mode, rows, entities, frame, filtering, overrides]);
 
-  // a body node: the camera flies to the body and the frame becomes it (as the old node click did); its entity is selected
-  // too, so the detail panel shows the body. The frame is set first because a body fly clears the selection.
-  const chooseBody = (bodyId: string, key: string, entityId?: string) => {
+  // a body node: opens, and selects its body entity like any other row (the detail panel shows the body, it becomes the
+  // frame unless the frame is locked, and the camera flies there)
+  const chooseBody = (key: string, entityId?: string) => {
     setOpen(key, true);
-    setFrame(bodyCentre(bodyId), { fly: true });
-    if (entityId && useStore.getState().entities.has(entityId)) pick(entityId);
+    if (entityId) pick(entityId);
   };
 
   useEffect(() => {
@@ -293,7 +293,7 @@ export function EntityBrowser() {
 
   const entityRow = (id: string, name: string, kind: string, depth: number, key: string) => {
     const rec = entities.get(id);
-    const isFrame = frame.kind === 'entity' && frame.id === id;
+    const isFrame = frame === id && !isEarthCentre(id);
     const isHid = !!rec && isHiddenRec(rec, filters);
     const cls = `row${id === selectedId ? ' sel' : ''}${isHid ? ' is-hidden' : ''}`;
     return (
@@ -345,7 +345,7 @@ export function EntityBrowser() {
         </div>
       );
     }
-    const active = sameCentre(frame, bodyCentre(r.bodyId)) || (!!r.entityId && r.entityId === selectedId);
+    const active = !!r.entityId && (r.entityId === frame || r.entityId === selectedId);
     const bodyOff = isTagHidden(hidden, 'body', r.bodyId.toLowerCase());
     return (
       <div key={r.key} className={`row tree-body${active ? ' sel' : ''}${bodyOff ? ' is-hidden' : ''}`} style={{ height: ROW_H, paddingLeft: pad }}>
@@ -353,8 +353,8 @@ export function EntityBrowser() {
           {r.open ? '▾' : '▸'}
         </button>
         <button
-          className="tree-body-name" onClick={() => chooseBody(r.bodyId, r.key, r.entityId)}
-          title={`Select the ${r.name}, make it the frame of reference and fly there`}>
+          className="tree-body-name" onClick={() => chooseBody(r.key, r.entityId)}
+          title={`Select the ${r.name} (it becomes the frame of reference unless the frame is locked) and fly there`}>
           {r.name.toUpperCase()}
         </button>
         <span className="tree-count mono">{r.count.toLocaleString('en-US')}</span>

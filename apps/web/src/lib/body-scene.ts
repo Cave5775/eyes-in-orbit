@@ -3,10 +3,10 @@
  * extras of the drawn bodies and the rule that decides when a body is listed with the objects under the cursor
  * (`resolvePick`: only where no object is; objects over a small far body are hidden, lib/disc-hide.ts). No three.js.
  */
-import { orbitableBodyId, type EntityRecord } from '@eio/core';
+import type { EntityRecord } from '@eio/core';
 import type { V3 } from './camera';
 import type { DistanceScale } from './deepspace';
-import type { Centre } from './frame';
+import { isEarthCentre, type Centre } from './frame';
 import { earthOccludes, sphereOccludes, sphereView } from './occlusion';
 import { gatherCandidates, bodyPickExtra, resolvePick, type PickExtra, type PickOptions, type PickResolution, type PickSource } from './pick';
 
@@ -14,8 +14,6 @@ import { gatherCandidates, bodyPickExtra, resolvePick, type PickExtra, type Pick
 export interface DrawnBody {
   /** entity id (`body-moon`) */
   entityId: string;
-  /** registry id (`MOON`) */
-  bodyId: string;
   /** centre in display space, km */
   c: V3;
   /** true radius, km, and the display shrink factor (1 in the true scale and for anything inside the shell) */
@@ -44,33 +42,24 @@ export function bodyLineAllowed(rec: Pick<EntityRecord, 'bodyId' | 'provider' | 
 export interface BodyLineInput {
   /** the selected entity, if any */
   selectedId: string | null;
-  /** registry id of the body the camera is centred on (`bodyTarget`), if any */
-  focusBodyId: string | null;
-  /** the frame of reference */
+  /** the frame of reference (an entity id) */
   frame: Centre;
   scale: DistanceScale;
 }
 
 /**
- * Body entities whose orbit line is drawn. The subjects are the selected entity, the body the camera is centred on and the
- * frame centre (a body or an entity). Each subject draws its own line (relative to what it orbits, whatever the frame or the
- * lock is) and the lines of its direct children (`parentId`: the Earth gives the Moon, the Sun the Earth and Mars; no
- * grandchildren), each only where `bodyLineAllowed`. So choosing a body from the top bar, the breadcrumb or the tree (a frame
- * change that flies the camera there, without selecting it) shows the same lines as selecting it. The default frame (the
- * Earth) is a subject too: the Earth's line and the Moon's. Bodies that are none of these stay unlined.
+ * Body entities whose orbit line is drawn. The subjects are the selected entity and the frame centre; the camera subject is
+ * always one of them (selecting flies to the selection, which also becomes the frame unless the frame is locked). Each
+ * subject that is a body draws its own line (relative to what it orbits, whatever the frame or the lock is) and the lines of
+ * its direct children (`parentId`: the Earth gives the Moon, the Sun the Earth and Mars; no grandchildren), each only where
+ * `bodyLineAllowed`. So selecting a body from the tree, a breadcrumb, the scene or the popup shows the same lines. The default
+ * frame (the Earth) is a subject too: the Earth's line and the Moon's. Bodies that are none of these stay unlined.
  */
 export function bodyLineIds(recs: Iterable<LineRec>, input: BodyLineInput): string[] {
-  const all = Array.from(recs);
-  const subjects = new Set<string>();
+  const subjects = new Set<string>([input.frame]);
   if (input.selectedId !== null) subjects.add(input.selectedId);
-  if (input.frame.kind === 'entity') subjects.add(input.frame.id);
-  for (const rec of all) {
-    if (rec.provider?.type !== 'body') continue;
-    const reg = orbitableBodyId(rec);
-    if (reg !== undefined && (reg === input.focusBodyId || (input.frame.kind === 'body' && reg === input.frame.id))) subjects.add(rec.id);
-  }
   const out: string[] = [];
-  for (const rec of all) {
+  for (const rec of recs) {
     if (rec.provider?.type !== 'body') continue;
     const wanted = subjects.has(rec.id) || (rec.parentId !== undefined && subjects.has(rec.parentId));
     if (wanted && bodyLineAllowed(rec, input.scale)) out.push(rec.id);
@@ -102,10 +91,10 @@ export function bodyPickExtras(bodies: readonly DrawnBody[], ctx: BodyPickContex
     const rel: V3 = [b.c[0] - ctx.origin[0], b.c[1] - ctx.origin[1], b.c[2] - ctx.origin[2]];
     const extra = bodyPickExtra({ id: b.entityId, rel, radiusKm: b.radiusKm, k: b.k, fovDeg: ctx.fovDeg, m: ctx.m, w: ctx.w, h: ctx.h, px: ctx.px, py: ctx.py });
     if (!extra) continue;
-    if (b.bodyId !== 'EARTH' && earthOccludes(ctx.origin, rel)) continue;
+    if (!isEarthCentre(b.entityId) && earthOccludes(ctx.origin, rel)) continue;
     let hidden = false;
     for (const o of bodies) {
-      if (o === b || o.bodyId === 'EARTH') continue;
+      if (o === b || isEarthCentre(o.entityId)) continue;
       if (sphereOccludes(sphereView(ctx.origin, { c: o.c, r: o.radiusKm * o.k }), rel[0], rel[1], rel[2])) {
         hidden = true;
         break;
