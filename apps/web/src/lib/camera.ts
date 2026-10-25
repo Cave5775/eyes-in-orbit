@@ -283,14 +283,19 @@ export function liftToElevation(p: V3, target: V3, minEl: number): V3 {
   return [target[0] + ce * h[0] + se * u[0], target[1] + ce * h[1] + se * u[1], target[2] + ce * h[2] + se * u[2]];
 }
 
+/** An aim point deeper than this (km) below the ground is not on the surface: the elevation floor of `blendPosition` does not apply to it. */
+const ABOUT_MIN_ALT_KM = 10;
+
 /**
  * Camera position part-way (`k` 0..1) through a mode transition from `from` to `to` (geocentric, km). The camera goes round the
  * Earth along the great circle between the two positions while its height above the ground changes by a constant factor per step
  * (log-linear, never below `minAltKm`), so it is never lower than the lower end and never inside the planet. Blending the offset
  * from the (moving) target instead dragged the camera through the ground, or below the object's horizon, whenever the target
  * went from the Earth's centre to an object near the surface.
- * With `about` (the transition's end target, when it is an object rather than the Earth's centre) the camera also stays above the
- * lower of its two end elevations as seen from there, so it never dips below the horizon it starts or ends at.
+ * With `about` (the point the camera aims at for the whole transition, when it is an object or a ground point rather than the
+ * Earth's centre) the camera also stays above the lower of its two end elevations as seen from there, so it never dips below
+ * the horizon it starts or ends at. The aim is constant, so the elevation floor is measured about one fixed point; an aim at or
+ * near the Earth's centre, or deep inside the planet, has no horizon and only the great-circle path applies.
  * Exactly `from` at 0 and `to` at 1.
  */
 export function blendPosition(from: V3, to: V3, k: number, minAltKm = MIN_ALT_KM, about?: V3): V3 {
@@ -301,7 +306,7 @@ export function blendPosition(from: V3, to: V3, k: number, minAltKm = MIN_ALT_KM
   const a0 = Math.max(minAltKm, altitudeOf(from)), a1 = Math.max(minAltKm, altitudeOf(to));
   const r = surfaceRadius(d) + Math.exp(Math.log(a0) + (Math.log(a1) - Math.log(a0)) * k);
   const p: V3 = [d[0] * r, d[1] * r, d[2] * r];
-  if (!about || len(about) < 1000) return p;
+  if (!about || len(about) < 1000 || altitudeOf(about) < -ABOUT_MIN_ALT_KM) return p;
   return liftToElevation(p, about, Math.min(elevationAbout(from, about), elevationAbout(to, about)));
 }
 

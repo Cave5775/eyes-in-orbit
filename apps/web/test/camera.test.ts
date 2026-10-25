@@ -338,3 +338,86 @@ describe('mode transition camera path', () => {
     expect(elevationAbout(below, t)).toBeCloseTo(0.3, 9);
   });
 });
+
+describe('transition about a constant aim point', () => {
+  const dir = (lat: number, lon: number): V3 => [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
+  const at = (lat: number, lon: number, alt: number): V3 => {
+    const d = dir(lat, lon), r = surfaceRadius(d) + alt;
+    return [d[0] * r, d[1] * r, d[2] * r];
+  };
+  /** ground points (no object selected) and objects at several heights: every aim the surface view can have */
+  const aims: V3[] = [at(0.3, 0.2, 0), at(-1.2, 2.5, 0), at(1.5, -1, 0), at(0.9, -2, 420), at(-0.5, 3, 340), at(0.1, 1, 7)];
+  const starts: V3[] = [];
+  for (const alt of [5, 300, 1100, 9000, 24000, 80000]) {
+    for (let lat = -1.4; lat <= 1.41; lat += 0.7) for (let lon = -3; lon <= 3.1; lon += 1.0) starts.push(at(lat, lon, alt));
+  }
+  const endFor = (t: V3, dist: number, el = 0.35): V3 => {
+    const o = basisOffset(basisFromUp(ellipsoidUp(t)), -Math.PI / 2, el, dist);
+    return [t[0] + o[0], t[1] + o[1], t[2] + o[2]];
+  };
+  const POLAR_KM = RE * (1 - EARTH.flattening);
+
+  it('has the exact end poses for any aim', () => {
+    for (const t of aims) {
+      const end = endFor(t, 300);
+      for (const s of starts) {
+        expect(blendPosition(s, end, 0, MIN_ALT_KM, t)).toEqual(s);
+        expect(blendPosition(s, end, 1, MIN_ALT_KM, t)).toEqual(end);
+      }
+    }
+  });
+
+  it('keeps the elevation about the aim above the lower end elevation, for ground points and objects', () => {
+    for (const t of aims) for (const dist of [20, 300, 1400]) {
+      const end = endFor(t, dist);
+      for (const s of starts) {
+        const floor = Math.min(elevationAbout(s, t), elevationAbout(end, t));
+        for (let k = 0.01; k < 1; k += 0.01) {
+          expect(elevationAbout(blendPosition(s, end, k, MIN_ALT_KM, t), t)).toBeGreaterThanOrEqual(floor - 1e-9);
+        }
+      }
+    }
+  });
+
+  it('never crosses the planet: above MIN_ALT_KM at every step and no chord between steps through the polar radius', () => {
+    let bad = 0;
+    for (const t of aims) for (const dist of [20, 1400]) {
+      const end = endFor(t, dist);
+      for (const s of starts) {
+        const floor = Math.min(Math.max(MIN_ALT_KM, altitudeOf(s)), Math.max(MIN_ALT_KM, altitudeOf(end)));
+        let prev = s;
+        for (let k = 0.01; k <= 1.0001; k += 0.01) {
+          const p = blendPosition(s, end, Math.min(1, k), MIN_ALT_KM, t);
+          if (altitudeOf(p) < floor - 1e-6) bad++;
+          // distance from the Earth's centre to the segment prev..p stays outside the smallest sphere inside the ellipsoid
+          const d: V3 = [p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]];
+          const dd = dot(d, d);
+          const u = dd > 0 ? Math.max(0, Math.min(1, -dot(prev, d) / dd)) : 0;
+          const q: V3 = [prev[0] + d[0] * u, prev[1] + d[1] * u, prev[2] + d[2] * u];
+          if (!(Math.hypot(q[0], q[1], q[2]) > POLAR_KM)) bad++;
+          prev = p;
+        }
+      }
+    }
+    expect(bad).toBe(0);
+  });
+
+  it('rises over the horizon of a ground aim that starts behind the limb', () => {
+    const t = at(0, 0, 0);
+    const s = at(0, 2.6, 9000); // the aim is over the horizon from here, below the local horizontal of the aim
+    const end = endFor(t, 300);
+    expect(elevationAbout(s, t)).toBeLessThan(0);
+    for (let k = 0.01; k < 1; k += 0.01) {
+      const p = blendPosition(s, end, k, MIN_ALT_KM, t);
+      expect(elevationAbout(p, t)).toBeGreaterThanOrEqual(elevationAbout(s, t) - 1e-9);
+      expect(altitudeOf(p)).toBeGreaterThan(MIN_ALT_KM);
+    }
+  });
+
+  it('applies no horizon floor to an aim at the Earth centre or inside the planet', () => {
+    const s = at(0.2, 0.3, 1000), end = at(0.2, 0.3, 24000);
+    for (const inside of [[0, 0, 0], [0, 0, -3000], [1000, 2000, 500]] as V3[]) {
+      for (const k of [0.1, 0.5, 0.9]) expect(blendPosition(s, end, k, MIN_ALT_KM, inside)).toEqual(blendPosition(s, end, k));
+    }
+  });
+});

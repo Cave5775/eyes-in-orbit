@@ -46,7 +46,7 @@ export class OrbitRig {
   frame: SurfaceFrame | null = null;
 
   private flight: { t0: number; dur: number; from: THREE.Vector3; fromDist: number; fromAz: number; fromEl: number; to: FlyOptions } | null = null;
-  private blend: { t0: number; dur: number; target: THREE.Vector3; pos: THREE.Vector3; up: THREE.Vector3 } | null = null;
+  private blend: { t0: number; dur: number; pos: THREE.Vector3; up: THREE.Vector3; fresh: boolean } | null = null;
   private pointers = new Map<number, { x: number; y: number }>();
   private lastPinch = 0;
   private readonly offset = new THREE.Vector3();
@@ -118,23 +118,34 @@ export class OrbitRig {
   }
 
   flyTo(to: FlyOptions): void {
+    if (this.blend?.fresh) {
+      // asked in the same tick as the mode switch (leaving the surface view for the globe view of a new subject): no frame has been
+      // drawn yet, so the destination is simply the transition's end pose, instead of a flight that starts from the old mode's angles
+      this.dist = to.dist;
+      this.az = to.az;
+      this.el = to.el;
+      this.flight = null;
+      this.pan.set(0, 0, 0);
+      return;
+    }
     this.flight = { t0: performance.now(), dur: to.durationMs ?? 1300, from: this.target.clone(), fromDist: this.dist, fromAz: this.az, fromEl: this.el, to };
     this.pan.set(0, 0, 0);
   }
 
   /**
-   * Switch mode with a smooth transition: the camera pose (target, position, up vector) at the moment of the call is blended
-   * into the new mode's pose over `durationMs`: the target and up vector interpolate, the camera position goes round the Earth
-   * along a great circle with its height scaled steadily (`blendPosition`), so it stays above the ground and the horizon.
-   * Set az/el/dist for the new mode afterwards.
+   * Switch mode with a smooth transition: the camera pose (position, up vector) at the moment of the call is blended into the
+   * new mode's pose over `durationMs`. The target does not blend: the camera looks at the new mode's target (the followed
+   * object, the ground point, or the Earth's centre) from the first frame to the last. The up vector slerps, the camera position
+   * goes round the Earth along a great circle with its height scaled steadily (`blendPosition`), so it stays above the ground
+   * and the horizon of that target. Set az/el/dist for the new mode afterwards.
    */
   switchMode(mode: RigMode, durationMs = 1500): void {
     this.blend = {
       t0: performance.now(),
       dur: durationMs,
-      target: this.target.clone(),
       pos: this.camera.position.clone(),
       up: this.camera.up.clone(),
+      fresh: true,
     };
     this.flight = null;
     this.pan.set(0, 0, 0);
@@ -150,7 +161,9 @@ export class OrbitRig {
     if (f) {
       const u = Math.min(1, (now - f.t0) / f.dur);
       const k = ease(u);
-      this.target.lerpVectors(f.from, goal, k);
+      // a fly-to that runs during a mode transition keeps the transition's constant target (see below), its distance/angles still blend
+      if (this.blend) this.target.copy(goal);
+      else this.target.lerpVectors(f.from, goal, k);
       this.dist = Math.exp(Math.log(f.fromDist) + (Math.log(f.to.dist) - Math.log(f.fromDist)) * k);
       this.az = f.fromAz + wrapAngle(f.to.az - f.fromAz) * k;
       this.el = f.fromEl + (f.to.el - f.fromEl) * k;
@@ -182,13 +195,15 @@ export class OrbitRig {
       const u = Math.min(1, (now - b.t0) / b.dur);
       const k = ease(u);
       // where the mode's own pose puts the camera now (the object moves, so it is recomputed every frame)
+      // the camera aims at the end pose's target (the object, the ground point or the Earth's centre) for the whole transition:
+      // `this.target` is not blended, so the look direction does not sweep and a followed object stays at the screen centre
       const endTarget = tup(this.target);
       const end = this.endPos.copy(this.target).add(this.natOffset);
-      this.target.lerpVectors(b.target, this.target, k);
       const pos = blendPosition(tup(b.pos), tup(end), k, MIN_ALT_KM, endTarget);
       this.camera.position.set(pos[0], pos[1], pos[2]);
       const up = slerpDir(tup(b.up), tup(this.natUp), k);
       this.camera.up.set(up[0], up[1], up[2]);
+      b.fresh = false;
       if (u >= 1) this.blend = null;
     } else {
       this.camera.position.copy(this.target).add(this.natOffset);
