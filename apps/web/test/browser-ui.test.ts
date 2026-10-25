@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords, type EntityRecord } from '@eio/core';
 import {
-  BODY_KINDS, activeBodyTab, bodyFacts, bodyTabs, capChips, emptyHint, GROUP_CHIP_CAP,
+  BODY_KINDS, CATEGORIES, activeBodyTab, bodyFacts, bodyTabs, capChips, categoryCounts, categoryOf, emptyHint, GROUP_CHIP_CAP,
 } from '../src/lib/browser-ui';
 import { EARTH_CENTRE, bodyCentre, entityCentre } from '../src/lib/frame';
 import { frameOnSelect, loadFrame, parseFrame, resolveFrame, saveFrame, serialiseFrame } from '../src/lib/frame-store';
@@ -123,5 +123,44 @@ describe('emptyHint', () => {
   it('names the DSN panel only while it is shown', () => {
     expect(emptyHint(false)).not.toMatch(/DSN/);
     expect(emptyHint(true)).toMatch(/DSN panel/);
+  });
+});
+
+describe('categoryOf', () => {
+  const c = (kind: string, group?: string, colorKey?: string) => categoryOf({ kind, group, render: colorKey ? { colorKey } : undefined });
+  it('maps the kinds to the general categories', () => {
+    expect(c('satellite', 'active')).toBe('satellites');
+    expect(c('satellite', 'starlink', 'starlink')).toBe('satellites');
+    expect(c('satellite', 'amateur')).toBe('satellites');
+    expect(c('station', 'stations', 'station')).toBe('stations');
+    expect(c('probe', 'dsn')).toBe('probes');
+    expect(c('rover')).toBe('probes');
+    expect(c('lander')).toBe('probes');
+    expect(c('launch_vehicle', 'launch', 'vehicle')).toBe('launch-vehicles');
+    expect(c('stage', 'launch', 'vehicle')).toBe('launch-vehicles');
+    expect(c('capsule')).toBe('launch-vehicles');
+    expect(c('debris', 'cosmos-2251-debris', 'debris')).toBe('debris');
+    expect(c('ground_station', 'dsn')).toBe('ground');
+    expect(c('pad')).toBe('ground');
+    expect(c('star')).toBe('bodies');
+    expect(c('planet', 'bodies')).toBe('bodies');
+    expect(c('moon', 'bodies', 'body')).toBe('bodies');
+  });
+  it('navigation comes from the colour key or a GNSS group', () => {
+    expect(c('satellite', 'gps-ops', 'navigation')).toBe('navigation');
+    for (const g of ['gps-ops', 'glo-ops', 'galileo', 'beidou']) expect(c('satellite', g)).toBe('navigation');
+  });
+  it('the colour key decides for an unknown kind, anything else is other', () => {
+    expect(c('widget', undefined, 'probe')).toBe('probes');
+    expect(c('widget', undefined, 'debris')).toBe('debris');
+    expect(c('widget')).toBe('other');
+    expect(c('drone', undefined, 'aircraft')).toBe('other');
+  });
+  it('puts every entity in exactly one category and lists the categories in chip order', () => {
+    const recs = [{ kind: 'satellite' }, { kind: 'station' }, { kind: 'debris' }, { kind: 'moon' }];
+    const counts = categoryCounts(recs);
+    expect(counts.reduce((n, [, k]) => n + k, 0)).toBe(4);
+    expect(counts.map(([id]) => id)).toEqual(CATEGORIES.filter((x) => x.id !== 'other').map((x) => x.id));
+    expect(categoryCounts([{ kind: 'widget' }]).map(([id]) => id)).toContain('other');
   });
 });

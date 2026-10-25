@@ -4,6 +4,9 @@ import type {
 } from '@eio/core';
 import { NO_FILTERS, toggled, type Filters, type LaunchMode, type SearchHit } from '../lib/filters';
 import {
+  NO_HIDDEN, parseHidden, serialiseHidden, tagTokens, toggleHidden, type HiddenTags, type TagFilter, type TagKey,
+} from '../lib/search-tags';
+import {
   closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, viewportNow,
   type FloatWindow,
 } from '../lib/floating';
@@ -87,6 +90,12 @@ interface State {
   setSearchResults(r: SearchHit[] | null): void;
   toggleKind(kind: string): void;
   toggleGroup(group: string): void;
+  /** The tags of the search field (`group:starlink`, `-kind:debris`...); they filter the list and the scene. */
+  setTags(tags: TagFilter): void;
+  /** Hide (or with `on` false show again) the entities of a group, `key:value` as in the search tags, e.g. `cat`, `debris`. */
+  toggleHidden(key: TagKey, value: string, on?: boolean): void;
+  /** Show every hidden group again. */
+  showAll(): void;
   /** Select a launch group (`YYYY-NNN`) or clear it with null; `memberIds` are passed to `runtime.onFitRequest`. */
   setLaunchFilter(launchId: string | null, memberIds?: string[]): void;
   setLaunchMode(mode: LaunchMode): void;
@@ -100,6 +109,21 @@ interface State {
 }
 
 let nonce = 0;
+
+const HIDDEN_KEY = 'eio.hidden';
+/** the hidden groups remembered in this browser (nothing hidden when storage is blocked or the value is malformed) */
+function loadHidden(): HiddenTags {
+  try {
+    return parseHidden(localStorage.getItem(HIDDEN_KEY));
+  } catch {
+    return NO_HIDDEN;
+  }
+}
+function saveHidden(h: HiddenTags): void {
+  try {
+    localStorage.setItem(HIDDEN_KEY, serialiseHidden(h));
+  } catch { /* private window: the choice just is not remembered */ }
+}
 /** the remembered frame is restored once, when the first full catalog arrives */
 let frameRestorePending = true;
 /** Test hook: restore the remembered frame again at the next full catalog load. */
@@ -126,7 +150,7 @@ export const useStore = create<State>((set, get) => ({
   focus: null,
   query: '',
   searchResults: null,
-  filters: NO_FILTERS,
+  filters: { ...NO_FILTERS, hidden: loadHidden() },
   launches: [],
   news: [],
   dsn: null,
@@ -193,12 +217,18 @@ export const useStore = create<State>((set, get) => ({
   setSearchResults: (searchResults) => set({ searchResults }),
   toggleKind: (k) => set((s) => ({ filters: { ...s.filters, kinds: toggled(s.filters.kinds, k) } })),
   toggleGroup: (g) => set((s) => ({ filters: { ...s.filters, groups: toggled(s.filters.groups, g) } })),
+  setTags: (tags) => set((s) => (tagTokens(s.filters.tags ?? { include: {}, exclude: {} }).join(' ') === tagTokens(tags).join(' ') ? s : { filters: { ...s.filters, tags } })),
+  toggleHidden: (key, value, on) => set((s) => {
+    const hidden = toggleHidden(s.filters.hidden ?? NO_HIDDEN, key, value, on);
+    return hidden === s.filters.hidden ? s : { filters: { ...s.filters, hidden } };
+  }),
+  showAll: () => set((s) => (s.filters.hidden && Object.keys(s.filters.hidden).length ? { filters: { ...s.filters, hidden: NO_HIDDEN } } : s)),
   setLaunchFilter(launchId, memberIds) {
     set((s) => ({ filters: { ...s.filters, launch: launchId } }));
     if (launchId && memberIds?.length) runtime.onFitRequest?.(memberIds);
   },
   setLaunchMode: (launchMode) => set((s) => ({ filters: { ...s.filters, launchMode } })),
-  clearFilters: () => set((s) => ({ filters: { ...NO_FILTERS, launchMode: s.filters.launchMode } })),
+  clearFilters: () => set((s) => ({ filters: { ...NO_FILTERS, launchMode: s.filters.launchMode, hidden: s.filters.hidden } })),
   setLaunches: (launches) => set({ launches }),
   setNews: (news) => set({ news }),
   setDsn: (dsn) => set({ dsn }),
@@ -247,4 +277,5 @@ clock.subscribe((snap) => useStore.setState({ clock: snap }));
 useStore.subscribe((s, p) => {
   if (s.floats !== p.floats) saveFloats(s.floats);
   if (s.frame !== p.frame) saveFrame(s.frame); // the lock is not remembered, only the centre
+  if (s.filters.hidden !== p.filters.hidden) saveHidden(s.filters.hidden ?? NO_HIDDEN);
 });

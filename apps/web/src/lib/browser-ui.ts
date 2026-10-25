@@ -103,3 +103,64 @@ export const KIND_CHIP_CAP = 10;
 export const GROUP_CHIP_CAP = 14;
 /** body kinds are always among the kind chips when the catalog has them */
 export const BODY_KINDS: readonly string[] = ['star', 'planet', 'moon'];
+
+// ---------------------------------------------------------------- general categories (the browser's chips)
+
+/**
+ * The few general categories the entity browser offers as chips (specific groups such as `starlink`, `gps-ops` or a launch
+ * are tags typed in the search field, see `search-tags.ts`). Every entity is in exactly one category, so the counts add up
+ * and a hidden category hides exactly what its chip counts.
+ */
+export type CategoryId = 'satellites' | 'stations' | 'navigation' | 'probes' | 'launch-vehicles' | 'debris' | 'ground' | 'bodies' | 'other';
+
+export interface Category {
+  id: CategoryId;
+  label: string;
+  /** one line for the chip tooltip */
+  hint: string;
+}
+
+/** Chip order. `other` is shown only when the catalog has something in it. */
+export const CATEGORIES: readonly Category[] = [
+  { id: 'satellites', label: 'Satellites', hint: 'Satellites that are not navigation, stations or debris (Starlink, active, amateur...)' },
+  { id: 'stations', label: 'Stations', hint: 'Space stations (ISS, Tiangong)' },
+  { id: 'navigation', label: 'Navigation', hint: 'GNSS satellites (GPS, GLONASS, Galileo, BeiDou)' },
+  { id: 'probes', label: 'Probes', hint: 'Probes, landers and rovers' },
+  { id: 'launch-vehicles', label: 'Launch vehicles', hint: 'Launch vehicles, stages and capsules' },
+  { id: 'debris', label: 'Debris', hint: 'Debris and spent rocket bodies' },
+  { id: 'ground', label: 'Ground', hint: 'Ground stations and launch pads' },
+  { id: 'bodies', label: 'Bodies', hint: 'The Sun, planets and moons (scenery: they cannot be hidden)' },
+  { id: 'other', label: 'Other', hint: 'Everything else' },
+];
+
+export const categoryLabel = (id: string): string => CATEGORIES.find((c) => c.id === id)?.label ?? id;
+
+/** Kinds of the celestial bodies; they are drawn as scenery and the hide toggle leaves them alone. */
+export const BODY_CATEGORY_KINDS: ReadonlySet<string> = new Set(['star', 'planet', 'moon', 'dwarf_planet', 'asteroid']);
+/** CelesTrak navigation groups (plus the combined `gnss`). */
+const NAV_GROUP_NAMES: ReadonlySet<string> = new Set(['gps-ops', 'glo-ops', 'galileo', 'beidou', 'gnss']);
+
+/** The category of an entity, from its kind, its group and `render.colorKey`. */
+export function categoryOf(rec: { kind: string; group?: string; render?: { colorKey?: string } }): CategoryId {
+  const k = rec.kind;
+  const ck = rec.render?.colorKey;
+  if (BODY_CATEGORY_KINDS.has(k) || ck === 'body') return 'bodies';
+  if (k === 'station' || ck === 'station') return 'stations';
+  if (k === 'debris' || ck === 'debris') return 'debris';
+  if (k === 'probe' || k === 'rover' || k === 'lander' || ck === 'probe' || ck === 'rover') return 'probes';
+  if (k === 'launch_vehicle' || k === 'stage' || k === 'capsule' || ck === 'vehicle') return 'launch-vehicles';
+  if (k === 'ground_station' || k === 'pad' || ck === 'ground') return 'ground';
+  if (ck === 'navigation' || (k === 'satellite' && NAV_GROUP_NAMES.has(rec.group ?? ''))) return 'navigation';
+  if (k === 'satellite' || ck === 'satellite' || ck === 'starlink') return 'satellites';
+  return 'other';
+}
+
+/** Entities per category (all categories present, in chip order; `other` only when it has members). */
+export function categoryCounts(records: Iterable<{ kind: string; group?: string; render?: { colorKey?: string } }>): [CategoryId, number][] {
+  const n = new Map<CategoryId, number>();
+  for (const r of records) {
+    const c = categoryOf(r);
+    n.set(c, (n.get(c) ?? 0) + 1);
+  }
+  return CATEGORIES.filter((c) => c.id !== 'other' || n.has('other')).map((c): [CategoryId, number] => [c.id, n.get(c.id) ?? 0]);
+}

@@ -10,7 +10,7 @@ import { isRegistryBody, refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, 
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, maxDistKm, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
-import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
+import { NO_FILTERS, filtersActive, isHiddenRec, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
@@ -451,7 +451,9 @@ export class SceneController {
   }
 
   setFilters(f: Filters): void {
+    const hiddenChanged = f.hidden !== this.filters.hidden;
     this.filters = f;
+    if (hiddenChanged) this.refreshHints(); // a hidden group keeps no orbit line or footprint
     this.applyAppearance();
   }
 
@@ -777,7 +779,7 @@ export class SceneController {
     const v = new THREE.Vector3();
     for (const rec of this.recs.values()) {
       if (this.bodyRegId.has(rec.id)) continue; // the bodies are scenery here: the Sun on its shell would make FIT VISIBLE a deep-space view
-      if (!matchesFilters(rec, this.filters)) continue;
+      if (!matchesFilters(rec, this.filters) || isHiddenRec(rec, this.filters)) continue;
       if (this.fitPos(rec.id, v)) pts.push(v.x, v.y, v.z);
     }
     return this.frameSphere(pts);
@@ -1080,7 +1082,7 @@ export class SceneController {
       const replaced = !!rec && this.models.spriteHidden.has(rec.id);
       set.size.setX(i, vis === 'hide' || replaced ? 0 : POINT_SIZE[key] * (vis === 'dim' ? 0.7 : this.filters.launch ? 1.8 : 1));
     };
-    const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters));
+    const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters, rec.id === this.selectedId));
     // with a filter on, the objects it lets through ('show') are exempt from the scope policy
     const filtering = filtersActive(this.filters);
     const exemptRec = (rec: EntityRecord | undefined) => !!rec && colorKeyOf(rec) === 'vehicle';
@@ -1129,7 +1131,7 @@ export class SceneController {
     let hinted = 0;
     for (const rec of this.recs.values()) {
       // body entities have their own rule (selected / followed / frame centre), below
-      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyRegId.has(rec.id)) {
+      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyRegId.has(rec.id) && !isHiddenRec(rec, this.filters)) {
         want.set(rec.id, false);
         hinted++;
         graph.upsert(rec);
@@ -1541,7 +1543,7 @@ export class SceneController {
       },
       visibility: (id) => {
         const r = rec(id);
-        return r ? sceneVisibility(r, this.filters) : 'hide';
+        return r ? sceneVisibility(r, this.filters, id === this.selectedId) : 'hide';
       },
       inScope: (id) => {
         if (this.scopeMode === 'all' || id === this.selectedId || this.related.has(id)) return true;

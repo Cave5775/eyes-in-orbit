@@ -1,4 +1,5 @@
 import { launchGroupLabel, launchIdFromCospar, type EntityRecord } from '@eio/core';
+import { isHiddenBy, matchesTags, tagsActive, type HiddenTags, type TagFilter, type TagTarget } from './search-tags';
 
 /** `only` hides everything outside the selected launch in the scene; `highlight` dims it instead. */
 export type LaunchMode = 'only' | 'highlight';
@@ -10,11 +11,18 @@ export interface Filters {
   /** Launch id (`YYYY-NNN`, derived from the COSPAR designator) of the selected launch group. */
   launch?: string | null;
   launchMode?: LaunchMode;
+  /** tags typed in the search field (`group:starlink`, `-kind:debris`...): they filter the list and the scene like the sets above */
+  tags?: TagFilter;
+  /**
+   * Hidden groups (`cat:debris`, `group:starlink`...): those entities leave the scene but stay in the browser list. Not a
+   * filter: `matchesFilters` and `filtersActive` ignore it.
+   */
+  hidden?: HiddenTags;
 }
 
 export const NO_FILTERS: Filters = { kinds: new Set(), groups: new Set(), launch: null, launchMode: 'only' };
 
-type Filterable = Pick<EntityRecord, 'kind' | 'group'> & { aliases?: Record<string, string> };
+type Filterable = Pick<EntityRecord, 'kind' | 'group'> & Omit<TagTarget, 'kind' | 'group'>;
 
 /** Launch id (`1993-036`) of a record, from its COSPAR alias. */
 export const launchIdOf = (rec: { aliases?: Record<string, string> }): string | undefined => launchIdFromCospar(rec.aliases?.cospar);
@@ -25,23 +33,29 @@ const inLaunch = (rec: Filterable, f: Filters): boolean => !f.launch || launchId
 export function matchesFilters(rec: Filterable, f: Filters): boolean {
   if (f.kinds.size && !f.kinds.has(rec.kind)) return false;
   if (f.groups.size && !f.groups.has(rec.group ?? '')) return false;
+  if (!matchesTags(rec, f.tags)) return false;
   return inLaunch(rec, f);
 }
+
+/** Is the entity in a hidden group (see `Filters.hidden`)? */
+export const isHiddenRec = (rec: Filterable, f: Filters): boolean => isHiddenBy(rec, f.hidden);
 
 export type Visibility = 'show' | 'dim' | 'hide';
 
 /**
- * Scene appearance. Kind and group filters always hide. A launch filter hides non-members in `only`
- * mode and dims them in `highlight` mode.
+ * Scene appearance. Kind, group and tag filters and hidden groups always hide (`keep`: the selected entity, which a hidden
+ * group does not hide). A launch filter hides non-members in `only` mode and dims them in `highlight` mode.
  */
-export function sceneVisibility(rec: Filterable, f: Filters): Visibility {
+export function sceneVisibility(rec: Filterable, f: Filters, keep = false): Visibility {
   if (f.kinds.size && !f.kinds.has(rec.kind)) return 'hide';
   if (f.groups.size && !f.groups.has(rec.group ?? '')) return 'hide';
+  if (!matchesTags(rec, f.tags)) return 'hide';
+  if (!keep && isHiddenBy(rec, f.hidden)) return 'hide';
   if (inLaunch(rec, f)) return 'show';
   return f.launchMode === 'highlight' ? 'dim' : 'hide';
 }
 
-export const filtersActive = (f: Filters): boolean => f.kinds.size > 0 || f.groups.size > 0 || !!f.launch;
+export const filtersActive = (f: Filters): boolean => f.kinds.size > 0 || f.groups.size > 0 || !!f.launch || tagsActive(f.tags);
 
 export function toggled<T>(set: ReadonlySet<T>, v: T): Set<T> {
   const next = new Set(set);
