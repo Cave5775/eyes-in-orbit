@@ -1,10 +1,14 @@
 import * as THREE from 'three';
+import { EARTH } from '@eio/core';
 import { GROUP_SLOTS, offGroup } from '../lib/disc-hide';
+import { OCCLUSION_MARGIN_KM } from '../lib/occlusion';
 import { SHOW_EXEMPT_MIN } from '../lib/pick';
 
 /**
  * Uniforms the point shader needs for the analytic Earth occlusion test (see `lib/occlusion.ts`, same maths):
- * the camera in Earth-scaled space, `|o'|^2 - R'^2` computed in float64 on the CPU, and the ellipsoid z scale.
+ * the camera in Earth-scaled space, `|o'|^2 - R'^2` computed in float64 on the CPU, the shrunk Earth radius R' and the
+ * ellipsoid z scale. The test is the stable sphere form (miss distance `|cross(u, o')|`, see `sphereHides`): with the camera
+ * 1.5e8 km out (the Sun frame) `b^2 - c2` would be pure float32 cancellation (b^2 ~ 2e16, R^2 ~ 4e7).
  * Plus the displayed Moon (`uSph0`) and Sun (`uSph1`) as spheres: xyz = centre relative to the camera (float64 on the
  * CPU), w = radius; `uSphC2` = `|centre|^2 - r^2` per sphere (<= 0 disables it: camera inside, or not placed yet).
  */
@@ -12,6 +16,7 @@ export function occlusionUniforms(): Record<string, THREE.IUniform> {
   return {
     uOriginS: { value: new THREE.Vector3() },
     uC2: { value: 0 },
+    uOccR: { value: EARTH.radiusKm - OCCLUSION_MARGIN_KM },
     uOccK: { value: 1 },
     uOcc: { value: 1 },
     uSph0: { value: new THREE.Vector4() },
@@ -50,6 +55,7 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
       uniform float uPx;
       uniform vec3 uOriginS;
       uniform float uC2;
+      uniform float uOccR;
       uniform float uOccK;
       uniform float uOcc;
       uniform vec4 uSph0;
@@ -81,11 +87,12 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         vec3 d = vec3(rel.xy, rel.z * uOccK);
         float L = length(d);
         if (L <= 0.0) return false;
-        float b = dot(uOriginS, d / L);
+        vec3 u = d / L;
+        float b = dot(uOriginS, u);
         if (b >= 0.0) return false;
-        float disc = b * b - uC2;
-        if (disc <= 0.0) return false;
-        return uC2 / (-b + sqrt(disc)) < L;
+        float p = length(cross(uOriginS, u));
+        if (p >= uOccR) return false;
+        return uC2 / (-b + sqrt((uOccR - p) * (uOccR + p))) < L;
       }
       // Moon / Sun: sphere s (xyz camera-relative centre, w radius) with c2 = |centre|^2 - r^2 from the CPU. The miss
       // distance is |cross(u, centre)| (no |centre|^2 - t^2 cancellation: the Sun is 1.5e8 km away, its radius 7e5) and the

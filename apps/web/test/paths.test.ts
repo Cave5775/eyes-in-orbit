@@ -3,9 +3,8 @@ import {
   EARTH, EntityGraph, defaultBodies, destinationPoint, profileToFixedSamples,
   type CompositeSegment, type EntityRecord, type ProviderSpec, type Sample, type Vec3,
 } from '@eio/core';
-import { SHELL_THRESHOLD_KM, shellRadius } from '../src/lib/deepspace';
 import {
-  FIXED_FRAME_MAX_WINDOW_MS, GROUND_LIFT_KM, PATH_BUFFER_CAPACITY, PATH_MAX_POINTS, displayPosition, liftNearSurface, makePathBuffers,
+  FIXED_FRAME_MAX_WINDOW_MS, GROUND_LIFT_KM, PATH_BUFFER_CAPACITY, PATH_MAX_POINTS, liftNearSurface, makePathBuffers,
   nowIndex, pathStale, planPathWindow, sampleTimes, samplePath,
 } from '../src/lib/paths';
 import { mockGroundAndProbes, mockLaunches } from '../src/mock/generators';
@@ -133,7 +132,6 @@ describe('samplePath: composite booster in EARTH:fixed (real-server data shape)'
   it('is drawn in the body-fixed frame (rides the rotating Earth), within the point cap', () => {
     expect(res.frame).toBe('fixed');
     expect(res.moving).toBe(true);
-    expect(res.compressed).toBe(false);
     expect(res.count).toBeGreaterThan(100);
     expect(res.count).toBeLessThanOrEqual(PATH_BUFFER_CAPACITY);
   });
@@ -187,37 +185,36 @@ describe('samplePath: mock data', () => {
   const graph = graphOf(recs);
   const get = (id: string) => recs.find((r) => r.id === id)!;
 
-  it('Voyager 1 path stays on the compressed shell, same as its marker', () => {
+  it('Voyager 1 path is drawn at its real distance, same as its marker', () => {
     const rec = get('dsn-VGR1');
     const plan = planPathWindow(rec.provider, NOW)!;
     const buf = makePathBuffers();
     const res = samplePath(graph, rec.id, plan, rec.provider, buf);
     expect(res.frame).toBe('inertial');
-    expect(res.compressed).toBe(true);
-    const marker = displayPosition(graph.stateIn(rec.id, NOW, 'EARTH:inertial')!.r).r;
+    const marker = liftNearSurface(graph.stateIn(rec.id, NOW, 'EARTH:inertial')!.r);
     const i = nowIndex(buf.times, res.count, NOW);
-    expect(Math.hypot(buf.pos[i * 3] - marker[0], buf.pos[i * 3 + 1] - marker[1], buf.pos[i * 3 + 2] - marker[2])).toBeLessThan(5e3);
+    expect(Math.hypot(buf.pos[i * 3] - marker[0], buf.pos[i * 3 + 1] - marker[1], buf.pos[i * 3 + 2] - marker[2])).toBeLessThan(4e4); // one 30 min sample step at 17 km/s
     for (let k = 0; k < res.count; k++) {
       const r = Math.hypot(buf.pos[k * 3], buf.pos[k * 3 + 1], buf.pos[k * 3 + 2]);
-      expect(r).toBeGreaterThan(SHELL_THRESHOLD_KM);
-      expect(r).toBeLessThan(shellRadius(3e10));
+      expect(r).toBeGreaterThan(2e10);
+      expect(r).toBeLessThan(3e10);
     }
   });
 
-  it('MRO (Mars orbiter seen from Earth) draws a visible arc across the shell', () => {
+  it('MRO (Mars orbiter seen from Earth) draws a visible arc at Mars distance', () => {
     const rec = get('dsn-MRO');
     const plan = planPathWindow(rec.provider, NOW)!;
-    const res = samplePath(graph, rec.id, plan, rec.provider, makePathBuffers());
-    expect(res.compressed).toBe(true);
+    const buf = makePathBuffers();
+    const res = samplePath(graph, rec.id, plan, rec.provider, buf);
+    expect(Math.hypot(buf.pos[0], buf.pos[1], buf.pos[2])).toBeGreaterThan(5e7);
     expect(res.moving).toBe(true);
     expect(res.count).toBeGreaterThan(300);
   });
 
-  it('JWST near-Earth (1.5e6 km, below the shell threshold) is not compressed', () => {
+  it('JWST near-Earth (1.5e6 km) draws its path', () => {
     const rec = get('dsn-JWST');
     const plan = planPathWindow(rec.provider, NOW)!;
     const res = samplePath(graph, rec.id, plan, rec.provider, makePathBuffers());
-    expect(res.compressed).toBe(false);
     expect(res.moving).toBe(true);
   });
 
@@ -234,8 +231,7 @@ describe('display position', () => {
     const lifted = liftNearSurface([RE, 0, 0]);
     expect(lifted[0] - RE).toBeCloseTo(GROUND_LIFT_KM, 6);
     expect(liftNearSurface([RE + 400, 0, 0])).toEqual([RE + 400, 0, 0]);
-    expect(displayPosition([3e6, 0, 0]).compressed).toBe(true);
-    expect(displayPosition([RE + 400, 0, 0]).compressed).toBe(false);
+    expect(liftNearSurface([3e6, 0, 0])).toEqual([3e6, 0, 0]);
   });
 });
 

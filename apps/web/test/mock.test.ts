@@ -65,7 +65,6 @@ describe('mock catalog', () => {
     expect(tel.speedKmS).toBeGreaterThan(7.4);
     expect(tel.speedKmS).toBeLessThan(7.9);
     expect(tel.latDeg!).toBeLessThanOrEqual(51.7);
-    expect(tel.shell).toBe(false);
   });
 
   it('makeOmm normalises angles and formats the epoch', () => {
@@ -88,7 +87,7 @@ describe('mock non-SGP4 entities', () => {
     }
   });
 
-  it('puts probes beyond the shell threshold except JWST', () => {
+  it('puts probes far from the Earth except JWST', () => {
     const g = new EntityGraph();
     entities.forEach((e) => g.upsert(e));
     const range = (id: string) => norm(g.stateIn(id, NOW, 'EARTH:inertial')!.r);

@@ -59,7 +59,6 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
           <Field label="Phase" value={tel.phase?.replace(/_/g, ' ')} />
           <Field label="Confidence" value={conf?.text} mono tone={conf?.tone} />
           <Field label="Element age" value={tel.elementAgeDays !== undefined ? fmtElementAge(tel.elementAgeDays) : undefined} mono />
-          {tel.shell && <Field label="Display" value="Compressed deep-space shell (distance not to scale)" tone="warn" />}
         </dl>
       )}
 

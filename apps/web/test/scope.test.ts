@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SCOPE_FACTOR, SCOPE_MIN_KM, SCOPE_SOLO_CUT, hash01, inScope, inView, isScopeExempt, scopeRadius, scopeWeight, type ScopeObject,
 } from '../src/lib/scope';
-import { SHELL_THRESHOLD_KM } from '../src/lib/deepspace';
+import { NEAR_EARTH_LIMIT_KM } from '../src/lib/ref-body';
 
 const obj = (o: Partial<ScopeObject>): ScopeObject => ({ d: 0, key: 0, bulk: false, keep: false, ...o });
 
@@ -27,7 +27,7 @@ describe('scope radius', () => {
   it('the default Earth view keeps near-Earth space and starts to drop the shell; pulling out keeps everything', () => {
     const def = scopeRadius(24_000);
     expect(inScope(obj({ d: 1.5e6 }), def)).toBe(true); // JWST
-    expect(inScope(obj({ d: SHELL_THRESHOLD_KM * 1.6 }), def)).toBe(false);
+    expect(inScope(obj({ d: NEAR_EARTH_LIMIT_KM * 1.6 }), def)).toBe(false);
     expect(inScope(obj({ d: 4.0e6 }), scopeRadius(60_000))).toBe(true);
   });
 });

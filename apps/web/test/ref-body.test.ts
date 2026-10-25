@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { EARTH, EntityGraph, bodyEntityRecords, bodyStateEci, moonPositionEci, norm, type Vec3 } from '@eio/core';
+import { MAX_DIST_KM } from '../src/lib/camera';
 import { computeTelemetry } from '../src/lib/telemetry';
 import { mockSatellites } from '../src/mock/generators';
 import {
-  REF_LABEL, REF_RADIUS_KM, isRegistryBody, refDisplay, refMaxDistKm, refMinDistKm, refPositionEci, refRadiusKm,
+  REF_LABEL, REF_RADIUS_KM, isRegistryBody, refDisplay, refMinDistKm, refPositionEci, refRadiusKm,
   refViewDistKm, relativeToRef, type RefBody,
 } from '../src/lib/ref-body';
-import { SHELL_THRESHOLD_KM, shellRadius } from '../src/lib/deepspace';
 
 const NOW = Date.parse('2026-10-22T12:00:00Z');
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -34,12 +34,8 @@ describe('reference bodies', () => {
     expect(refViewDistKm('MOON')).toBeGreaterThan(refMinDistKm('MOON'));
     expect(refViewDistKm('SUN')).toBeGreaterThan(refMinDistKm('SUN'));
     expect(refMinDistKm('MOON')).toBeGreaterThan(1737.4);
-    // the Sun view has to reach the Earth's orbit; the other views keep the distance scale's limit
-    expect(refMaxDistKm('SUN', 3e7, 'true')).toBeGreaterThan(1.5e8);
-    expect(refMaxDistKm('MOON', 3e7)).toBe(3e7);
-    expect(refMaxDistKm('SUN', 1e11, 'true')).toBe(1e11);
-    // the compressed Sun is only ~3e6 km out: no need for the 6e8 zoom
-    expect(refMaxDistKm('SUN', 3e7, 'compressed')).toBe(3e7);
+    // every view can zoom out past the Earth's orbit (1.5e8 km): the camera limit is 1e11 km for all of them
+    expect(MAX_DIST_KM).toBeGreaterThan(6e8);
   });
 });
 
@@ -59,29 +55,16 @@ describe('reference bodies from the registry (Mars)', () => {
     expect(refPositionEci('NOPE', NOW)).toEqual([0, 0, 0]);
   });
 
-  it('puts Mars on the deep-space shell with a shell display factor k like the Sun', () => {
+  it('draws Mars where it is (true distance from the Earth), at its true radius', () => {
     const real = refPositionEci('MARS', NOW);
     expect(norm(real)).toBeGreaterThan(5e7);
-    const d = refDisplay('MARS', NOW, 'compressed');
-    expect(norm(d.r)).toBeCloseTo(shellRadius(norm(real)), 3);
-    expect(norm(d.r)).toBeGreaterThan(SHELL_THRESHOLD_KM);
-    expect(norm(d.r)).toBeLessThan(4e6);
-    expect(d.k).toBeCloseTo(shellRadius(norm(real)) / norm(real), 12);
-    expect(d.k).toBeLessThan(0.1);
-    // the disc keeps its true angular size seen from the Earth
-    expect((REF_RADIUS_KM.MARS * d.k) / norm(d.r)).toBeCloseTo(REF_RADIUS_KM.MARS / norm(real), 12);
-    expect(refDisplay('MARS', NOW, 'true')).toEqual({ r: real, k: 1 });
+    expect(refDisplay('MARS', NOW)).toEqual({ r: real, k: 1 });
   });
 
-  it('frames and bounds the camera against the displayed Mars radius', () => {
-    const { k } = refDisplay('MARS', NOW, 'compressed');
-    expect(refViewDistKm('MARS', k)).toBeCloseTo(3396.19 * k * 4, 6);
-    expect(refMinDistKm('MARS', k)).toBeCloseTo(3396.19 * k * 1.02, 6);
-    expect(refViewDistKm('MARS', k)).toBeGreaterThan(refMinDistKm('MARS', k));
-    // the true-scale Mars view reaches the Earth like the Sun view; the compressed one keeps the scale limit
-    expect(refMaxDistKm('MARS', 3e7, 'true')).toBeGreaterThan(1.5e8);
-    expect(refMaxDistKm('MARS', 3e7, 'compressed')).toBe(3e7);
-    expect(refMaxDistKm('EARTH', 3e7, 'true')).toBe(3e7);
+  it('frames Mars at 4 radii and keeps the camera above its surface', () => {
+    expect(refViewDistKm('MARS')).toBeCloseTo(3396.19 * 4, 6);
+    expect(refMinDistKm('MARS')).toBeCloseTo(3396.19 * 1.02, 6);
+    expect(refViewDistKm('MARS')).toBeGreaterThan(refMinDistKm('MARS'));
   });
 
   it('re-expresses a point relative to Mars', () => {
@@ -124,46 +107,16 @@ describe('readouts relative to the reference body', () => {
   });
 });
 
-describe('reference bodies on the distance scale', () => {
-  const dirOf = (v: Vec3): Vec3 => [v[0] / norm(v), v[1] / norm(v), v[2] / norm(v)];
-
-  it('draws the Moon at its true place in both scales (it is inside the shell threshold)', () => {
-    for (const scale of ['compressed', 'true'] as const) {
-      const d = refDisplay('MOON', NOW, scale);
-      expect(d.k).toBe(1);
-      expect(d.r).toEqual(moonPositionEci(NOW));
-    }
+describe('reference bodies are drawn to scale', () => {
+  it('draws the Moon, the Sun and the Earth at their true places, radius factor 1', () => {
+    expect(refDisplay('MOON', NOW)).toEqual({ r: moonPositionEci(NOW), k: 1 });
+    expect(refDisplay('SUN', NOW)).toEqual({ r: refPositionEci('SUN', NOW), k: 1 });
+    expect(refDisplay('EARTH', NOW)).toEqual({ r: [0, 0, 0], k: 1 });
   });
 
-  it('puts the Sun on the shell in the same direction, shrunk to keep its angular size', () => {
-    const real = refPositionEci('SUN', NOW);
-    const d = refDisplay('SUN', NOW, 'compressed');
-    expect(norm(d.r)).toBeCloseTo(shellRadius(norm(real)), 3);
-    expect(norm(d.r)).toBeGreaterThan(SHELL_THRESHOLD_KM);
-    expect(norm(d.r)).toBeLessThan(4e6);
-    dirOf(d.r).forEach((x, i) => expect(x).toBeCloseTo(dirOf(real)[i], 12));
-    // radius / distance is unchanged, so the Sun still spans ~0.53 degrees from the Earth
-    expect((REF_RADIUS_KM.SUN * d.k) / norm(d.r)).toBeCloseTo(REF_RADIUS_KM.SUN / norm(real), 12);
-    // and its displayed disc still lies beyond the Moon and well outside the Earth
-    expect(norm(d.r) - REF_RADIUS_KM.SUN * d.k).toBeGreaterThan(SHELL_THRESHOLD_KM);
-  });
-
-  it('leaves the Sun real in the true scale and the Earth at the origin in both', () => {
-    const t = refDisplay('SUN', NOW, 'true');
-    expect(t.k).toBe(1);
-    expect(t.r).toEqual(refPositionEci('SUN', NOW));
-    for (const scale of ['compressed', 'true'] as const) {
-      expect(refDisplay('EARTH', NOW, scale)).toEqual({ r: [0, 0, 0], k: 1 });
-    }
-  });
-
-  it('frames and bounds the camera against the displayed radius, not the true one', () => {
-    const { k } = refDisplay('SUN', NOW, 'compressed');
-    expect(k).toBeLessThan(0.05);
-    expect(refViewDistKm('SUN', k)).toBeCloseTo(REF_RADIUS_KM.SUN * k * 4, 6);
-    expect(refViewDistKm('SUN', k)).toBeGreaterThan(refMinDistKm('SUN', k));
-    expect(refMinDistKm('SUN', k)).toBeCloseTo(REF_RADIUS_KM.SUN * k * 1.02, 6);
-    // default k keeps the true-scale framing
+  it('frames the Sun at 4 true radii and keeps the camera above its surface', () => {
     expect(refViewDistKm('SUN')).toBe(REF_RADIUS_KM.SUN * 4);
+    expect(refViewDistKm('SUN')).toBeGreaterThan(refMinDistKm('SUN'));
+    expect(refMinDistKm('SUN')).toBeCloseTo(REF_RADIUS_KM.SUN * 1.02, 6);
   });
 });

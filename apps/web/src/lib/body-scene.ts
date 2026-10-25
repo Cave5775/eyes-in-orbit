@@ -5,18 +5,17 @@
  */
 import type { EntityRecord } from '@eio/core';
 import type { V3 } from './camera';
-import type { DistanceScale } from './deepspace';
 import { isEarthCentre, type Centre } from './frame';
 import { earthOccludes, sphereOccludes, sphereView } from './occlusion';
 import { gatherCandidates, bodyPickExtra, resolvePick, type PickExtra, type PickOptions, type PickResolution, type PickSource } from './pick';
 
-/** A body as the scene draws it this frame (display space: shell-compressed in the compressed distance scale). */
+/** A body as the scene draws it this frame (true position and radius). */
 export interface DrawnBody {
   /** entity id (`body-moon`) */
   entityId: string;
-  /** centre in display space, km */
+  /** centre, km */
   c: V3;
-  /** true radius, km, and the display shrink factor (1 in the true scale and for anything inside the shell) */
+  /** true radius, km, and the factor it is drawn with (always 1: everything is drawn to scale) */
   radiusKm: number;
   k: number;
 }
@@ -24,19 +23,11 @@ export interface DrawnBody {
 type LineRec = Pick<EntityRecord, 'id' | 'bodyId' | 'provider' | 'render' | 'attrs' | 'parentId'>;
 
 /**
- * Can the orbit line of this body entity be drawn in this distance scale? It needs `render.orbitLine` (not the Sun). The
- * Moon's line is the same in both scales (it is inside the shell threshold). A body on the Sun's orbit (Earth, Mars) in the
- * true scale as it is. In the compressed scale the shell flattens everything beyond 2e6 km onto a thin shell, so a
- * heliocentric line is only drawn where it can be made consistent with the displayed Sun: the Earth's, by scaling the sampled
- * circle about the Earth with the Sun's display factor `k` (`refDisplay('SUN').k`, see `EntityOverlay.buildOrbit`), which
- * centres it on the displayed Sun and sends it through the displayed Earth. Mars is not on that circle (its displayed
- * position is the shell projection of its own, different, distance from the Earth, not a scaled copy of the orbit about
- * the Earth), so it stays true-scale only.
+ * Can the orbit line of this body entity be drawn? It needs `render.orbitLine` (not the Sun). Every line is the true orbit
+ * about what the body orbits (the Moon about the Earth, the Earth and Mars about the Sun), drawn to scale like the bodies.
  */
-export function bodyLineAllowed(rec: Pick<EntityRecord, 'bodyId' | 'provider' | 'render'>, scale: DistanceScale): boolean {
-  if (rec.provider?.type !== 'body' || !rec.render?.orbitLine) return false;
-  const heliocentric = rec.bodyId === 'SUN' && rec.provider.bodyId !== 'SUN';
-  return scale === 'true' || !heliocentric || rec.provider.bodyId === 'EARTH';
+export function bodyLineAllowed(rec: Pick<EntityRecord, 'provider' | 'render'>): boolean {
+  return rec.provider?.type === 'body' && !!rec.render?.orbitLine;
 }
 
 export interface BodyLineInput {
@@ -44,7 +35,6 @@ export interface BodyLineInput {
   selectedId: string | null;
   /** the frame of reference (an entity id) */
   frame: Centre;
-  scale: DistanceScale;
 }
 
 /**
@@ -62,7 +52,7 @@ export function bodyLineIds(recs: Iterable<LineRec>, input: BodyLineInput): stri
   for (const rec of recs) {
     if (rec.provider?.type !== 'body') continue;
     const wanted = subjects.has(rec.id) || (rec.parentId !== undefined && subjects.has(rec.parentId));
-    if (wanted && bodyLineAllowed(rec, input.scale)) out.push(rec.id);
+    if (wanted && bodyLineAllowed(rec)) out.push(rec.id);
   }
   return out;
 }

@@ -1,13 +1,12 @@
 import * as THREE from 'three';
-import { EARTH, bodyEntityId, bodyOf, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
+import { EARTH, bodyEntityId, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
 import { bodyLineAllowed } from '../lib/body-scene';
-import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import {
   EARTH_CENTRE, centrePositionEci, framePathPoint, frameForRec, frameSampler, graphLookup, type Centre, type EntityLookup, type FrameSampler,
 } from '../lib/frame';
 import { chordSagKm } from '../lib/occlusion';
 import { orbitPeriodSec } from '../lib/orbit';
-import { refDisplay } from '../lib/ref-body';
+import { NEAR_EARTH_LIMIT_KM } from '../lib/ref-body';
 import { RelPositions, type RenderFrame } from './relative';
 
 const RE = EARTH.radiusKm;
@@ -23,12 +22,10 @@ const ZERO3: readonly [number, number, number] = [0, 0, 0];
 
 /**
  * How far the centre has moved since `ref` (its position when a line was built around it), km; zero when it has no position.
- * `k`: the display scale the line was built with (`buildOrbit`; 1 unless the line is drawn shrunk about the Earth), so the
- * shift is in the same scaled coordinates as the vertices and the line keeps following the displayed centre.
  */
-function centreShift(centre: Centre, t: number, lookup: EntityLookup, ref: Vec3, k = 1): [number, number, number] {
+function centreShift(centre: Centre, t: number, lookup: EntityLookup, ref: Vec3): [number, number, number] {
   const c = centrePositionEci(centre, t, lookup);
-  return c ? [(c[0] - ref[0]) * k, (c[1] - ref[1]) * k, (c[2] - ref[2]) * k] : [0, 0, 0];
+  return c ? [c[0] - ref[0], c[1] - ref[1], c[2] - ref[2]] : [0, 0, 0];
 }
 
 interface Line {
@@ -72,8 +69,6 @@ export class EntityOverlay {
   /** frame centre (key) the orbit line was built for, and where that centre was then (Earth-inertial, km) */
   private centreKeyBuilt = '';
   private orbitRef: Vec3 | null = null;
-  /** display scale the orbit line was built with (see `buildOrbit`) */
-  private orbitK = 1;
 
   constructor(world: THREE.Object3D, private color: THREE.Color) {
     this.orbit = makeLine(THREE.Line, ORBIT_POINTS + 1, color, 0.55, false);
@@ -114,13 +109,13 @@ export class EntityOverlay {
    * body entity's parent (`frameForRec`). The footprint and the ground track are Earth surface features of an Earth
    * satellite and ignore the frame.
    */
-  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, full: boolean, centre: Centre = EARTH_CENTRE, scale: DistanceScale = 'compressed'): void {
+  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, full: boolean, centre: Centre = EARTH_CENTRE): void {
     const s = graph.stateIn(rec.id, t, 'EARTH:inertial');
     const r = s ? norm(s.r) : 0;
     // a body entity (Moon, Earth, Mars) has its orbit line only (in its parent's frame, `frameForRec`): no footprint, trail or
-    // ground track, no Earth-distance window, and the heliocentric ones only in the true distance scale (lib/body-scene.ts)
+    // ground track, and no Earth-distance window (lib/body-scene.ts)
     const isBody = rec.provider?.type === 'body';
-    const usable = isBody ? !!s && bodyLineAllowed(rec, scale) : !!s && r > RE + 50 && r < SHELL_THRESHOLD_KM;
+    const usable = isBody ? !!s && bodyLineAllowed(rec) : !!s && r > RE + 50 && r < NEAR_EARTH_LIMIT_KM;
     const earthBound = !isBody && rec.bodyId === 'EARTH';
     if (isBody) full = false;
     this.footprint.obj.visible = usable && earthBound && (full || !!rec.render?.footprint);
@@ -132,14 +127,9 @@ export class EntityOverlay {
     const trailCentre = frameForRec(centre, rec);
     // the orbit line: a body entity's parent frame (the same as the trail's), any other object's primary body
     const orbitCentre = isBody ? trailCentre : bodyEntityId(rec.bodyId);
-    // a heliocentric body line in the compressed scale is drawn shrunk about the Earth by the displayed centre's factor
-    const centreRec = isBody && scale === 'compressed' ? graph.get(orbitCentre) : undefined;
-    const centreBody = centreRec && bodyOf(centreRec);
-    const k = centreBody ? refDisplay(centreBody, t, scale).k : 1;
-    const key = `${orbitCentre}|${k === 1 ? 'm' : 'k'}`;
-    if (period !== this.period || key !== this.centreKeyBuilt) {
+    if (period !== this.period || orbitCentre !== this.centreKeyBuilt) {
       this.period = period;
-      this.centreKeyBuilt = key;
+      this.centreKeyBuilt = orbitCentre;
       this.orbitT = this.trackT = this.orbitWall = -Infinity;
     }
     if (!period) return;
@@ -147,12 +137,12 @@ export class EntityOverlay {
     const lookup = graphLookup(graph);
     // the orbit is a closed loop through the entity, so it stays valid until the entity has moved a fraction of a revolution
     if (Math.abs(t - this.orbitT) > (period * 1000) / 40 && wall - this.orbitWall > 200) {
-      this.buildOrbit(graph, rec, t, period, frameSampler(orbitCentre, t, lookup), k);
+      this.buildOrbit(graph, rec, t, period, frameSampler(orbitCentre, t, lookup));
       this.orbitT = t;
       this.orbitWall = wall;
     }
-    // built around the centre as it was then: follow it (in the scale it was built with)
-    this.orbit.pos.shift = this.orbitRef ? centreShift(orbitCentre, t, lookup, this.orbitRef, this.orbitK) : ZERO3;
+    // built around the centre as it was then: follow it
+    this.orbit.pos.shift = this.orbitRef ? centreShift(orbitCentre, t, lookup, this.orbitRef) : ZERO3;
     this.orbit.obj.visible = this.orbit.n > 1;
 
     if (!full) return;
@@ -186,14 +176,11 @@ export class EntityOverlay {
 
   /**
    * One revolution from `t`, each sample relative to the frame centre at its own time, drawn around the centre at `t`.
-   * `k` (< 1 only for a heliocentric body line in the compressed scale): every point is multiplied by it, i.e. the loop is
-   * scaled about the Earth's origin. The circle round the Sun at `ref` becomes the circle round the DISPLAYED Sun
-   * (`ref * k`, where the Sun's mesh sits) with the displayed Sun distance as radius, and it still passes through the Earth.
+   * A heliocentric body (the Earth, Mars) is a plain circle round the Sun at `ref`, to scale like the Sun's mesh.
    */
-  private buildOrbit(graph: EntityGraph, rec: EntityRecord, t: number, periodSec: number, inFrame?: FrameSampler, k = 1): void {
+  private buildOrbit(graph: EntityGraph, rec: EntityRecord, t: number, periodSec: number, inFrame?: FrameSampler): void {
     const pos = this.orbit.pos;
     this.orbitRef = inFrame?.ref ?? null;
-    this.orbitK = k;
     let n = 0;
     let prev: Vec3 | null = null;
     if (!inFrame || inFrame.ref) {
@@ -211,7 +198,7 @@ export class EntityOverlay {
           if (!c) continue;
           p = framePathPoint(p, c, inFrame.ref!);
         }
-        pos.setXYZ(n++, p[0] * k, p[1] * k, p[2] * k);
+        pos.setXYZ(n++, p[0], p[1], p[2]);
       }
     }
     this.orbit.n = n;

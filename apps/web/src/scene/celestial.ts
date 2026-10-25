@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { EARTH, MOON, SUN, inertialToFixedMatrix, bodyOf, isBodyEntity, transpose, type EntityRecord } from '@eio/core';
 import type { DrawnBody } from '../lib/body-scene';
-import type { DistanceScale } from '../lib/deepspace';
 import type { OccluderSphere } from '../lib/occlusion';
 import { isRegistryBody, refDisplay, refPositionEci, refRadiusKm } from '../lib/ref-body';
 import { createMoonMaterial } from './materials';
@@ -17,13 +16,13 @@ interface Drawn {
   entityId: string;
   bodyId: string;
   radiusKm: number;
-  /** display-space centre, km, and shrink factor (set by `update`) */
+  /** centre, km, and drawn-radius factor (always 1; set by `update`) */
   c: [number, number, number];
   k: number;
   /** meshes added to the scene (none for the Earth); `place` positions them relative to the camera */
   objects: THREE.Object3D[];
-  place?: (origin: THREE.Vector3, t: number, scale: DistanceScale) => void;
-  /** sphere handed to the occlusion tests (display-space centre, displayed radius) */
+  place?: (origin: THREE.Vector3, t: number) => void;
+  /** sphere handed to the occlusion tests (centre, radius) */
   sphere: OccluderSphere;
 }
 
@@ -34,9 +33,8 @@ interface Drawn {
  *   look and sit exactly as before; Mars (and any other registry body) is a plain tinted sphere lit from the Sun's direction;
  * - the Earth is NOT drawn here (SceneController keeps its own mesh group); the layer only knows its centre and radius, so
  *   picking, labels and occluders see it with the others.
- * Positions follow the distance scale through `refDisplay`: a body beyond the deep-space threshold (the Sun, Mars) sits on
- * the shell and is shrunk by the same factor k (same direction, same angular size); the Moon stays put. Like the Earth they
- * are placed camera-relative (float64 position minus the floating origin), so a camera 3,000 km from the Moon or 1.5e8 km from
+ * Everything is drawn to scale at its true position (`refDisplay`, k = 1: the Sun at 1.5e8 km, Mars wherever it is). Like the
+ * Earth they are placed camera-relative (float64 position minus the floating origin), so a camera 3,000 km from the Moon or 1.5e8 km from
  * the Earth sees them without float32 jitter.
  */
 export class CelestialLayer {
@@ -105,8 +103,8 @@ export class CelestialLayer {
     this.moonMat = mat;
     const moon = new THREE.Mesh(mg, mat);
     d.objects.push(moon);
-    d.place = (origin, t, scale) => {
-      const m = refDisplay('MOON', t, scale);
+    d.place = (origin, t) => {
+      const m = refDisplay('MOON', t);
       moon.position.set(m.r[0] - origin.x, m.r[1] - origin.y, m.r[2] - origin.z);
       moon.scale.setScalar(m.k);
       // body-fixed to inertial is the transpose of the IAU inertial-to-fixed matrix
@@ -136,8 +134,8 @@ export class CelestialLayer {
     );
     glow.scale.setScalar(SUN.radiusKm * 9);
     d.objects.push(sun, glow);
-    d.place = (origin, t, scale) => {
-      const s = refDisplay('SUN', t, scale);
+    d.place = (origin, t) => {
+      const s = refDisplay('SUN', t);
       sun.position.set(s.r[0] - origin.x, s.r[1] - origin.y, s.r[2] - origin.z);
       sun.scale.setScalar(s.k);
       glow.position.copy(sun.position);
@@ -154,11 +152,11 @@ export class CelestialLayer {
     const mat = createBodyMaterial(sunFromBody, tint);
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(d.radiusKm, 64, 32), mat);
     d.objects.push(mesh);
-    d.place = (origin, t, scale) => {
-      const m = refDisplay(d.bodyId, t, scale);
+    d.place = (origin, t) => {
+      const m = refDisplay(d.bodyId, t);
       mesh.position.set(m.r[0] - origin.x, m.r[1] - origin.y, m.r[2] - origin.z);
       mesh.scale.setScalar(m.k);
-      // the real direction to the Sun from the body (not the Earth's), also in the compressed scale
+      // the real direction to the Sun from the body (not the Earth's)
       const p = refPositionEci(d.bodyId, t), s = refPositionEci('SUN', t);
       sunFromBody.set(s[0] - p[0], s[1] - p[1], s[2] - p[2]).normalize();
       d.c = [m.r[0], m.r[1], m.r[2]];
@@ -182,15 +180,13 @@ export class CelestialLayer {
   }
 
   /**
-   * Place every body for sim time `t`; `origin` is the camera in display space (the floating origin). Positions follow the
-   * distance scale like any entity: in compressed mode the Sun and Mars are drawn on the deep-space shell and shrunk by the
-   * same factor; the Moon is inside the shell threshold and stays put.
+   * Place every body for sim time `t`; `origin` is the camera in world space (the floating origin).
    */
-  update(t: number, origin: THREE.Vector3, scale: DistanceScale): void {
+  update(t: number, origin: THREE.Vector3): void {
     for (const d of this.drawn.values()) {
-      if (d.place) d.place(origin, t, scale);
+      if (d.place) d.place(origin, t);
       else {
-        // the Earth: its own mesh group sits at the origin at true size in both scales
+        // the Earth: its own mesh group sits at the origin at true size
         d.c = [0, 0, 0];
         d.k = 1;
       }
@@ -209,7 +205,7 @@ export class CelestialLayer {
   }
 
   /**
-   * Every drawn body except the Earth as displayed at the last `update` (display-space centre, displayed radius): the
+   * Every drawn body except the Earth as at the last `update` (centre, radius): the
    * Moon and the Sun first, then the others (Mars) in registry order. The Earth has its own ellipsoid test in `makeOccluder`.
    */
   occluders(): readonly OccluderSphere[] {
@@ -227,17 +223,17 @@ export class CelestialLayer {
     return this.shader;
   }
 
-  /** Every body in the layer, Earth included, as displayed at the last `update` (for picking and labels). */
+  /** Every body in the layer, Earth included, as at the last `update` (for picking and labels). */
   bodies(): DrawnBody[] {
     return [...this.drawn.values()].map((d) => ({ entityId: d.entityId, c: d.c, radiusKm: d.radiusKm, k: d.k }));
   }
 
-  /** Visit every body, Earth included, without allocating (the label pass runs every frame): entity id, display centre, true radius and shrink factor. */
+  /** Visit every body, Earth included, without allocating (the label pass runs every frame): entity id, centre, true radius and drawn-radius factor (1). */
   eachBody(visit: (entityId: string, c: readonly [number, number, number], radiusKm: number, k: number) => void): void {
     for (const d of this.drawn.values()) visit(d.entityId, d.c, d.radiusKm, d.k);
   }
 
-  /** The Earth as the layer knows it (display centre and radius), or null before the Earth entity has arrived. */
+  /** The Earth as the layer knows it (centre and radius), or null before the Earth entity has arrived. */
   earth(): DrawnBody | null {
     const d = this.drawn.get('EARTH');
     return d ? { entityId: d.entityId, c: d.c, radiusKm: EARTH.radiusKm, k: 1 } : null;

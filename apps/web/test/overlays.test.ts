@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { EARTH, EntityGraph, MOON, bodyEntityRecords, bodyStateEci, moonPositionEci, norm, type EntityRecord, type Sample, type Vec3 } from '@eio/core';
 import { EARTH_CENTRE, framePathPoint, type Centre } from '../src/lib/frame';
-import { refDisplay } from '../src/lib/ref-body';
 import { mockLaunches, mockSatellites } from '../src/mock/generators';
 import { EntityOverlay } from '../src/scene/overlays';
 
@@ -26,8 +25,8 @@ function setup(recs: EntityRecord[]) {
   for (const r of recs) graph.upsert(r);
   const overlay = new EntityOverlay(new THREE.Group(), new THREE.Color(0xffffff));
   let wall = 0;
-  const update = (rec: EntityRecord, t = NOW, full = false, centre: Centre = EARTH_CENTRE, scale: 'compressed' | 'true' = 'compressed') =>
-    overlay.update(graph, rec, t, (wall += 1000), full, centre, scale);
+  const update = (rec: EntityRecord, t = NOW, full = false, centre: Centre = EARTH_CENTRE) =>
+    overlay.update(graph, rec, t, (wall += 1000), full, centre);
   return { graph, overlay, update };
 }
 
@@ -92,7 +91,7 @@ describe('EntityOverlay: Earth satellites', () => {
     expect(Array.from(peek(overlay).orbit.pos.shift)).toEqual([0, 0, 0]);
   });
 
-  it('draws nothing for a satellite beyond the deep-space shell and after hide()', () => {
+  it('draws nothing for a satellite beyond the near-Earth limit (2e6 km) and after hide()', () => {
     const far: EntityRecord = { ...iss, id: 'far', provider: { type: 'sampled', frame: 'EARTH:inertial', samples: [[NOW - HOUR, 3e6, 0, 0, 0, 1, 0], [NOW + HOUR, 3e6, 3600, 0, 0, 1, 0]] } };
     const f = setup([far]);
     f.update(far);
@@ -123,23 +122,21 @@ describe('EntityOverlay: a Moon orbiter', () => {
 });
 
 describe('EntityOverlay: body lines', () => {
-  it('the Moon in both scales is the ellipse round the Earth', () => {
+  it('the Moon is the ellipse round the Earth', () => {
     const moon = body('body-moon');
-    for (const scale of ['compressed', 'true'] as const) {
-      const { overlay, update } = setup([moon]);
-      update(moon, NOW, false, EARTH_CENTRE, scale);
-      expect(overlay.hasOrbit).toBe(true);
-      const o = peek(overlay).orbit;
-      expect(drawn(overlay).count).toBe(o.n);
-      for (let i = 0; i < o.n; i += 20) expect(norm(point(o.pos.world, i))).toBeGreaterThan(350_000);
-      expect(norm(sub(point(o.pos.world, 0), moonPositionEci(NOW)))).toBeLessThan(1e-6);
-    }
+    const { overlay, update } = setup([moon]);
+    update(moon, NOW, false, EARTH_CENTRE);
+    expect(overlay.hasOrbit).toBe(true);
+    const o = peek(overlay).orbit;
+    expect(drawn(overlay).count).toBe(o.n);
+    for (let i = 0; i < o.n; i += 20) expect(norm(point(o.pos.world, i))).toBeGreaterThan(350_000);
+    expect(norm(sub(point(o.pos.world, 0), moonPositionEci(NOW)))).toBeLessThan(1e-6);
   });
 
-  it('the Earth in the true scale is the real circle round the Sun through the Earth', () => {
+  it('the Earth is the real circle round the Sun through the Earth', () => {
     const earth = body('body-earth');
     const { overlay, update } = setup([earth]);
-    update(earth, NOW, false, EARTH_CENTRE, 'true');
+    update(earth, NOW, false, EARTH_CENTRE);
     expect(overlay.hasOrbit).toBe(true);
     const o = peek(overlay).orbit;
     const sun = bodyStateEci('SUN', NOW).r;
@@ -149,67 +146,43 @@ describe('EntityOverlay: body lines', () => {
     expect(norm(point(o.pos.world, 0))).toBeLessThan(1e-3); // through the Earth (the origin)
   });
 
-  it('the Earth in the compressed scale: radius = displayed Sun distance, through the displayed Earth', () => {
+  it('the Earth line keeps following the Sun as time passes, still through the Earth', () => {
     const earth = body('body-earth');
     const { overlay, update } = setup([earth]);
-    update(earth, NOW, false, EARTH_CENTRE, 'compressed');
-    expect(overlay.hasOrbit).toBe(true);
-    const o = peek(overlay).orbit;
-    const sun = refDisplay('SUN', NOW, 'compressed');
-    expect(sun.k).toBeLessThan(0.05);
-    const D = norm(sun.r);
-    expect(D).toBeGreaterThan(2.9e6);
-    expect(D).toBeLessThan(3.1e6);
-    // centred on the displayed Sun: every point is D from it (to the orbit's eccentricity, 1.7 %)
-    for (let i = 0; i < o.n; i += 10) {
-      const d = norm(sub(point(o.pos.world, i), sun.r));
-      expect(Math.abs(d / D - 1)).toBeLessThan(0.03);
-    }
-    // and it passes through the origin, where the Earth is drawn
-    expect(norm(point(o.pos.world, 0))).toBeLessThan(1e-3);
-    expect(Array.from(o.pos.shift).every((x) => x === 0)).toBe(true);
-    // nothing near the unscaled 1.5e8 km
-    for (let i = 0; i < o.n; i++) expect(norm(point(o.pos.world, i))).toBeLessThan(2 * D * 1.05);
-  });
-
-  it('the compressed Earth line follows the displayed Sun as time passes, still through the Earth', () => {
-    const earth = body('body-earth');
-    const { overlay, update } = setup([earth]);
-    update(earth, NOW, false, EARTH_CENTRE, 'compressed');
+    update(earth, NOW, false, EARTH_CENTRE);
     const later = NOW + 2 * DAY;
-    update(earth, later, false, EARTH_CENTRE, 'compressed'); // inside the rebuild interval (a 365 d period / 40): not rebuilt
+    update(earth, later, false, EARTH_CENTRE); // inside the rebuild interval (a 365 d period / 40): not rebuilt
     const o = peek(overlay).orbit;
-    const sunNow = refDisplay('SUN', later, 'compressed');
-    // the shifted line is centred on the displayed Sun of the later time to the Sun factor's change in two days (a few km)
-    const centreErr = (i: number) => norm(sub(sub(point(o.pos.world, i), [-o.pos.shift[0], -o.pos.shift[1], -o.pos.shift[2]]), sunNow.r));
-    const D = norm(sunNow.r);
-    for (let i = 0; i < o.n; i += 20) expect(Math.abs(centreErr(i) / D - 1)).toBeLessThan(0.03);
-    // the Earth's own position (the origin) is on the shifted line: the sample at `later` is in the loop (the Earth has moved on)
+    const sunNow = bodyStateEci('SUN', later).r;
+    const R = norm(sunNow);
+    // the shifted line is centred on the Sun of the later time (the Sun moves ~25 km/s round the Earth, the shift follows it)
     let best = Infinity;
+    for (let i = 0; i < o.n; i += 10) {
+      const p: Vec3 = [point(o.pos.world, i)[0] + o.pos.shift[0], point(o.pos.world, i)[1] + o.pos.shift[1], point(o.pos.world, i)[2] + o.pos.shift[2]];
+      expect(Math.abs(norm(sub(p, sunNow)) / R - 1)).toBeLessThan(0.03);
+    }
+    // the Earth's own position (the origin) is on the shifted line, to within one sample spacing
     for (let i = 0; i < o.n; i++) {
       const p = point(o.pos.world, i);
       best = Math.min(best, norm([p[0] + o.pos.shift[0], p[1] + o.pos.shift[1], p[2] + o.pos.shift[2]]));
     }
-    expect(best).toBeLessThan((2 * Math.PI * D) / 240); // within one sample spacing of the origin
+    expect(best).toBeLessThan((2 * Math.PI * R) / 240);
   });
 
-  it('Mars has a line in the true scale only; switching scale rebuilds the Earth line', () => {
+  it('Mars has its heliocentric line, a circle round the Sun through the displayed Mars', () => {
     const mars = body('body-mars');
-    const m = setup([mars]);
-    m.update(mars, NOW, false, EARTH_CENTRE, 'compressed');
-    expect(m.overlay.hasOrbit).toBe(false);
-    m.update(mars, NOW, false, EARTH_CENTRE, 'true');
-    expect(m.overlay.hasOrbit).toBe(true);
-
-    const earth = body('body-earth');
-    const e = setup([earth]);
-    e.update(earth, NOW, false, EARTH_CENTRE, 'true');
-    const big = norm(sub(point(peek(e.overlay).orbit.pos.world, 60), [0, 0, 0]));
-    e.update(earth, NOW, false, EARTH_CENTRE, 'compressed');
-    const small = norm(point(peek(e.overlay).orbit.pos.world, 60));
-    expect(big / small).toBeGreaterThan(30);
-    e.update(earth, NOW, false, EARTH_CENTRE, 'true');
-    expect(norm(point(peek(e.overlay).orbit.pos.world, 60))).toBeCloseTo(big, 0);
+    const { overlay, update } = setup([mars]);
+    update(mars, NOW, false, EARTH_CENTRE);
+    expect(overlay.hasOrbit).toBe(true);
+    const o = peek(overlay).orbit;
+    const sun = bodyStateEci('SUN', NOW).r;
+    const marsPos = bodyStateEci('MARS', NOW).r;
+    expect(norm(sub(point(o.pos.world, 0), marsPos))).toBeLessThan(1e-3); // the line starts at Mars, where its mesh is
+    const R = norm(sub(marsPos, sun));
+    expect(R).toBeGreaterThan(2.0e8);
+    for (let i = 0; i < o.n; i += 10) expect(norm(sub(point(o.pos.world, i), sun)) / R).toBeGreaterThan(0.8); // e = 0.093: 2.07e8 .. 2.49e8 km
+    for (let i = 0; i < o.n; i += 10) expect(norm(sub(point(o.pos.world, i), sun)) / R).toBeLessThan(1.25);
+    expect(Array.from(o.pos.shift)).toEqual([0, 0, 0]);
   });
 
   it('a body line has no trail', () => {

@@ -1,6 +1,5 @@
 import { EARTH, bodyStateEci, defaultBodies, type Vec3 } from '@eio/core';
 import { MIN_ALT_KM } from './camera';
-import { shellRadius, type DistanceScale } from './deepspace';
 
 /**
  * Reference bodies: the body the view is centred on and the one readouts are measured from. Entities stay stored in
@@ -13,6 +12,13 @@ export type RefBody = 'EARTH' | 'MOON' | 'SUN' | (string & {});
 
 /** True for any body of the core registry (Sun, Earth, Moon, Mars, ...). */
 export const isRegistryBody = (s: unknown): s is RefBody => typeof s === 'string' && defaultBodies.has(s);
+
+/**
+ * Limit of the near-Earth neighbourhood (km, geocentric): beyond it an object is "deep space", so it has no latitude,
+ * longitude or altitude readout, no Earth-orbit period and no orbit line of its own (a non-body entity), and the browser
+ * scope filter calls it distant. A classification only: positions are never moved (everything is drawn to scale).
+ */
+export const NEAR_EARTH_LIMIT_KM = 2e6;
 
 /** Display name and true radius of every registry body, by id. */
 export const REF_LABEL: Record<string, string> = Object.fromEntries(defaultBodies.all().map((b) => [b.id, b.name]));
@@ -29,42 +35,27 @@ export function refPositionEci(body: RefBody, tMs: number): Vec3 {
 }
 
 /**
- * Where a body is drawn and how much it is shrunk: `r` is its centre in display space (km) and `k` the factor that took
- * it there. In the compressed distance scale a body beyond the shell threshold (the Sun at 1.5e8 km, Mars at 1e8 to 4e8 km)
- * sits on the deep-space shell exactly like a probe in the same direction, and `k` < 1 scales its radius by the same
- * factor, so it keeps its true angular size seen from the Earth. The Moon is inside the shell threshold and the true
- * scale draws everything as it is: `k` = 1.
+ * Where a body is drawn: `r` is its centre (km, Earth-inertial) and `k` the factor its radius is drawn with. Everything is
+ * drawn to scale (the Sun at 1.5e8 km, Mars at 1e8 to 4e8 km, probes at their real distance), so `k` is always 1; the field
+ * stays only because the pick, disc-hide and label code still carry it (a follow-up cleanup removes it).
  */
-export function refDisplay(body: RefBody, tMs: number, scale: DistanceScale): { r: Vec3; k: number } {
-  const r = refPositionEci(body, tMs);
-  if (scale === 'true') return { r, k: 1 };
-  const n = Math.hypot(r[0], r[1], r[2]);
-  const k = n > 0 ? shellRadius(n) / n : 1;
-  return { r: [r[0] * k, r[1] * k, r[2] * k], k };
+export function refDisplay(body: RefBody, tMs: number): { r: Vec3; k: number } {
+  return { r: refPositionEci(body, tMs), k: 1 };
 }
 
-/** Camera distance (from the body's centre) that frames the whole body when the view is centred on it. `k`: see refDisplay. */
-export const refViewDistKm = (body: RefBody, k = 1): number => (body === 'EARTH' ? 24000 : refRadiusKm(body) * k * 4);
+/**
+ * Camera distance (from the body's centre) that frames the whole body when the view is centred on it: the Earth 24,000 km, any
+ * other body 4 radii, so its disc spans about a quarter of the view height or more. In the true scale: the Moon 6,950 km, Mars
+ * 13,600 km (its close orbiters, MAVEN, MRO, are inside the view), the Sun 2.8e6 km (a disc filling the view, the Earth's orbit
+ * at 1.5e8 km is zoomed out to).
+ */
+export const refViewDistKm = (body: RefBody): number => (body === 'EARTH' ? 24000 : refRadiusKm(body) * 4);
 
 /**
- * Closest the camera may come to the body's centre while it is the view centre: just above its (displayed) surface (the
+ * Closest the camera may come to the body's centre while it is the view centre: just above its surface (the
  * Earth: the camera's usual minimum altitude, the same as when nothing is followed).
  */
-export const refMinDistKm = (body: RefBody, k = 1): number => (body === 'EARTH' ? EARTH.radiusKm + MIN_ALT_KM : refRadiusKm(body) * k * 1.02);
-
-/** A body that orbits the Sun directly and is not the Earth: far away in the true scale (Mars, later asteroids). */
-function isHeliocentricFar(body: RefBody): boolean {
-  if (body === 'SUN') return true;
-  return body !== 'EARTH' && defaultBodies.has(body) && defaultBodies.get(body).parentId === 'SUN';
-}
-
-/**
- * Farthest the camera may be from the view centre. In the true distance scale the Sun view must reach the Earth's orbit
- * (1.5e8 km) to show the Earth and Moon next to it, and a planet's view must reach the Earth from Mars distance; the
- * compressed shell already fits inside every scale's own limit.
- */
-export const refMaxDistKm = (body: RefBody, scaleMaxKm: number, scale: DistanceScale = 'true'): number =>
-  isHeliocentricFar(body) && scale === 'true' ? Math.max(scaleMaxKm, 6e8) : scaleMaxKm;
+export const refMinDistKm = (body: RefBody): number => (body === 'EARTH' ? EARTH.radiusKm + MIN_ALT_KM : refRadiusKm(body) * 1.02);
 
 /** `r` (Earth-inertial, km) relative to the body's centre. Same axes, so this is a translation. */
 export function relativeToRef(body: RefBody, r: Vec3, tMs: number): Vec3 {

@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import type { EntityGraph, EntityRecord, Vec3 } from '@eio/core';
-import type { DistanceScale } from '../lib/deepspace';
 import { fixedToInertial, type Spin } from '../lib/floating-origin';
 import { EARTH_CENTRE, centrePositionEci, frameForRec, frameSampler, graphLookup, type Centre } from '../lib/frame';
 import {
@@ -15,13 +14,11 @@ const MIN_REBUILD_WALL_MS = 150;
 export interface PathStatus {
   /** a path is currently drawn */
   active: boolean;
-  /** drawn on the compressed deep-space shell (not to scale) */
-  compressed: boolean;
   frame: 'fixed' | 'inertial';
   plan: PathPlan | null;
 }
 
-const OFF: PathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
+const OFF: PathStatus = { active: false, frame: 'inertial', plan: null };
 
 function makeLine(position: THREE.BufferAttribute, color: THREE.Color, opacity: number): THREE.Line {
   const g = new THREE.BufferGeometry();
@@ -35,8 +32,8 @@ function makeLine(position: THREE.BufferAttribute, color: THREE.Color, opacity: 
 /**
  * Trajectory line of the selected non-SGP4 entity: dimmer solid line for the past, brighter for the predicted
  * future, plus ticks at composite phase boundaries. Points come from `lib/paths.ts` (float64); the two lines share one
- * position buffer and only their draw ranges move with the clock. Rebuilt only when the selection changes, the distance
- * scale changes or the time window has slid by a tenth of its length. The GPU copy is re-based on the camera every
+ * position buffer and only their draw ranges move with the clock. Rebuilt only when the selection or the frame changes or
+ * the time window has slid by a tenth of its length. The GPU copy is re-based on the camera every
  * frame (`uploadFrame`), and a path sampled in the Earth-fixed frame is rotated by the Earth's spin at that moment, so
  * it stays glued to the ground without a rotating parent object. Depth-tested like everything else, so the Earth hides
  * the far side of a path.
@@ -53,7 +50,6 @@ export class PathOverlay {
   private recKey: unknown = null;
   private builtAt = -Infinity;
   private builtWall = -Infinity;
-  private builtScale: DistanceScale | null = null;
   private builtCentre = '';
   /** how far the frame centre has moved since the buffers were filled, km (world space) */
   private shift: Vec3 = [0, 0, 0];
@@ -102,7 +98,7 @@ export class PathOverlay {
    * the frame of reference; the path is sampled relative to it (see lib/frame.ts) and rebuilt when it changes.
    */
   update(
-    graph: EntityGraph, rec: EntityRecord, t: number, wall: number, orbitHandled: boolean, scale: DistanceScale = 'compressed',
+    graph: EntityGraph, rec: EntityRecord, t: number, wall: number, orbitHandled: boolean,
     centre: Centre = EARTH_CENTRE,
   ): PathStatus {
     if (orbitHandled) return this.hide();
@@ -112,11 +108,10 @@ export class PathOverlay {
     const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds });
     if (!plan) return this.hide();
 
-    if (key !== this.recKey || scale !== this.builtScale || centre !== this.builtCentre || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
+    if (key !== this.recKey || centre !== this.builtCentre || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
       const lookup = graphLookup(graph);
-      this.res = samplePath(graph, rec.id, plan, rec.provider, this.buf, scale, frameSampler(centre, t, lookup));
+      this.res = samplePath(graph, rec.id, plan, rec.provider, this.buf, frameSampler(centre, t, lookup));
       this.recKey = key;
-      this.builtScale = scale;
       this.builtCentre = centre;
       this.builtAt = t;
       this.builtWall = wall;
@@ -142,7 +137,7 @@ export class PathOverlay {
     const from = Math.max(0, k);
     this.future.geometry.setDrawRange(from, res.count - from);
     this.ticks.visible = res.phases.length > 0;
-    return { active: true, compressed: res.compressed, frame: res.frame, plan: res.plan };
+    return { active: true, frame: res.frame, plan: res.plan };
   }
 
   /** Refill the GPU buffers relative to this frame's camera. Call once per frame after `update`. */

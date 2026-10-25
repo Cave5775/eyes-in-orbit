@@ -1,5 +1,4 @@
 import { EARTH, convert, defaultBodies, type CompositeSegment, type FrameId, type ProviderSpec, type StateVector, type Vec3 } from '@eio/core';
-import { compressDeepSpace, type DistanceScale } from './deepspace';
 import { framePathPoint, type FrameSampler } from './frame';
 
 /**
@@ -179,8 +178,6 @@ export interface PathResult {
   count: number;
   /** `fixed`: attach to the rotating Earth; `inertial`: world frame */
   frame: 'fixed' | 'inertial';
-  /** some point was drawn on the compressed deep-space shell */
-  compressed: boolean;
   /** extent exceeds MIN_PATH_EXTENT_KM (a path of a stationary object is not worth drawing) */
   moving: boolean;
   plan: PathPlan;
@@ -205,16 +202,6 @@ export function liftNearSurface(r: Vec3, liftKm = GROUND_LIFT_KM): Vec3 {
   if (alt >= liftKm * 2) return r;
   const k = (n + liftKm * (1 - Math.max(0, alt) / (liftKm * 2))) / n;
   return [r[0] * k, r[1] * k, r[2] * k];
-}
-
-/**
- * Display position for an Earth-inertial position: deep-space shell compression (default) or true scale (identity),
- * else the ground lift. `compressed` is true only when the position was actually moved onto the shell.
- */
-export function displayPosition(r: Vec3, scale: DistanceScale = 'compressed'): { r: Vec3; compressed: boolean } {
-  if (scale === 'true') return { r: liftNearSurface(r), compressed: false };
-  const c = compressDeepSpace(r);
-  return c.compressed ? c : { r: liftNearSurface(r), compressed: false };
 }
 
 /** Phase labels of a composite spec, in order. */
@@ -253,15 +240,15 @@ export function sampleTimes(plan: PathPlan, spec: ProviderSpec | undefined, maxP
 
 /**
  * Evaluate the entity over `plan` into `buf`. Samples with no state are skipped. See the module comment for
- * the display frame; inertial points get deep-space compression, so a probe's path matches its marker.
+ * the display frame; inertial points are drawn at their true position (with the ground lift), like the marker.
  */
 export function samplePath(
-  src: PathSource, id: string, plan: PathPlan, spec: ProviderSpec | undefined, buf: PathBuffers, scale: DistanceScale = 'compressed',
+  src: PathSource, id: string, plan: PathPlan, spec: ProviderSpec | undefined, buf: PathBuffers,
   inFrame?: FrameSampler,
 ): PathResult {
   // in a frame centred away from the Earth a sample is r(t_i) - c(t_i) + c(ref): inertial only (the Earth-fixed
   // shortcut below is for the Earth centre), and nothing can be drawn while the centre has no position at `ref`
-  if (inFrame && !inFrame.ref) return { count: 0, frame: 'inertial', compressed: false, moving: false, plan, phases: [], centreRef: null };
+  if (inFrame && !inFrame.ref) return { count: 0, frame: 'inertial', moving: false, plan, phases: [], centreRef: null };
   const wanted = sampleTimes(plan, spec, Math.min(PATH_MAX_POINTS, buf.times.length - 2 * PATH_MAX_PHASES));
   const states: { t: number; s: StateVector }[] = [];
   for (const t of wanted) {
@@ -276,7 +263,6 @@ export function samplePath(
   const frame: 'fixed' | 'inertial' = (allFixed || planned) && plan.t1 - plan.t0 <= FIXED_FRAME_MAX_WINDOW_MS ? 'fixed' : 'inertial';
 
   let n = 0;
-  let compressed = false;
   let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
   let moving = false;
   for (const { t, s } of states) {
@@ -304,9 +290,7 @@ export function samplePath(
         if (!c) continue;
         p = framePathPoint(p, c, inFrame.ref!);
       }
-      const d = displayPosition(p, scale);
-      compressed ||= d.compressed;
-      r = d.r;
+      r = liftNearSurface(p);
     }
     if (!(Number.isFinite(r[0]) && Number.isFinite(r[1]) && Number.isFinite(r[2]))) continue;
     buf.pos[n * 3] = r[0];
@@ -331,5 +315,5 @@ export function samplePath(
       if (phases.length >= PATH_MAX_PHASES) break;
     }
   }
-  return { count: n, frame, compressed, moving, plan, phases, centreRef: inFrame?.ref ?? null };
+  return { count: n, frame, moving, plan, phases, centreRef: inFrame?.ref ?? null };
 }

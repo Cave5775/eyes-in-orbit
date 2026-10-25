@@ -8,7 +8,7 @@ import {
   framePathPoint, frameSampler, graphLookup, isEarthCentre, relativeState,
 } from '../src/lib/frame';
 import { orbitPeriodSec } from '../src/lib/orbit';
-import { displayPosition, makePathBuffers, samplePath } from '../src/lib/paths';
+import { liftNearSurface, makePathBuffers, samplePath } from '../src/lib/paths';
 import { computeTelemetry } from '../src/lib/telemetry';
 import { mockSatellites } from '../src/mock/generators';
 
@@ -114,7 +114,7 @@ describe('centres', () => {
     expect(period / 86_400_000).toBeLessThan(27.8);
     // an active Moon centre does not change the sampling centre of the Moon's own orbit
     const buf = makePathBuffers();
-    const res = samplePath(g, moon.id, { t0: NOW, t1: NOW + period }, moon.provider, buf, 'compressed',
+    const res = samplePath(g, moon.id, { t0: NOW, t1: NOW + period }, moon.provider, buf,
       frameSampler(frameForRec('body-moon', moon), NOW, lookup));
     expect(res.count).toBeGreaterThan(100);
     // around the Earth's centre (the origin): distances stay in the Moon's 356,000 to 407,000 km range, and the loop closes
@@ -135,7 +135,7 @@ describe('centres', () => {
     const sunNow = sampler.ref!;
     expect(norm(sunNow)).toBeGreaterThan(1.45e8);
     const eb = makePathBuffers();
-    const er = samplePath(g, earth.id, { t0: NOW, t1: NOW + 100 * 86_400_000 }, earth.provider, eb, 'true', sampler);
+    const er = samplePath(g, earth.id, { t0: NOW, t1: NOW + 100 * 86_400_000 }, earth.provider, eb, sampler);
     expect(er.count).toBeGreaterThan(10);
     for (let i = 0; i < er.count; i += 5) {
       const d = dist([eb.pos[i * 3], eb.pos[i * 3 + 1], eb.pos[i * 3 + 2]], sunNow);
@@ -194,19 +194,19 @@ describe('paths sampled in the frame', () => {
   it('with the Earth centre reproduces the unframed output exactly', () => {
     const plain = makePathBuffers(), framed = makePathBuffers();
     const a = samplePath(g, lro.id, plan, lro.provider, plain);
-    const b = samplePath(g, lro.id, plan, lro.provider, framed, 'compressed', frameSampler(EARTH_CENTRE, NOW, lookup));
+    const b = samplePath(g, lro.id, plan, lro.provider, framed, frameSampler(EARTH_CENTRE, NOW, lookup));
     expect(b.count).toBe(a.count);
     expect(Array.from(framed.pos.subarray(0, b.count * 3))).toEqual(Array.from(plain.pos.subarray(0, a.count * 3)));
     expect(b.centreRef).toBeNull();
     // and it is what the pre-frame code computed: the Earth-inertial state, display position
     const t = plain.times[7];
     const s = g.stateIn(lro.id, t, 'EARTH:inertial')!;
-    expect(Array.from(plain.pos.subarray(21, 24))).toEqual(displayPosition(s.r).r);
+    expect(Array.from(plain.pos.subarray(21, 24))).toEqual(liftNearSurface(s.r));
   });
 
   it('draws a Moon orbiter as a closed circle around the Moon in the Moon frame, not in the Earth frame', () => {
     const buf = makePathBuffers();
-    const res = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler('body-moon', NOW, lookup));
+    const res = samplePath(g, lro.id, plan, lro.provider, buf, frameSampler('body-moon', NOW, lookup));
     expect(res.count).toBeGreaterThan(400);
     expect(res.centreRef).toEqual(moonPositionEci(NOW));
     const c = res.centreRef!;
@@ -235,7 +235,7 @@ describe('paths sampled in the frame', () => {
   it('follows the centre: the stored path is around the centre at build time, the scene shifts it by c(now) - ref', () => {
     const buf = makePathBuffers();
     const built = NOW;
-    const res = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler('body-moon', built, lookup));
+    const res = samplePath(g, lro.id, plan, lro.provider, buf, frameSampler('body-moon', built, lookup));
     const later = NOW + 20 * MIN;
     const shift = sub(moonPositionEci(later), res.centreRef!);
     expect(norm(shift)).toBeGreaterThan(1000); // the Moon moved ~1.2 km/s
@@ -247,7 +247,7 @@ describe('paths sampled in the frame', () => {
 
   it('is empty while the centre entity has no state at the build time, and skips samples it cannot place', () => {
     const buf = makePathBuffers();
-    const gone = samplePath(g, lro.id, plan, lro.provider, buf, 'compressed', frameSampler('nobody', NOW, lookup));
+    const gone = samplePath(g, lro.id, plan, lro.provider, buf, frameSampler('nobody', NOW, lookup));
     expect(gone.count).toBe(0);
     expect(gone.moving).toBe(false);
   });
@@ -257,11 +257,11 @@ describe('paths sampled in the frame', () => {
     const g2 = bodyGraph();
     g2.upsert(iss);
     const buf = makePathBuffers();
-    const res = samplePath(g2, iss.id, { t0: NOW, t1: NOW + 30 * MIN }, undefined, buf, 'compressed', frameSampler('body-moon', NOW, graphLookup(g2)));
+    const res = samplePath(g2, iss.id, { t0: NOW, t1: NOW + 30 * MIN }, undefined, buf, frameSampler('body-moon', NOW, graphLookup(g2)));
     const t = buf.times[100];
     const r = g2.stateIn(iss.id, t, 'EARTH:inertial')!.r;
     const expected = framePathPoint(r, moonPositionEci(t), moonPositionEci(NOW));
-    expect(Array.from(buf.pos.subarray(300, 303))).toEqual(displayPosition(expected).r);
+    expect(Array.from(buf.pos.subarray(300, 303))).toEqual(liftNearSurface(expected));
     expect(res.count).toBeGreaterThan(100);
   });
 });

@@ -12,103 +12,90 @@ const NONE: Centre = 'none';
 const away = { ...base, frame: NONE };
 
 describe('body orbit lines', () => {
-  it('the Moon always, the Earth in both scales, Mars only in the true scale, the Sun never', () => {
-    for (const scale of ['compressed', 'true'] as const) {
-      expect(bodyLineAllowed(rec('body-moon'), scale)).toBe(true);
-      expect(bodyLineAllowed(rec('body-sun'), scale)).toBe(false);
-    }
-    expect(bodyLineAllowed(rec('body-earth'), 'compressed')).toBe(true); // drawn scaled about the Earth (EntityOverlay.buildOrbit)
-    expect(bodyLineAllowed(rec('body-mars'), 'compressed')).toBe(false);
-    expect(bodyLineAllowed(rec('body-earth'), 'true')).toBe(true);
-    expect(bodyLineAllowed(rec('body-mars'), 'true')).toBe(true);
+  it('the Moon, the Earth and Mars have a line, the Sun never', () => {
+    expect(bodyLineAllowed(rec('body-moon'))).toBe(true);
+    expect(bodyLineAllowed(rec('body-earth'))).toBe(true);
+    expect(bodyLineAllowed(rec('body-mars'))).toBe(true);
+    expect(bodyLineAllowed(rec('body-sun'))).toBe(false);
   });
 
   it('is false for a record that is not a body or asks for no line', () => {
     const sat = { bodyId: 'EARTH', provider: { type: 'geodetic' as const, lat: 0, lon: 0, alt: 0 }, render: { orbitLine: true } };
-    expect(bodyLineAllowed(sat as never, 'true')).toBe(false);
-    expect(bodyLineAllowed({ ...rec('body-moon'), render: { label: true } }, 'true')).toBe(false);
+    expect(bodyLineAllowed(sat as never)).toBe(false);
+    expect(bodyLineAllowed({ ...rec('body-moon'), render: { label: true } })).toBe(false);
   });
 
   it('draws the line of the selected body and of the frame body', () => {
-    expect(bodyLineIds(recs, { ...base, selectedId: 'body-moon', frame: 'body-moon', scale: 'compressed' })).toEqual(['body-moon']);
-    expect(bodyLineIds(recs, { ...base, frame: 'body-moon', scale: 'true' })).toEqual(['body-moon']);
+    expect(bodyLineIds(recs, { ...base, selectedId: 'body-moon', frame: 'body-moon' })).toEqual(['body-moon']);
+    expect(bodyLineIds(recs, { ...base, frame: 'body-moon' })).toEqual(['body-moon']);
   });
 
   it('the selection and the frame are the only subjects: its own line and its direct children', () => {
-    const ids = (input: Partial<Parameters<typeof bodyLineIds>[1]>, scale: 'compressed' | 'true') => bodyLineIds(recs, { ...base, ...input, scale }).sort();
+    const ids = (input: Partial<Parameters<typeof bodyLineIds>[1]>) => bodyLineIds(recs, { ...base, ...input }).sort();
     // selecting a body from the tree, a breadcrumb, the scene or the popup makes it the frame too (unless locked): both are it
     const pick = (id: string) => ({ selectedId: id, frame: id });
-    // the Earth (and the default view): the Earth around the Sun and the Moon around the Earth, in both scales
-    for (const scale of ['compressed', 'true'] as const) {
-      expect(ids({}, scale)).toEqual(['body-earth', 'body-moon']);
-      expect(ids(pick('body-earth'), scale)).toEqual(['body-earth', 'body-moon']);
-      // the Moon: its own line, no children
-      expect(ids(pick('body-moon'), scale)).toEqual(['body-moon']);
-    }
-    // the Sun: no line of its own; Earth and Mars in the true scale, the Earth only in the compressed one
-    expect(ids(pick('body-sun'), 'true')).toEqual(['body-earth', 'body-mars']);
-    expect(ids(pick('body-sun'), 'compressed')).toEqual(['body-earth']);
-    // Mars: the true scale only
-    expect(ids(pick('body-mars'), 'true')).toEqual(['body-mars']);
-    expect(ids(pick('body-mars'), 'compressed')).toEqual([]);
+    // the Earth (and the default view): the Earth around the Sun and the Moon around the Earth
+    expect(ids({})).toEqual(['body-earth', 'body-moon']);
+    expect(ids(pick('body-earth'))).toEqual(['body-earth', 'body-moon']);
+    // the Moon: its own line, no children
+    expect(ids(pick('body-moon'))).toEqual(['body-moon']);
+    // the Sun: no line of its own, Earth and Mars
+    expect(ids(pick('body-sun'))).toEqual(['body-earth', 'body-mars']);
+    // Mars: its own line
+    expect(ids(pick('body-mars'))).toEqual(['body-mars']);
     // the frame alone (nothing selected) is a subject as well
-    expect(ids({ frame: 'body-sun' }, 'true')).toEqual(['body-earth', 'body-mars']);
+    expect(ids({ frame: 'body-sun' })).toEqual(['body-earth', 'body-mars']);
   });
 
   it('a locked frame and another selected body: both are subjects, the camera subject is always one of them', () => {
-    const ids = (selectedId: string, frame: string, scale: 'compressed' | 'true' = 'true') => bodyLineIds(recs, { selectedId, frame, scale }).sort();
+    const ids = (selectedId: string, frame: string) => bodyLineIds(recs, { selectedId, frame }).sort();
     // the frame stays on the Moon (locked) while Mars is selected and flown to
     expect(ids('body-mars', 'body-moon')).toEqual(['body-mars', 'body-moon']);
     // the Moon frame with the Sun selected: the Moon's own line plus the Sun's children
     expect(ids('body-sun', 'body-moon')).toEqual(['body-earth', 'body-mars', 'body-moon']);
-    expect(ids('body-sun', 'body-moon', 'compressed')).toEqual(['body-earth', 'body-moon']);
   });
 
   it('a selected satellite keeps the lines of the frame, and an object as the frame adds nothing', () => {
-    const ids = (input: Partial<Parameters<typeof bodyLineIds>[1]>) => bodyLineIds(recs, { ...base, ...input, scale: 'true' }).sort();
+    const ids = (input: Partial<Parameters<typeof bodyLineIds>[1]>) => bodyLineIds(recs, { ...base, ...input }).sort();
     expect(ids({ frame: 'body-sun', selectedId: 'sat-25544' })).toEqual(['body-earth', 'body-mars']);
     // an object (LRO, the ISS) as the frame: only the default Earth subject is gone, nothing is added
     expect(ids({ frame: 'lro' })).toEqual([]);
     expect(ids({ frame: 'sat-25544', selectedId: 'sat-25544' })).toEqual([]);
   });
 
-  it('hides the Mars line in the compressed scale and shows it in the true scale, the Earth line in both', () => {
-    expect(bodyLineIds(recs, { ...away, selectedId: 'body-mars', scale: 'compressed' })).toEqual([]);
-    expect(bodyLineIds(recs, { ...away, selectedId: 'body-mars', scale: 'true' })).toEqual(['body-mars']);
-    expect(bodyLineIds(recs, { ...base, selectedId: 'body-earth', scale: 'compressed' })).toContain('body-earth');
-    expect(bodyLineIds(recs, { ...base, selectedId: 'body-earth', scale: 'true' })).toContain('body-earth');
+  it('shows the Mars line and the Earth line, whatever the frame', () => {
+    expect(bodyLineIds(recs, { ...away, selectedId: 'body-mars' })).toEqual(['body-mars']);
+    expect(bodyLineIds(recs, { ...base, selectedId: 'body-earth' })).toContain('body-earth');
   });
 
   it('adds the direct children of the selected body, whatever the frame and the lock', () => {
     // the frame is an entity that is no body, so that only the selection is a subject
-    const ids = (selectedId: string | null, scale: 'compressed' | 'true', frame: Centre = NONE) => bodyLineIds(recs, { selectedId, frame, scale }).sort();
+    const ids = (selectedId: string | null, frame: Centre = NONE) => bodyLineIds(recs, { selectedId, frame }).sort();
     // the Earth: its own line (around the Sun) and the Moon's (around the Earth), in the default frame
-    expect(ids('body-earth', 'true')).toEqual(['body-earth', 'body-moon']);
-    expect(ids('body-earth', 'compressed')).toEqual(['body-earth', 'body-moon']);
-    // the Sun: Earth and Mars in the true scale, only the Earth in the compressed one; the Sun has no line of its own
-    expect(ids('body-sun', 'true')).toEqual(['body-earth', 'body-mars']);
-    expect(ids('body-sun', 'compressed')).toEqual(['body-earth']);
+    expect(ids('body-earth')).toEqual(['body-earth', 'body-moon']);
+    // the Sun: Earth and Mars; the Sun has no line of its own
+    expect(ids('body-sun')).toEqual(['body-earth', 'body-mars']);
     // a leaf: its own line only; Mars has no children
-    expect(ids('body-moon', 'true')).toEqual(['body-moon']);
-    expect(ids('body-mars', 'true')).toEqual(['body-mars']);
+    expect(ids('body-moon')).toEqual(['body-moon']);
+    expect(ids('body-mars')).toEqual(['body-mars']);
     // the frame changes nothing about the selection's lines
     for (const frame of ['body-sun', 'body-moon', 'sat-25544']) {
-      expect(ids('body-earth', 'true', frame)).toContain('body-earth');
-      expect(ids('body-earth', 'true', frame)).toContain('body-moon');
+      expect(ids('body-earth', frame)).toContain('body-earth');
+      expect(ids('body-earth', frame)).toContain('body-moon');
     }
     // no grandchildren: the Sun's selection does not draw the Moon
-    expect(ids('body-sun', 'true')).not.toContain('body-moon');
+    expect(ids('body-sun')).not.toContain('body-moon');
     // nothing selected: no children
-    expect(ids(null, 'true')).toEqual([]);
+    expect(ids(null)).toEqual([]);
   });
 
   it('a selected object that is not a body adds no body lines', () => {
-    expect(bodyLineIds(recs, { ...away, selectedId: 'sat-25544', scale: 'true' })).toEqual([]);
+    expect(bodyLineIds(recs, { ...away, selectedId: 'sat-25544' })).toEqual([]);
   });
 
   it('ignores records that are not body entities', () => {
     const sat = { id: 'sat', bodyId: 'EARTH', render: { orbitLine: true } };
-    expect(bodyLineIds([sat as never], { ...away, selectedId: 'sat', scale: 'true' })).toEqual([]);
+    expect(bodyLineIds([sat as never], { ...away, selectedId: 'sat' })).toEqual([]);
   });
 });
 

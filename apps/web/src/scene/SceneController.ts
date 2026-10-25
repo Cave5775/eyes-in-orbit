@@ -6,14 +6,13 @@ import {
 import { modelViewDirection } from '../lib/attitude';
 import { bodyLineIds, bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
 import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
-import { refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm } from '../lib/ref-body';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, maxDistKm, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
+import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, isHiddenRec, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
-import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
-import { displayPosition } from '../lib/paths';
+import { liftNearSurface } from '../lib/paths';
 import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
 import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM, discGroups, hiddenByDisc, type DiscGroup } from '../lib/disc-hide';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
@@ -97,14 +96,12 @@ export interface SceneStats {
   /** streamed close-up imagery over the base map: the tile level and how many of its tiles have arrived (null: not active) */
   detail: DetailStats | null;
   detailEnabled: boolean;
-  shellSelected: boolean;
   /** surface-aligned camera mode */
   surface: boolean;
-  /** selected path: window relative to now (ms, negative = past) and whether it is drawn on the compressed shell */
-  path: { pastMs: number; futureMs: number; compressed: boolean } | null;
+  /** selected path: window relative to now (ms, negative = past) */
+  path: { pastMs: number; futureMs: number } | null;
   /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
   scope: { mode: ScopeMode; rendered: number; total: number };
-  distanceScale: DistanceScale;
   /** frame of reference (docs/frames.md): its short label (`Moon`, an entity's name), whether it is the Earth, and the lock */
   frame: { label: string; isDefault: boolean; locked: boolean };
   /** ids of entities whose 3D model is drawn this frame (camera within the model's LOD distance) */
@@ -209,7 +206,7 @@ export class SceneController {
   private pathOverlayId: string | null = null;
   /** the trajectory under the cursor (hover highlight, cursor, tooltip); null when none */
   private pathHover: (PathHit & { id: string }) | null = null;
-  private pathStatus: PathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
+  private pathStatus: PathStatus = { active: false, frame: 'inertial', plan: null };
   private hadPathLabels = false;
   // object labels (lib/labels.ts)
   private labelsOn = true;
@@ -242,8 +239,6 @@ export class SceneController {
   private groundLock: [number, number, number] | null = null;
   private launches: Launch[] = [];
   private filters: Filters = NO_FILTERS;
-  /** how objects beyond the deep-space threshold are placed: log-compressed shell (default) or at their real distance */
-  private distScale: DistanceScale = 'compressed';
   // scope policy (see lib/scope.ts)
   private scopeMode: ScopeMode = 'auto';
   /** the selection's related objects (parent, children, pad, linked probes ...): never scoped out */
@@ -283,8 +278,6 @@ export class SceneController {
   private mouse: { x: number; y: number } | null = null;
   private down: { x: number; y: number; t: number } | null = null;
   private lastPickAt = 0;
-  private shellSelected = false;
-  private lastCompressed = false;
   private fps = 60;
   private lastFrame = performance.now();
   private disposed = false;
@@ -297,7 +290,7 @@ export class SceneController {
     this.palette = readPalette();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     // logarithmic depth: float depth precision is uniform in log(distance), so ground markers, trajectories and the Earth
-    // keep their order from a 3 km altitude hover out to the deep-space shell without a per-frame near/far dance
+    // keep their order from a 3 km altitude hover out to deep space without a per-frame near/far dance
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', logarithmicDepthBuffer: true });
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.renderer.setPixelRatio(dpr);
@@ -448,11 +441,6 @@ export class SceneController {
     this.applyAppearance();
   }
 
-  /**
-   * `compressed` (default): objects beyond 2,000,000 km sit on a log-compressed shell. `true`: probes are drawn at their
-   * real geocentric positions (up to ~2.5e10 km), their paths at true scale too, and the camera may zoom out to 1e11 km.
-   * Markers keep their screen size; the floating origin and the logarithmic depth buffer carry the range.
-   */
   /** Turn the streamed close-up imagery on or off (off: the base map only, no tile requests). */
   setDetailEnabled(on: boolean): void {
     this.detail.enabled = on;
@@ -483,30 +471,6 @@ export class SceneController {
       latDeg: geo.lat / DEG, lonDeg: geo.lon / DEG, groundDistKm: t, fovDeg: this.camera.fov,
       viewportPx: this.renderer.domElement.height, aspect: this.camera.aspect,
     };
-  }
-
-  setDistanceScale(scale: DistanceScale): void {
-    if (scale === this.distScale) return;
-    this.distScale = scale;
-    this.rig.maxDist = maxDistKm(scale);
-    this.scopeDirty = true;
-    // whatever the camera was framing out there has moved: follow it with a fresh view, or fall back to the Earth
-    const body = this.followedBody();
-    if (body && refDisplay(body, clock.now(), 'compressed').k !== 1) {
-      this.focusEntity(this.recs.get(this.followId!)!); // the Sun moved between its shell and its true place (and changed size with it)
-    } else if (this.follow && this.followFn?.(this.anchor, clock.now())) {
-      if (this.anchor.length() > SHELL_THRESHOLD_KM * 0.5) this.rig.flyTo(viewFor(this.anchor));
-    } else if (!this.follow && this.freeTarget.length() > SHELL_THRESHOLD_KM * 0.5) {
-      this.freeTarget.set(0, 0, 0);
-      this.groundLock = null;
-      this.rig.pan.set(0, 0, 0);
-      this.rig.flyTo({ dist: 24000, az: this.rig.az, el: this.rig.el * 0.6 });
-    }
-    this.rig.dist = Math.min(this.rig.dist, this.rig.maxDist);
-  }
-
-  get distanceScale(): DistanceScale {
-    return this.distScale;
   }
 
   /** Scope policy: `auto` draws only what is relevant to the camera focus, `all` draws everything the filters allow. */
@@ -645,7 +609,7 @@ export class SceneController {
     if (body !== undefined) {
       if (this.surfaceOn) this.setSurfaceMode(false);
       const sun = sunDirectionEci(clock.now());
-      this.rig.flyTo({ dist: refViewDistKm(body, refDisplay(body, clock.now(), this.distScale).k), az: Math.atan2(sun[1], sun[0]) + 0.5, el: 0.35 });
+      this.rig.flyTo({ dist: refViewDistKm(body), az: Math.atan2(sun[1], sun[0]) + 0.5, el: 0.35 });
       return;
     }
     if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
@@ -791,7 +755,7 @@ export class SceneController {
     this.tmp.set(c[0], c[1], c[2]);
     // a single point (nothing to fit) gets the same view as selecting it, not an absurdly close one
     const view = mayBeSinglePoint && r < 0.5 ? viewFor(this.tmp) : null;
-    const dist = view?.dist ?? fitDistanceClamped(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN, MIN_TARGET_DIST_KM, this.distScale);
+    const dist = view?.dist ?? fitDistanceClamped(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN, MIN_TARGET_DIST_KM);
     const look = view ?? fitAngles(c, radius);
     this.follow = false;
     this.freeTarget.set(c[0], c[1], c[2]);
@@ -953,11 +917,9 @@ export class SceneController {
       dynCount: this.dynIds.length,
       detail: this.detail.stats,
       detailEnabled: this.detail.enabled,
-      shellSelected: this.shellSelected,
       surface: this.surfaceOn,
-      path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
+      path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now } : null,
       scope: { mode: this.scopeMode, ...this.scopeCounts },
-      distanceScale: this.distScale,
       frame: { label: centreLabel(this.frameCentre, (id) => this.recs.get(id)), isDefault: isEarthCentre(this.frameCentre), locked: this.frameLocked },
       models: this.models.activeIds,
       arrays: this.models.activeIds.some((id) => this.models.defOf(id)?.key === 'iss') ? { sources: this.issSources, joints: this.issJointsNow } : null,
@@ -1162,7 +1124,7 @@ export class SceneController {
       this.pathOverlay = null;
       this.pathOverlayId = pathId;
       this.setPathHover(null);
-      this.pathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
+      this.pathStatus = { active: false, frame: 'inertial', plan: null };
       if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
     }
   }
@@ -1170,30 +1132,28 @@ export class SceneController {
   /** Body entities that get an orbit line now (lib/body-scene.ts `bodyLineIds`). */
   private currentBodyLines(): string[] {
     if (this.bodyIds.size === 0) return [];
-    return bodyLineIds(this.recs.values(), { selectedId: this.selectedId, frame: this.frameCentre, scale: this.distScale });
+    return bodyLineIds(this.recs.values(), { selectedId: this.selectedId, frame: this.frameCentre });
   }
 
   // ------------------------------------------------------------------ geometry queries
 
   /**
-   * World (ECI, display-compressed) position of an entity at sim time `t`, float64. A body entity is where its mesh is:
-   * `refDisplay`, the shell-compressed position in the compressed scale, so focus, follow, frame and orbit lines agree.
+   * World (ECI) position of an entity at sim time `t`, float64. A body entity is where its mesh is (`refDisplay`), so
+   * focus, follow, frame and orbit lines agree.
    */
   private worldPos(id: string, t: number, out: THREE.Vector3): boolean {
     const rec = this.recs.get(id);
     const body = rec && bodyOf(rec);
     if (body !== undefined) {
-      const d = refDisplay(body, t, this.distScale);
+      const d = refDisplay(body, t);
       out.set(d.r[0], d.r[1], d.r[2]);
-      this.lastCompressed = d.k !== 1;
       return true;
     }
     const s = graph.stateIn(id, t, 'EARTH:inertial');
     if (!s) return false;
-    // deep-space shell compression, else a few-metre nudge for ground contact (shared with the path overlay)
-    const { r, compressed } = displayPosition(s.r, this.distScale);
+    // a few-metre nudge for ground contact (shared with the path overlay)
+    const r = liftNearSurface(s.r);
     out.set(r[0], r[1], r[2]);
-    this.lastCompressed = compressed;
     return true;
   }
 
@@ -1430,10 +1390,9 @@ export class SceneController {
       // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
       const modelMin = anchored ? this.models.defOf(this.followId)?.minViewKm : undefined;
       focusBody = anchored ? this.followedBody() : undefined;
-      const bodyMin = focusBody ? refMinDistKm(focusBody, refDisplay(focusBody, t, this.distScale).k) : undefined;
+      const bodyMin = focusBody ? refMinDistKm(focusBody) : undefined;
       this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? bodyMin ?? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
     }
-    this.rig.maxDist = refMaxDistKm(focusBody ?? 'EARTH', maxDistKm(this.distScale), this.distScale);
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
     this.updateDetail(wall);
 
@@ -1479,7 +1438,7 @@ export class SceneController {
 
     this.earthGroup.position.copy(f.origin).negate();
     this.atmo.position.copy(f.origin).negate();
-    this.celestial.update(t, f.origin, this.distScale);
+    this.celestial.update(t, f.origin);
 
     const u = this.pointMat.uniforms;
     u.uOriginS.value.set(f.origin.x, f.origin.y, f.origin.z * ELLIPSOID_K);
@@ -1538,8 +1497,7 @@ export class SceneController {
       resolve: (id, t) => {
         const s = graph.stateIn(id, t, 'EARTH:inertial');
         if (!s) return null;
-        const { r, compressed } = displayPosition(s.r, this.distScale);
-        return compressed ? null : { r, v: s.v };
+        return { r: liftNearSurface(s.r), v: s.v };
       },
       visibility: (id) => {
         const r = rec(id);
@@ -1667,7 +1625,6 @@ export class SceneController {
     };
     const sel = this.selectedId ? this.recs.get(this.selectedId) : undefined;
     const ok = !!sel && this.worldPos(sel.id, t, tmp);
-    this.shellSelected = ok && this.lastCompressed;
     this.selOk = ok;
     const c = sel ? this.palette.colors[colorKeyOf(sel)] : this.palette.accent;
     // a drawn 3D model replaces the sprite; a model larger than the ring is its own selection cue
@@ -1695,16 +1652,16 @@ export class SceneController {
   private updateOverlays(t: number, wall: number): void {
     const centre = this.frameCentre;
     this.ensureCentreInGraph(); // the record may have been replaced by a refresh
-    // the body lines depend on the selection, the frame and the distance scale: re-evaluate every frame (4 records)
+    // the body lines depend on the selection and the frame: re-evaluate every frame (4 records)
     if (this.bodyIds.size && this.currentBodyLines().join(',') !== this.bodyLineKey) this.refreshHints();
     for (const [id, o] of this.overlays) {
       const rec = this.recs.get(id);
       if (!rec) continue;
       if (this.overlayInScope.get(id) === false) o.hide();
-      else o.update(graph, rec, t, wall, this.fullOverlays.has(id), centre, this.distScale);
+      else o.update(graph, rec, t, wall, this.fullOverlays.has(id), centre);
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
-    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, this.distScale, centre);
+    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, centre);
   }
 
   /** Project the selected path's phase boundaries to the screen for the label layer. */

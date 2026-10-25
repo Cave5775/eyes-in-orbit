@@ -52,8 +52,8 @@ export function chordSagKm(chordKm: number, radiusKm: number = EARTH.radiusKm): 
 }
 
 /**
- * A sphere that hides what is behind it: the Moon or the Sun as displayed (`c` = centre in display space, the same frame
- * as the camera `origin`; `r` = displayed radius, already scaled by the distance-scale factor k).
+ * A sphere that hides what is behind it: the Moon or the Sun (`c` = centre, the same frame as the camera
+ * `origin`; `r` = radius).
  */
 export interface OccluderSphere {
   c: V3;
@@ -73,7 +73,7 @@ export interface SphereView {
   c2: number;
 }
 
-/** Margin for a sphere: the Earth's absolute margin, but never more than 1 % of the radius (a tiny compressed Sun). */
+/** Margin for a sphere: the Earth's absolute margin, but never more than 1 % of the radius (a small, far Sun). */
 const sphereMargin = (r: number, marginKm: number): number => Math.min(marginKm, r * 0.01);
 
 export function sphereView(origin: V3, s: OccluderSphere, marginKm = OCCLUSION_MARGIN_KM): SphereView {

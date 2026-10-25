@@ -38,7 +38,7 @@ describe('altitude-scaled zoom', () => {
 
   it('clamps to the near and far limits', () => {
     expect(zoomDistance(RE + 4, 0.1, 4, opts)).toBe(opts.minDist);
-    expect(zoomDistance(2.9e7, 50, 2.9e7 - RE, opts)).toBe(MAX_DIST_KM);
+    expect(zoomDistance(9e10, 50, 9e10 - RE, opts)).toBe(MAX_DIST_KM);
     expect(zoomDistance(1, 0.0001, 1, { minDist: 0.2 })).toBeGreaterThanOrEqual(0.2);
   });
 
