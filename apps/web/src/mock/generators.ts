@@ -1,5 +1,5 @@
 import {
-  DEG, EARTH, LL2_STATUS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, convert, deriveMissionState,
+  DEG, EARTH, LL2_STATUS, MARS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, deriveMissionState,
   missionTimingFor, modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, orbitSegmentsOf, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
@@ -344,6 +344,15 @@ const LRO_ORBIT = (nowMs: number) => {
   return { a, e, i: 90 * DEG, raan: 270 * DEG, argp: 270 * DEG, m0: 0, epochMs: nowMs };
 };
 
+/**
+ * The mock MRO: near-polar sun-synchronous orbit about Mars, 255 x 320 km altitude (period ~113 min), elements at `nowMs`.
+ * i = 93 deg, so the Mars-inertial track is a tilted ring around Mars, never a point on the Earth-centred scale.
+ */
+const MRO_ORBIT = (nowMs: number) => {
+  const a = MARS.radiusKm + 288, e = 32 / a;
+  return { a, e, i: 93 * DEG, raan: 20 * DEG, argp: 270 * DEG, m0: 0, epochMs: nowMs };
+};
+
 /** The body entities, built by the same core function as the server's `bodies` connector so the mock cannot drift. */
 export const mockBodies = (nowMs: number): EntityRecord[] => bodyEntityRecords(undefined, nowMs);
 
@@ -368,18 +377,20 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
     links: { newsQuery: 'James Webb Space Telescope' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
     attrs: { rangeKm: 1.5e6, rtltSec: 10, dataRate: 28_000_000, dish: 'DSS-63' }, updatedAt: nowMs,
   });
+  const mroOrbit = MRO_ORBIT(nowMs);
   out.push({
-    id: 'dsn-MRO', name: 'Mars Reconnaissance Orbiter', kind: 'probe', bodyId: 'EARTH', aliases: { dsn: 'MRO', horizons: '-74' }, group: 'dsn',
+    // Mars-centred like the server's Horizons target (500@499, MARS:inertial, position and velocity, 5 min steps, -1 d .. +3 d)
+    id: 'dsn-MRO', name: 'Mars Reconnaissance Orbiter', kind: 'probe', bodyId: 'MARS', aliases: { dsn: 'MRO', horizons: '-74' }, group: 'dsn',
     provider: {
-      type: 'sampled', frame: 'EARTH:inertial',
-      samples: probeSamples(nowMs, (t) => {
-        const ang = ((t - nowMs) / (112 * MIN)) * 2 * Math.PI;
-        const s = convert({ frame: 'MARS:inertial', r: [3800 * Math.cos(ang), 3800 * Math.sin(ang), 0] }, 'EARTH:inertial', t);
-        return s.r;
-      }),
+      type: 'sampled', frame: 'MARS:inertial',
+      samples: probeSamples(nowMs, (t) => { const s = keplerState(mroOrbit, MARS.gm, t); return [...s.r, ...s.v]; }, { pastDays: 1, futureDays: 3, stepMin: 5 }),
     },
     links: { newsQuery: 'Mars Reconnaissance Orbiter' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
-    attrs: { rangeKm: 2.2e8, rtltSec: 1470, dataRate: 2_000_000, dish: 'DSS-43' }, updatedAt: nowMs,
+    attrs: {
+      rangeKm: 2.2e8, rtltSec: 1470, dataRate: 2_000_000, dish: 'DSS-43',
+      trackCentre: 'Mars', trackNote: 'Track is Mars-centred (Horizons 500@499, 5 min steps, -1 d to +3 d), not Earth-centred',
+    },
+    updatedAt: nowMs,
   });
 
   // LRO: Moon-centred like the server's Horizons target (MOON:inertial, position and velocity, 5 min steps, -1 d .. +3 d)

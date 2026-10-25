@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { EARTH, EntityGraph, MOON, Sgp4Provider, norm, providerFromSpec, stateToGeodetic, type EntityRecord } from '@eio/core';
+import { EARTH, EntityGraph, MARS, MOON, Sgp4Provider, bodyEntityRecords, defaultBodies, norm, providerFromSpec, stateToGeodetic, type EntityRecord } from '@eio/core';
 import {
   makeOmm, mockDsn, mockGroundAndProbes, mockIssFix, mockLaunches, mockNews, mockSatellites, mulberry32,
 } from '../src/mock/generators';
 import { computeTelemetry } from '../src/lib/telemetry';
 import { orbitPeriodSec } from '../src/lib/orbit';
+import { liftNearSurface } from '../src/lib/paths';
+import { refDisplay } from '../src/lib/ref-body';
+import { buildTreeRows } from '../src/lib/entity-tree';
 
 const NOW = Date.parse('2026-10-22T12:00:00Z');
 
@@ -126,6 +129,54 @@ describe('mock non-SGP4 entities', () => {
     expect(Math.max(...lats)).toBeGreaterThan(1.4);
     // in Earth-inertial coordinates it is at the Moon's distance
     expect(norm(g.stateIn('dsn-LRO', NOW, 'EARTH:inertial')!.r)).toBeGreaterThan(340_000);
+  });
+
+  it('mock MRO orbits Mars: MARS body, Mars-inertial 5 min samples with velocities, a ~113 min orbit of 255 x 320 km altitude', () => {
+    const mro = entities.find((e) => e.id === 'dsn-MRO')!;
+    expect(mro).toMatchObject({ name: 'Mars Reconnaissance Orbiter', kind: 'probe', bodyId: 'MARS', group: 'dsn', aliases: { dsn: 'MRO', horizons: '-74' } });
+    expect(mro.attrs?.trackCentre).toBe('Mars');
+    if (mro.provider?.type !== 'sampled') throw new Error('expected sampled');
+    expect(mro.provider.frame).toBe('MARS:inertial');
+    expect(mro.provider.samples).toHaveLength(1153); // -1 d .. +3 d in 5 min steps
+    expect(mro.provider.samples[0][0]).toBe(NOW - 86_400_000);
+    expect(mro.provider.samples[0]).toHaveLength(7);
+
+    const g = new EntityGraph();
+    entities.forEach((e) => g.upsert(e));
+    const alts: number[] = [];
+    for (let t = NOW; t <= NOW + 2 * 3_600_000; t += 60_000) alts.push(stateToGeodetic(g.stateOf('dsn-MRO', t)!, t, 'MARS').alt);
+    expect(Math.min(...alts)).toBeGreaterThan(250);
+    expect(Math.max(...alts)).toBeLessThan(345); // geodetic: over the poles the oblate Mars surface is ~20 km lower
+    const period = 2 * Math.PI * Math.sqrt((MARS.radiusKm + 288) ** 3 / MARS.gm) * 1000;
+    expect(period / 60_000).toBeGreaterThan(110);
+    expect(period / 60_000).toBeLessThan(115);
+    const a = g.stateOf('dsn-MRO', NOW)!.r, b = g.stateOf('dsn-MRO', NOW + period)!.r;
+    expect(norm([b[0] - a[0], b[1] - a[1], b[2] - a[2]])).toBeLessThan(2);
+  });
+
+  it('mock MRO stays on its orbit radius around the displayed Mars at several times (it does not drift off Mars)', () => {
+    const g = new EntityGraph();
+    for (const b of bodyEntityRecords(undefined, NOW)) g.upsert(b);
+    entities.forEach((e) => g.upsert(e));
+    for (const dt of [0, 17 * 60_000, 61 * 60_000, 5 * 3_600_000, 86_400_000, 2.5 * 86_400_000]) {
+      const t = NOW + dt;
+      const mars = refDisplay('MARS', t).r;
+      const s = g.stateIn('dsn-MRO', t, 'EARTH:inertial')!;
+      const drawn = liftNearSurface(s.r);
+      const d = norm([drawn[0] - mars[0], drawn[1] - mars[1], drawn[2] - mars[2]]);
+      expect(d, `at +${dt / 60_000} min`).toBeGreaterThan(MARS.radiusKm + 240);
+      expect(d, `at +${dt / 60_000} min`).toBeLessThan(MARS.radiusKm + 335);
+    }
+  });
+
+  it('the entity tree lists mock MRO under Mars, not under the Earth', () => {
+    const items = entities.filter((e) => e.kind === 'probe' || e.kind === 'ground_station').map((e) => ({ id: e.id, kind: e.kind, bodyId: e.bodyId }));
+    const bodies = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId }));
+    const rows = buildTreeRows(items, { bodies, frameId: 'dsn-MRO', frameBodyId: 'MARS' });
+    const ids = rows.map((r) => (r.type === 'body' ? `B:${r.bodyId}` : r.type === 'entity' ? `E:${r.id}` : `G:${r.kind}`));
+    expect(ids.indexOf('E:dsn-MRO')).toBeGreaterThan(ids.indexOf('B:MARS'));
+    expect(ids.indexOf('E:dsn-MRO')).toBeGreaterThan(-1);
+    expect(items.find((i) => i.id === 'dsn-MRO')!.bodyId).toBe('MARS');
   });
 
   it('launches are NET-ordered with consistent entities and phases', () => {

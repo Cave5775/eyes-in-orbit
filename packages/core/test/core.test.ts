@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   Clock, CompositeProvider, EntityGraph, EARTH, GeodeticProvider, KeplerianProvider, RelativeProvider,
   SampledProvider, Sgp4Provider, DEG, convert, deriveMissionState, formatCountdown, fixedToGeodetic,
-  geodeticToFixed, gmstRad, missionTimingFor, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS, MOON,
+  geodeticToFixed, gmstRad, missionTimingFor, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS, MARS, MOON,
   type Omm, type Sample,
 } from '../src';
 
@@ -52,6 +52,54 @@ describe('frames', () => {
 
   it('sun direction is a unit vector', () => {
     expect(norm(sunDirectionEci(T0))).toBeCloseTo(1, 6);
+  });
+});
+
+describe('entity sampled in MARS:inertial (Mars-centred Horizons track of a Mars orbiter)', () => {
+  const R = 3700; // km from the Mars centre: ~300 km above the mean radius
+  const v = Math.sqrt(MARS.gm / R);
+  const w = v / R; // rad/s
+  const t0 = T0;
+  // near-polar circular orbit in Mars' inertial equatorial axes, with velocities as Horizons returns them (5 min rows)
+  const at = (t: number): [number, number, number, number, number, number] => {
+    const a = w * ((t - t0) / 1000);
+    return [R * Math.cos(a), 0, R * Math.sin(a), -v * Math.sin(a), 0, v * Math.cos(a)];
+  };
+  const samples: Sample[] = [];
+  for (let t = t0 - 3_600_000; t <= t0 + 3_600_000; t += 300_000) samples.push([t, ...at(t)]);
+  const g = new EntityGraph();
+  g.upsert({ id: 'mro', name: 'MRO', kind: 'probe', bodyId: 'MARS', aliases: {}, provider: { type: 'sampled', frame: 'MARS:inertial', samples }, updatedAt: 0 });
+
+  it('stays a Mars-relative state in MARS:inertial', () => {
+    const s = g.stateIn('mro', t0 + 1_234_567, 'MARS:inertial')!;
+    expect(s.frame).toBe('MARS:inertial');
+    expect(norm(s.r)).toBeCloseTo(R, 0);
+    expect(norm(s.v!)).toBeCloseTo(v, 2);
+  });
+
+  it('is expressed in EARTH:inertial as Mars (the drawn Mars) plus the Mars-relative sample, at the orbit radius from Mars', () => {
+    for (const dt of [0, 777_000, -1_500_000, 2_900_000]) {
+      const t = t0 + dt;
+      const e = g.stateIn('mro', t, 'EARTH:inertial')!;
+      const mars = convert({ frame: 'MARS:inertial', r: [0, 0, 0], v: [0, 0, 0] }, 'EARTH:inertial', t);
+      const rel = at(t);
+      expect(e.frame).toBe('EARTH:inertial');
+      expect(norm(e.r)).toBeGreaterThan(5e7); // millions of km from the Earth
+      for (let k = 0; k < 3; k++) {
+        expect(e.r[k] - mars.r[k]).toBeCloseTo(rel[k], -0.5); // Hermite error well below 0.5 km at 5 min steps
+        expect(e.v![k] - mars.v![k]).toBeCloseTo(rel[3 + k], 2);
+      }
+      expect(norm([e.r[0] - mars.r[0], e.r[1] - mars.r[1], e.r[2] - mars.r[2]])).toBeCloseTo(R, 0);
+    }
+  });
+
+  it('gives the altitude above Mars (not the Earth) through stateToGeodetic', () => {
+    for (let dt = -3_000_000; dt <= 3_000_000; dt += 411_000) {
+      const t = t0 + dt;
+      const alt = stateToGeodetic(g.stateOf('mro', t)!, t, 'MARS').alt;
+      expect(alt).toBeGreaterThan(R - MARS.radiusKm - 25); // oblate Mars: up to ~20 km lower surface at the poles
+      expect(alt).toBeLessThan(R - MARS.radiusKm + 25);
+    }
   });
 });
 
