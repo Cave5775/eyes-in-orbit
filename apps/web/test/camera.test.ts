@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EARTH, enuBasis, geodeticToFixed } from '@eio/core';
 import {
-  MAX_DIST_KM, MIN_ALT_KM, SMALL_FIT_TILT, altitudeOf, basisFromUp, basisOffset, boundingSphere, ellipsoidUp, fitAngles, fitDistance,
+  MAX_DIST_KM, MIN_ALT_KM, SMALL_FIT_TILT, altitudeOf, basisFromUp, basisOffset, blendPosition, boundingSphere, elevationAbout, ellipsoidUp, fitAngles, fitDistance, liftToElevation,
   SURFACE_FIT_MAX_KM, SURFACE_FIT_MIN_KM, groundPanDelta, localBasis, minElevation, moveOnSphere, slerpDir, surfaceFitDistance,
   surfaceRadius, viewAnglesFor, zoomDistance, type V3,
 } from '../src/lib/camera';
@@ -253,5 +253,88 @@ describe('surface view fit and ground pan', () => {
     const past = moveOnSphere(p, [0, 0, Math.PI * 0.75 * r]);
     expect(past[0]).toBeLessThan(0);
     expect(past[2]).toBeGreaterThan(0);
+  });
+});
+
+describe('mode transition camera path', () => {
+  const dir = (lat: number, lon: number): V3 => [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
+  const at = (lat: number, lon: number, alt: number): V3 => {
+    const d = dir(lat, lon), r = surfaceRadius(d) + alt;
+    return [d[0] * r, d[1] * r, d[2] * r];
+  };
+  const targets: V3[] = [at(0.3, 0.2, 0), at(0.9, -2, 420), at(-0.5, 3, 340), at(1.5, 1, 7)];
+  /** a grid of start cameras: every side of the planet, from just above the ground out to 80,000 km */
+  const starts: V3[] = [];
+  for (const alt of [5, 300, 1100, 9000, 24000, 80000]) {
+    for (let lat = -1.4; lat <= 1.41; lat += 0.7) for (let lon = -3; lon <= 3.1; lon += 1.0) starts.push(at(lat, lon, alt));
+  }
+
+  /** the surface camera for a target: 20 degrees up, `dist` away, south of it (the real end pose) */
+  const endFor = (t: V3, dist: number): V3 => {
+    const o = basisOffset(basisFromUp(ellipsoidUp(t)), -Math.PI / 2, 0.35, dist);
+    return [t[0] + o[0], t[1] + o[1], t[2] + o[2]];
+  };
+
+  it('starts at the old pose and ends at the new one', () => {
+    const a = at(0.2, 1, 24000), b = at(0.4, 1.1, 300);
+    expect(blendPosition(a, b, 0)).toEqual(a);
+    expect(blendPosition(a, b, 1)).toEqual(b);
+  });
+
+  it('keeps the camera above MIN_ALT_KM and the lower of its two heights, for every start and end', () => {
+    for (const t of targets) for (const dist of [20, 500, 1400]) {
+      const end = endFor(t, dist);
+      for (const s of starts) {
+        const floor = Math.min(Math.max(MIN_ALT_KM, altitudeOf(s)), Math.max(MIN_ALT_KM, altitudeOf(end)));
+        for (let k = 0.02; k < 1; k += 0.02) {
+          expect(altitudeOf(blendPosition(s, end, k, MIN_ALT_KM, t))).toBeGreaterThanOrEqual(floor - 1e-6);
+        }
+      }
+    }
+  });
+
+  it('never goes lower than the horizon it starts or ends at, as seen from the target', () => {
+    for (const t of targets) for (const dist of [20, 500, 1400]) {
+      const end = endFor(t, dist);
+      for (const s of starts) {
+        const floor = Math.min(elevationAbout(s, t), elevationAbout(end, t));
+        for (let k = 0.02; k < 1; k += 0.02) {
+          expect(elevationAbout(blendPosition(s, end, k, MIN_ALT_KM, t), t)).toBeGreaterThanOrEqual(floor - 1e-9);
+        }
+      }
+    }
+  });
+
+  it('does not pass through the planet when the camera starts on the far side', () => {
+    const t = at(0, 0, 420);
+    const s = at(0, Math.PI, 24000); // behind the Earth as seen from the target
+    const end = endFor(t, 1400);
+    for (let k = 0.01; k < 1; k += 0.01) expect(altitudeOf(blendPosition(s, end, k, MIN_ALT_KM, t))).toBeGreaterThan(MIN_ALT_KM - 1e-6);
+  });
+
+  it('falls steadily in height (constant factor per step) without a target to keep above', () => {
+    const a = at(0, 0, 10000), b = at(0, 0, 100);
+    const alt = (k: number) => altitudeOf(blendPosition(a, b, k));
+    expect(alt(0.5)).toBeCloseTo(1000, 3);
+    expect(alt(0.25) / alt(0)).toBeCloseTo(alt(0.5) / alt(0.25), 6);
+  });
+
+  it('lifts a low camera to the given elevation, keeping its distance and azimuth', () => {
+    const t = at(0.4, 0.5, 420);
+    const b = basisFromUp(ellipsoidUp(t));
+    const o = basisOffset(b, 1.2, -0.3, 900);
+    const p: V3 = [t[0] + o[0], t[1] + o[1], t[2] + o[2]];
+    expect(elevationAbout(p, t)).toBeCloseTo(-0.3, 9);
+    const q = liftToElevation(p, t, 0.2);
+    expect(elevationAbout(q, t)).toBeCloseTo(0.2, 9);
+    expect(dist3(q, t)).toBeCloseTo(900, 6);
+    const want = basisOffset(b, 1.2, 0.2, 900);
+    expect(dist3(q, [t[0] + want[0], t[1] + want[1], t[2] + want[2]])).toBeLessThan(1e-6);
+    expect(altitudeOf(q)).toBeGreaterThan(altitudeOf(p));
+    // already high enough: untouched; straight below: lifted without NaN
+    expect(liftToElevation(p, t, -0.5)).toBe(p);
+    const u = ellipsoidUp(t);
+    const below = liftToElevation([t[0] - u[0] * 100, t[1] - u[1] * 100, t[2] - u[2] * 100], t, 0.3);
+    expect(elevationAbout(below, t)).toBeCloseTo(0.3, 9);
   });
 });

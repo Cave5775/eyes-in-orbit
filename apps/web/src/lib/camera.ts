@@ -264,6 +264,52 @@ export function slerpDir(a: V3, b: V3, k: number): V3 {
   return [ua[0] * w0 + ub[0] * w1, ua[1] * w0 + ub[1] * w1, ua[2] * w0 + ub[2] * w1];
 }
 
+/** Elevation (rad above the local horizontal) of the camera at `p` as seen from `target`; the local vertical is the ellipsoid normal at `target`. */
+export function elevationAbout(p: V3, target: V3): number {
+  const o: V3 = [p[0] - target[0], p[1] - target[1], p[2] - target[2]];
+  const d = len(o);
+  return d > 0 ? Math.asin(Math.max(-1, Math.min(1, dot(o, ellipsoidUp(target)) / d))) : 0;
+}
+
+/**
+ * `p` turned about `target` (distance kept, azimuth kept) up to elevation `minEl` when it is lower, else unchanged. Raising the
+ * elevation at a fixed distance only moves the camera away from the Earth's centre, so this never lowers its altitude.
+ */
+export function liftToElevation(p: V3, target: V3, minEl: number): V3 {
+  if (elevationAbout(p, target) >= minEl) return p;
+  const o: V3 = [p[0] - target[0], p[1] - target[1], p[2] - target[2]];
+  const d = len(o);
+  const { n, u } = basisFromUp(ellipsoidUp(target));
+  const k = dot(o, u);
+  let h: V3 = [o[0] - k * u[0], o[1] - k * u[1], o[2] - k * u[2]];
+  if (len(h) < 1e-9 * d) h = n; // straight below: any horizontal direction (north, matching an unset azimuth)
+  h = unit(h);
+  const ce = Math.cos(minEl) * d, se = Math.sin(minEl) * d;
+  return [target[0] + ce * h[0] + se * u[0], target[1] + ce * h[1] + se * u[1], target[2] + ce * h[2] + se * u[2]];
+}
+
+/**
+ * Camera position part-way (`k` 0..1) through a mode transition from `from` to `to` (geocentric, km). The camera goes round the
+ * Earth along the great circle between the two positions while its height above the ground changes by a constant factor per step
+ * (log-linear, never below `minAltKm`), so it is never lower than the lower end and never inside the planet. Blending the offset
+ * from the (moving) target instead dragged the camera through the ground, or below the object's horizon, whenever the target
+ * went from the Earth's centre to an object near the surface.
+ * With `about` (the transition's end target, when it is an object rather than the Earth's centre) the camera also stays above the
+ * lower of its two end elevations as seen from there, so it never dips below the horizon it starts or ends at.
+ * Exactly `from` at 0 and `to` at 1.
+ */
+export function blendPosition(from: V3, to: V3, k: number, minAltKm = MIN_ALT_KM, about?: V3): V3 {
+  if (k <= 0) return from;
+  if (k >= 1) return to;
+  if (len(from) < 1 || len(to) < 1) return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k, from[2] + (to[2] - from[2]) * k];
+  const d = slerpDir(from, to, k);
+  const a0 = Math.max(minAltKm, altitudeOf(from)), a1 = Math.max(minAltKm, altitudeOf(to));
+  const r = surfaceRadius(d) + Math.exp(Math.log(a0) + (Math.log(a1) - Math.log(a0)) * k);
+  const p: V3 = [d[0] * r, d[1] * r, d[2] * r];
+  if (!about || len(about) < 1000) return p;
+  return liftToElevation(p, about, Math.min(elevationAbout(from, about), elevationAbout(to, about)));
+}
+
 /** Surface view of an object: closest and farthest the fit may put the camera from it, km. */
 export const SURFACE_FIT_MIN_KM = 20;
 export const SURFACE_FIT_MAX_KM = 60000;

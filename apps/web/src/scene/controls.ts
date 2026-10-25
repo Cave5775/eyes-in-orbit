@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  MAX_DIST_KM, MIN_ALT_KM, advanceSurfaceFrame, altitudeOf, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceFrame, type V3,
+  MAX_DIST_KM, MIN_ALT_KM, advanceSurfaceFrame, altitudeOf, blendPosition, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceFrame, type V3,
 } from '../lib/camera';
 
 const MAX_EL = 1.5;
@@ -46,11 +46,12 @@ export class OrbitRig {
   frame: SurfaceFrame | null = null;
 
   private flight: { t0: number; dur: number; from: THREE.Vector3; fromDist: number; fromAz: number; fromEl: number; to: FlyOptions } | null = null;
-  private blend: { t0: number; dur: number; target: THREE.Vector3; offset: THREE.Vector3; up: THREE.Vector3 } | null = null;
+  private blend: { t0: number; dur: number; target: THREE.Vector3; pos: THREE.Vector3; up: THREE.Vector3 } | null = null;
   private pointers = new Map<number, { x: number; y: number }>();
   private lastPinch = 0;
   private readonly offset = new THREE.Vector3();
   private readonly natOffset = new THREE.Vector3();
+  private readonly endPos = new THREE.Vector3();
   private readonly natUp = new THREE.Vector3(0, 0, 1);
   private readonly dispose: () => void;
 
@@ -122,15 +123,17 @@ export class OrbitRig {
   }
 
   /**
-   * Switch mode with a smooth transition: the camera pose (target, offset direction and length, up vector) at the moment
-   * of the call is blended into the new mode's pose over `durationMs`. Set az/el/dist for the new mode afterwards.
+   * Switch mode with a smooth transition: the camera pose (target, position, up vector) at the moment of the call is blended
+   * into the new mode's pose over `durationMs`: the target and up vector interpolate, the camera position goes round the Earth
+   * along a great circle with its height scaled steadily (`blendPosition`), so it stays above the ground and the horizon.
+   * Set az/el/dist for the new mode afterwards.
    */
   switchMode(mode: RigMode, durationMs = 1500): void {
     this.blend = {
       t0: performance.now(),
       dur: durationMs,
       target: this.target.clone(),
-      offset: this.camera.position.clone().sub(this.target),
+      pos: this.camera.position.clone(),
       up: this.camera.up.clone(),
     };
     this.flight = null;
@@ -178,10 +181,12 @@ export class OrbitRig {
     if (b) {
       const u = Math.min(1, (now - b.t0) / b.dur);
       const k = ease(u);
+      // where the mode's own pose puts the camera now (the object moves, so it is recomputed every frame)
+      const endTarget = tup(this.target);
+      const end = this.endPos.copy(this.target).add(this.natOffset);
       this.target.lerpVectors(b.target, this.target, k);
-      const len = Math.exp(Math.log(Math.max(1e-6, b.offset.length())) + (Math.log(Math.max(1e-6, this.natOffset.length())) - Math.log(Math.max(1e-6, b.offset.length()))) * k);
-      const dir = slerpDir(tup(b.offset), tup(this.natOffset), k);
-      this.camera.position.set(this.target.x + dir[0] * len, this.target.y + dir[1] * len, this.target.z + dir[2] * len);
+      const pos = blendPosition(tup(b.pos), tup(end), k, MIN_ALT_KM, endTarget);
+      this.camera.position.set(pos[0], pos[1], pos[2]);
       const up = slerpDir(tup(b.up), tup(this.natUp), k);
       this.camera.up.set(up[0], up[1], up[2]);
       if (u >= 1) this.blend = null;
