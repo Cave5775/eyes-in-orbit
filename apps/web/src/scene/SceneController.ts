@@ -369,7 +369,10 @@ export class SceneController {
     this.atmo = new THREE.Mesh(new THREE.SphereGeometry(RE * 1.02, 96, 64), createAtmosphereMaterial(this.sun));
     this.atmo.renderOrder = 1;
     this.scene.add(this.atmo);
-    this.celestial = new CelestialLayer(this.scene, this.sun);
+    this.celestial = new CelestialLayer(this.scene, this.sun, {
+      maxTextureSize: () => this.renderer.capabilities.maxTextureSize,
+      maxAnisotropy: () => this.renderer.capabilities.getMaxAnisotropy(),
+    });
 
     this.sats = makePointSet(0, this.pointMat);
     this.dyn = makePointSet(0, this.pointMat);

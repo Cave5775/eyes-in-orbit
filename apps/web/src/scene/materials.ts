@@ -221,11 +221,11 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
 }
 
 /**
- * Moon surface lit by the Sun: plain Lambert with a trace of earthshine on the night side. Geometry and UVs follow the
- * Earth's convention (z = pole, +x at the centre of an equirectangular map). Without a texture a grey noise surface is
- * used (clearly procedural, not geography).
+ * Surface of the Moon or Mars lit by the Sun: plain Lambert with a trace of ambient light on the night side. Geometry and
+ * UVs follow the Earth's convention (z = pole, +x at the centre of an equirectangular map). Without a texture a grey noise
+ * surface is used (clearly procedural, not geography; Mars keeps its tinted material until its map has loaded).
  */
-export function createMoonMaterial(sun: THREE.Vector3, texture: THREE.Texture | null): THREE.ShaderMaterial {
+export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | null): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uSun: { value: sun },
