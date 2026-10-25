@@ -27,7 +27,8 @@ export function occlusionUniforms(): Record<string, THREE.IUniform> {
  * shader hides a point whose line of sight crosses the Earth (analytic ray test) and `aShow` (scope policy, 0/1) hides
  * out-of-scope points. `aShow >= 1.5` (2) marks a point exempt from the small-disc hiding: `uGroup[i]` is a body's cone
  * (xyz unit direction from the camera, w the sine of its angular radius, > 1 = off) and `uGroupD[i]` the distance to its
- * centre; a non-exempt point inside a cone and nearer than the body is not drawn (lib/disc-hide.ts has the same test for picking).
+ * centre and `uGroupE[i]` the radius of a shell about it (the body's own system, LEO for the Earth) and how far behind the centre
+ * plane the cone still hides; a non-exempt point inside a cone and nearer than the body (plus that depth), or inside the shell, is not drawn (lib/disc-hide.ts has the same test for picking).
  */
 export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
@@ -36,6 +37,7 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
       ...occlusionUniforms(),
       uGroup: { value: Array.from({ length: GROUP_SLOTS }, () => { const g = offGroup(); return new THREE.Vector4(g.x, g.y, g.z, g.sinR); }) },
       uGroupD: { value: new Array<number>(GROUP_SLOTS).fill(0) },
+      uGroupE: { value: Array.from({ length: GROUP_SLOTS }, () => new THREE.Vector2(0, 0)) },
     },
     transparent: true,
     depthWrite: false,
@@ -55,9 +57,10 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
       uniform vec2 uSphC2;
       uniform vec4 uGroup[${GROUP_SLOTS}];
       uniform float uGroupD[${GROUP_SLOTS}];
+      uniform vec2 uGroupE[${GROUP_SLOTS}];
       varying vec3 vColor;
       varying float vGlyph;
-      // Small, far body (disc radius <= GROUP_DISC_PX): inside its pick cone and nearer than its centre -> not drawn.
+      // Small, far body (disc radius <= GROUP_DISC_PX): inside its pick cone and nearer than its centre, or within its shell -> not drawn.
       // Same maths as hiddenByDisc in lib/disc-hide.ts; the sine of the miss angle is |cross(u, dir)| (no cancellation).
       bool discHides(vec3 rel) {
         float L = length(rel);
@@ -65,9 +68,11 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         vec3 u = rel / L;
         for (int i = 0; i < ${GROUP_SLOTS}; i++) {
           vec4 g = uGroup[i];
-          if (g.w > 1.0 || dot(u, g.xyz) <= 0.0) continue;
+          if (g.w > 1.0) continue;
+          if (length(rel - g.xyz * uGroupD[i]) < uGroupE[i].x) return true;
+          if (dot(u, g.xyz) <= 0.0) continue;
           if (length(cross(u, g.xyz)) >= g.w) continue;
-          if (dot(rel, g.xyz) < uGroupD[i]) return true;
+          if (dot(rel, g.xyz) < uGroupD[i] + uGroupE[i].y) return true;
         }
         return false;
       }

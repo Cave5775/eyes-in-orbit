@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { GROUP_SLOTS, discGroups, hiddenByDisc, offGroup, type GroupBody } from '../src/lib/disc-hide';
-import { BODY_MIN_HIT_PX, GROUP_DISC_PX, bodyDiscRadiusPx, bodyHitRadiusPx, bodyPickExtra } from '../src/lib/pick';
+import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM, GROUP_MARGIN_PX, GROUP_SLOTS, discGroups, hiddenByDisc, offGroup, type GroupBody } from '../src/lib/disc-hide';
+import { BODY_MIN_HIT_PX, GROUP_DISC_PX, SHOW_EXEMPT, bodyDiscRadiusPx, bodyHitRadiusPx, bodyPickExtra, gatherCandidates, type PickSource } from '../src/lib/pick';
 
 // 60 degree vertical field of view, 600 px viewport: 519.6 px focal length. The camera sits at the origin looking along +x.
 const FOV = 60, VP = 600;
@@ -33,6 +33,17 @@ describe('discGroups', () => {
     expect(g.y).toBeCloseTo(0.6, 12);
     const hitPx = bodyHitRadiusPx(R_EARTH, 1, 100_000, FOV, VP);
     expect(g.sinR).toBeCloseTo(hitPx / Math.hypot(hitPx, FOCAL), 12);
+    // no reach given: the shell is the drawn radius plus the 3 px margin at the body's depth, and nothing is hidden behind it
+    expect(g.shell).toBeCloseTo(R_EARTH + (GROUP_MARGIN_PX * 100_000) / FOCAL, 9);
+    expect(g.back).toBe(0);
+  });
+
+  it('adds the system reach to the shell and the depth to the cone', () => {
+    const [g] = groups({ ...earthAt(100_000), reachKm: EARTH_SYSTEM_REACH_KM, depthKm: EARTH_SYSTEM_DEPTH_KM });
+    expect(g.shell).toBeCloseTo(R_EARTH + EARTH_SYSTEM_REACH_KM + (GROUP_MARGIN_PX * 100_000) / FOCAL, 9);
+    expect(g.back).toBe(EARTH_SYSTEM_DEPTH_KM);
+    expect(offGroup().shell).toBe(0);
+    expect(offGroup().back).toBe(0);
   });
 
   it('switches on exactly when the disc radius is at most GROUP_DISC_PX', () => {
@@ -59,6 +70,79 @@ describe('discGroups', () => {
   });
 });
 
+describe('hiddenByDisc over the Earth system (shell and depth)', () => {
+  // the Earth drawn 31 px in radius, with the reach the scene passes for it
+  const D = distForDisc(31);
+  const earth: GroupBody = { ...earthAt(D), reachKm: EARTH_SYSTEM_REACH_KM, depthKm: EARTH_SYSTEM_DEPTH_KM };
+  const g = groups(earth);
+  const kmPerPx = D / FOCAL;
+  /** point at the Earth's depth, `s` px from its centre on screen (lateral), `behind` km behind the centre plane */
+  const at = (s: number, behind = 0): [number, number, number] => [D + behind, s * kmPerPx, 0];
+
+  it('hides the LEO shell beyond the limb, in front and behind, and not what lies farther out', () => {
+    const limbPx = bodyDiscRadiusPx(R_EARTH, 1, D, FOV, VP);
+    expect(limbPx).toBeCloseTo(31, 6);
+    const shellPx = (R_EARTH + EARTH_SYSTEM_REACH_KM) / kmPerPx + GROUP_MARGIN_PX;
+    expect(shellPx).toBeGreaterThan(limbPx + 9); // the shell reaches well past the 3 px of the pick area: ~10 px of ring around the disc
+    for (const behind of [-3000, 0, 3000]) {
+      expect(hiddenByDisc(...at(limbPx + 8, behind), g), `8 px beyond the limb, ${behind} km`).toBe(true);
+      expect(hiddenByDisc(...at(shellPx + 3, behind), g), `past the shell, ${behind} km`).toBe(false);
+    }
+  });
+
+  it('hides everything inside the cone however far behind the centre it is, up to the GEO radius, and not what is behind that', () => {
+    expect(hiddenByDisc(...at(10, 30_000), g)).toBe(true); // a MEO satellite seen through the disc from the far side
+    expect(hiddenByDisc(...at(33, 26_000), g)).toBe(true); // a GPS satellite at the limb, behind the Earth (the 3 px margin)
+    expect(hiddenByDisc(...at(10, EARTH_SYSTEM_DEPTH_KM + 1000), g)).toBe(false); // a probe or the Moon on the same line of sight
+    expect(hiddenByDisc(...at(10, 384_400), g)).toBe(false);
+  });
+
+  it('keeps GEO and MEO drawn once they are more than a few px from the disc', () => {
+    const geoPx = EARTH_SYSTEM_DEPTH_KM / kmPerPx; // a GEO satellite abeam of the Earth, about 200 px from its centre here
+    expect(geoPx).toBeGreaterThan(100);
+    expect(hiddenByDisc(...at(geoPx), g)).toBe(false);
+    expect(hiddenByDisc(...at(26_560 / kmPerPx), g)).toBe(false); // GPS abeam
+    expect(hiddenByDisc(...at(52), g)).toBe(false); // 8 px past the LEO shell (about 44 px), in front
+  });
+
+  it('is off once the disc is wider than GROUP_DISC_PX: the shell goes with the cone', () => {
+    const near = groups({ ...earthAt(distForDisc(GROUP_DISC_PX + 5)), reachKm: EARTH_SYSTEM_REACH_KM, depthKm: EARTH_SYSTEM_DEPTH_KM });
+    expect(hiddenByDisc(distForDisc(GROUP_DISC_PX + 5) + 100, 4000, 0, near)).toBe(false);
+    expect(hiddenByDisc(distForDisc(GROUP_DISC_PX + 5) - 4000, 0, 0, near)).toBe(false);
+  });
+
+  it('a Moon (no reach, no depth) hides only the cone in front of it and the 3 px sphere about it', () => {
+    const moon: GroupBody = { rel: [0, 384_400, 0], radiusKm: R_MOON, k: 1 };
+    const gm = groups(moon);
+    expect(hiddenByDisc(0, 500_000, 0, gm)).toBe(false); // behind it
+    expect(hiddenByDisc(0, 100_000, 0, gm)).toBe(true); // in front of it
+  });
+
+  it('hidden means unpickable: the pick scan, given hiddenByDisc, drops exactly the points the shader would not draw', () => {
+    // one cursor on each point (nearest of a few): plain points hidden or kept by the rules above, an exempt one always found
+    const pts: { id: string; p: [number, number, number]; show: number }[] = [
+      { id: 'leo-limb', p: at(31 + 8), show: 1 }, // hidden: in the shell
+      { id: 'leo-behind', p: at(31 + 8, 3000), show: 1 }, // hidden: in the shell, on the far side
+      { id: 'geo', p: at(EARTH_SYSTEM_DEPTH_KM / kmPerPx), show: 1 }, // kept
+      { id: 'iss', p: at(31 + 8, -2000), show: 1 }, // hidden (a labelled entity is no longer exempt)
+      { id: 'selected', p: at(31 + 8, -2000), show: SHOW_EXEMPT }, // kept: exempt
+    ];
+    const src: PickSource = {
+      ids: pts.map((q) => q.id), rel: new Float32Array(pts.flatMap((q) => q.p)), world: new Float32Array(pts.flatMap(() => [7000, 1, 1])),
+      size: new Float32Array(pts.map(() => 6)), show: new Float32Array(pts.map((q) => q.show)), bias: 0,
+    };
+    for (const q of pts) {
+      const [x, y] = q.p;
+      const cursor = px(x, y);
+      const found = gatherCandidates([src], [], PROJ, VP, VP, cursor, VP / 2, {
+        max: 12, occluded: () => false, discHidden: (a, b, c) => hiddenByDisc(a, b, c, g),
+      }).items.map((h) => h.id);
+      const drawn = q.show >= SHOW_EXEMPT || !hiddenByDisc(...q.p, g);
+      expect(found.includes(q.id), q.id).toBe(drawn);
+    }
+  });
+});
+
 describe('hiddenByDisc', () => {
   const g = groups(earthAt(100_000)); // disc 33 px, hit radius 36 px
   const hitPx = bodyHitRadiusPx(R_EARTH, 1, 100_000, FOV, VP);
@@ -79,9 +163,10 @@ describe('hiddenByDisc', () => {
     expect(hiddenByDisc(60_000, lateral(60_000, disc + 1.5), 0, g)).toBe(true); // in the 3 px margin
   });
 
-  it('only hides what is in front of the body: a point behind it (or at its depth and beyond) stays', () => {
+  it('only hides what is in front of the body or in its own sphere: a point far behind it stays', () => {
     expect(hiddenByDisc(99_000, 0, 0, g)).toBe(true);
-    expect(hiddenByDisc(101_000, 0, 0, g)).toBe(false);
+    expect(hiddenByDisc(101_000, 0, 0, g)).toBe(true); // 1000 km behind the centre: inside the shell (the drawn radius plus 3 px)
+    expect(hiddenByDisc(120_000, 0, 0, g)).toBe(false); // 20,000 km behind the centre: beyond the shell, and no depth given
     expect(hiddenByDisc(200_000, 100, 0, g)).toBe(false);
   });
 

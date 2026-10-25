@@ -14,8 +14,8 @@ import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filter
 import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
 import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
 import { displayPosition } from '../lib/paths';
-import { POPUP_MAX, SHOW_EXEMPT, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
-import { discGroups, hiddenByDisc, type DiscGroup } from '../lib/disc-hide';
+import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
+import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM, discGroups, hiddenByDisc, type DiscGroup } from '../lib/disc-hide';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
@@ -38,6 +38,8 @@ import { IssArrayTracker, arraySources, issJoints, type ArraySources, type IssJo
 THREE.ColorManagement.enabled = false;
 
 const RE = EARTH.radiusKm;
+/** a launch vehicle, stage or capsule is "in flight" (exempt from the small-disc hiding) once it is this high above the Earth's surface, km; on the pad it hides like the rest */
+const IN_FLIGHT_KM = 10;
 const PICK_RADIUS_PX = 11;
 const HINT_LIMIT = 6;
 /** FIT never frames a smaller sphere than this: the camera cannot come closer than MIN_ALT_KM to the ground anyway, km. */
@@ -131,7 +133,7 @@ interface PointSet {
   show: THREE.BufferAttribute;
 }
 
-/** `exempt`: the whole set is drawn whatever lies under it (pads, the highlight set): aShow starts at 2 (`SHOW_EXEMPT`). */
+/** `exempt`: the whole set is drawn whatever lies under it (the highlight set): aShow starts at 2 (`SHOW_EXEMPT`). */
 function makePointSet(n: number, material: THREE.Material, world?: Float64Array, fixed = false, exempt = false): PointSet {
   const geo = new THREE.BufferGeometry();
   const pos = new RelPositions(world ?? n, fixed);
@@ -256,7 +258,7 @@ export class SceneController {
   /** 1 where an active filter lets the object through: never scoped out */
   private satKeep = new Uint8Array(0);
   private dynKeep = new Uint8Array(0);
-  /** 1 = featured (`render.label`) or a launch vehicle: drawn with aShow = 2, never hidden over a small body's disc (set in `applyAppearance`) */
+  /** 1 = a launch vehicle, stage or capsule: drawn with aShow = 2 while in flight, never hidden over a small body's disc (set in `applyAppearance`, `refreshScope` checks the altitude) */
   private satExempt = new Uint8Array(0);
   private dynExempt = new Uint8Array(0);
   private scopeDirty = true;
@@ -366,7 +368,7 @@ export class SceneController {
 
     this.sats = makePointSet(0, this.pointMat);
     this.dyn = makePointSet(0, this.pointMat);
-    this.pads = makePointSet(0, this.pointMat, undefined, true, true);
+    this.pads = makePointSet(0, this.pointMat, undefined, true);
     this.hi = makePointSet(4, this.pointMat, undefined, false, true);
     for (const set of [this.sats, this.dyn, this.pads, this.hi]) this.scene.add(set.points);
     this.sats.points.renderOrder = this.dyn.points.renderOrder = 5;
@@ -531,7 +533,7 @@ export class SceneController {
     this.scene.remove(this.pads.points);
     this.pads.geo.dispose();
     // ECEF positions, rotated by the Earth's spin and re-based on the camera every frame
-    this.pads = makePointSet(n, this.pointMat, undefined, true, true);
+    this.pads = makePointSet(n, this.pointMat, undefined, true);
     this.pads.points.renderOrder = 4;
     this.scene.add(this.pads.points);
     this.launches.forEach((l, i) => {
@@ -1071,7 +1073,7 @@ export class SceneController {
     const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters));
     // with a filter on, the objects it lets through ('show') are exempt from the scope policy
     const filtering = filtersActive(this.filters);
-    const exemptRec = (rec: EntityRecord | undefined) => !!rec && (rec.render?.label === true || colorKeyOf(rec) === 'vehicle');
+    const exemptRec = (rec: EntityRecord | undefined) => !!rec && colorKeyOf(rec) === 'vehicle';
     this.satKeep = new Uint8Array(this.propagator.ids.length);
     this.satExempt = new Uint8Array(this.propagator.ids.length);
     this.propagator.ids.forEach((id, i) => {
@@ -1485,12 +1487,13 @@ export class SceneController {
     // small, far bodies hide the non-exempt points over their disc: one cone per drawn body (a uniform update, no buffer upload)
     const o = f.originV3;
     this.discCones = discGroups(
-      this.celestial.bodies().map((b) => ({ rel: [b.c[0] - o[0], b.c[1] - o[1], b.c[2] - o[2]] as V3, radiusKm: b.radiusKm, k: b.k })),
+      this.celestial.bodies().map((b) => ({ rel: [b.c[0] - o[0], b.c[1] - o[1], b.c[2] - o[2]] as V3, radiusKm: b.radiusKm, k: b.k, reachKm: b.bodyId === 'EARTH' ? EARTH_SYSTEM_REACH_KM : 0, depthKm: b.bodyId === 'EARTH' ? EARTH_SYSTEM_DEPTH_KM : 0 })),
       this.camera.fov, this.container.clientHeight,
     );
     this.discCones.forEach((g, i) => {
       u.uGroup.value[i].set(g.x, g.y, g.z, g.sinR);
       u.uGroupD.value[i] = g.dist;
+      u.uGroupE.value[i].set(g.shell, g.back);
     });
 
     this.sats.pos.upload(f);
@@ -1578,16 +1581,18 @@ export class SceneController {
     const mode = this.scopeMode;
     const focus = this.rig.target;
     const radius = scopeRadius(this.rig.dist);
-    const sel = this.selectedId, hov = this.hoverId;
+    const sel = this.selectedId, hov = this.hoverId, fol = this.followId;
     const f = this.frameInfo;
     const occluded = this.occ; // built by prepareRender this frame: the Earth, the Moon and the Sun
     const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
     let total = 0, rendered = 0;
     const tmp = this.tmp2;
 
-    // `exemptFlags`: 1 = featured / launch vehicle; true = the whole set (pads). With the selected, hovered, related and
-    // filter-kept points these get aShow = 2, which the point shader and pickAll never hide over a small body's disc
-    const scan = (set: PointSet, ids: readonly string[], bulk: boolean, keepFlags: Uint8Array | null, exemptFlags: Uint8Array | true | null) => {
+    // `exemptFlags`: 1 = launch vehicle, stage or capsule. The selected, hovered and followed point, the ones a filter lets
+    // through and the flagged ones in flight get aShow = 2, which the point shader and pickAll never hide over a small body's
+    // disc; every other point (related, labelled, pads, ground stations) is scoped in by `keep` but hides over a small disc
+    // like the cloud
+    const scan = (set: PointSet, ids: readonly string[], bulk: boolean, keepFlags: Uint8Array | null, exemptFlags: Uint8Array | null) => {
       const show = set.show.array as Float32Array, size = set.size.array as Float32Array;
       const rel = set.pos.attr.array as Float32Array;
       let changed = false;
@@ -1598,7 +1603,9 @@ export class SceneController {
         const id = ids[i];
         const keep = id === sel || id === hov || this.related.has(id) || (keepFlags !== null && keepFlags[i] === 1);
         const d = Math.hypot(w.x - focus.x, w.y - focus.y, w.z - focus.z);
-        const exempt = keep || exemptFlags === true || (exemptFlags !== null && exemptFlags[i] === 1);
+        // an object the user filtered for is never hidden over a small disc, or a zoomed-out filter would show nothing
+        const kept = keepFlags !== null && keepFlags[i] === 1;
+        const exempt = id === sel || id === hov || id === fol || kept || (exemptFlags !== null && exemptFlags[i] === 1 && Math.hypot(w.x, w.y, w.z) > RE + IN_FLIGHT_KM);
         const v = inScope({ d, key: i, bulk, keep }, radius, mode) ? (exempt ? SHOW_EXEMPT : 1) : 0;
         if (show[i] !== v) {
           show[i] = v;
@@ -1613,7 +1620,7 @@ export class SceneController {
     };
     scan(this.sats, this.propagator.ids, true, this.satKeep, this.satExempt);
     scan(this.dyn, this.dynIds, false, this.dynKeep, this.dynExempt);
-    scan(this.pads, this.launches.map((l) => l.entityId), false, null, true);
+    scan(this.pads, this.launches.map((l) => l.entityId), false, null, null);
     this.scopeCounts = { rendered, total };
 
     // light overlays (orbit line, footprint) of entities that are scoped out are not drawn either
@@ -1735,8 +1742,13 @@ export class SceneController {
     const x = rel[i * 3], y = rel[i * 3 + 1], z = rel[i * 3 + 2];
     const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
     const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
-    if (!inView(cx, cy, cw) || this.occ(x, y, z)) return -1;
+    if (!inView(cx, cy, cw) || this.occ(x, y, z) || this.discHiddenPoint(set, i, x, y, z)) return -1;
     return Math.hypot(cx / cw, cy / cw);
+  }
+
+  /** Is point `i` of `set` not drawn because it is over a small, far body (the shader's `aShow` test)? Its label goes with it. */
+  private discHiddenPoint(set: PointSet, i: number, x: number, y: number, z: number): boolean {
+    return (set.show.array as Float32Array)[i] < SHOW_EXEMPT_MIN && hiddenByDisc(x, y, z, this.discCones);
   }
 
   private addLabelCand(sat: boolean, i: number, id: string, feat: boolean): void {
@@ -1835,6 +1847,7 @@ export class SceneController {
       if ((c.sat ? this.propagator.ids[c.i] : this.dynIds[c.i]) !== c.id) continue; // the catalogue changed since the scan
       if ((set.size.array as Float32Array)[c.i] <= 0) continue;
       const rel = set.pos.attr.array as Float32Array;
+      if (c.id !== hov && this.discHiddenPoint(set, c.i, rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2])) continue; // its icon is not drawn over a small body's disc
       this.projectLabel(rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2], c.id, c.text, c.id === hov ? 'hover' : c.feat ? 'featured' : 'satellite', 9);
     }
     const n = plan.plan(w, h);

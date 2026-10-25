@@ -251,7 +251,7 @@ export function pickMeta(
 
 /**
  * Zoomed-out hiding: a body whose disc is at most this many px in radius (an Earth about 80 px across or smaller) is
- * "far away", and the small objects over it (inside its pick hit area, in front of it) are not drawn and not pickable
+ * "far away", and the objects over it (inside its pick hit area, and the Earth's low-orbit shell) are not drawn and not pickable
  * (lib/disc-hide.ts): a click there selects the body. Bigger than that the objects are drawn apart enough to aim at.
  */
 export const GROUP_DISC_PX = 40;
@@ -269,7 +269,7 @@ export interface PickResolution {
  *
  * - any object: the objects only. A body is never listed beside objects, because the Earth's disc covers most of the screen
  *   when zoomed in and would join every click on a satellite drawn over it. (Objects over a small disc that are still
- *   visible are the exempt ones: the selection, related, featured and launch vehicles.)
+ *   visible are the exempt ones: the selected, hovered and followed object and launch vehicles in flight.)
  * - no object: the bodies, in hierarchy order. A single body is selected directly, several (an Earth disc with a Moon dot
  *   in front of it) open the choice popup.
  *
