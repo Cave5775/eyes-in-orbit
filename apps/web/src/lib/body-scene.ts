@@ -6,7 +6,7 @@
 import { orbitableBodyId, type EntityRecord } from '@eio/core';
 import type { V3 } from './camera';
 import type { DistanceScale } from './deepspace';
-import { isEarthCentre, type Centre } from './frame';
+import type { Centre } from './frame';
 import { earthOccludes, sphereOccludes, sphereView } from './occlusion';
 import { gatherCandidates, bodyPickExtra, resolvePick, type PickExtra, type PickOptions, type PickResolution, type PickSource } from './pick';
 
@@ -52,23 +52,27 @@ export interface BodyLineInput {
 }
 
 /**
- * Body entities whose orbit line is drawn: the selected one (relative to what it orbits, whatever the frame or the lock is),
- * the direct children of the selected one (`parentId`: the Earth gives the Moon, the Sun the Earth and Mars; no
- * grandchildren), the one the camera is centred on and the one that is the frame centre (a body's own orbit is drawn in its
- * parent's frame whatever the frame is, so these are the lines the user is looking at), each only where `bodyLineAllowed`.
- * Other bodies stay unlined to keep the default view unchanged.
+ * Body entities whose orbit line is drawn. The subjects are the selected entity, the body the camera is centred on and the
+ * frame centre (a body or an entity). Each subject draws its own line (relative to what it orbits, whatever the frame or the
+ * lock is) and the lines of its direct children (`parentId`: the Earth gives the Moon, the Sun the Earth and Mars; no
+ * grandchildren), each only where `bodyLineAllowed`. So choosing a body from the top bar, the breadcrumb or the tree (a frame
+ * change that flies the camera there, without selecting it) shows the same lines as selecting it. The default frame (the
+ * Earth) is a subject too: the Earth's line and the Moon's. Bodies that are none of these stay unlined.
  */
 export function bodyLineIds(recs: Iterable<LineRec>, input: BodyLineInput): string[] {
-  const out: string[] = [];
-  for (const rec of recs) {
+  const all = Array.from(recs);
+  const subjects = new Set<string>();
+  if (input.selectedId !== null) subjects.add(input.selectedId);
+  if (input.frame.kind === 'entity') subjects.add(input.frame.id);
+  for (const rec of all) {
     if (rec.provider?.type !== 'body') continue;
     const reg = orbitableBodyId(rec);
-    const wanted =
-      rec.id === input.selectedId ||
-      (input.selectedId !== null && rec.parentId === input.selectedId) ||
-      (input.focusBodyId !== null && reg === input.focusBodyId) ||
-      (input.frame.kind === 'body' && reg === input.frame.id && !isEarthCentre(input.frame)) || // the default frame draws nothing
-      (input.frame.kind === 'entity' && rec.id === input.frame.id);
+    if (reg !== undefined && (reg === input.focusBodyId || (input.frame.kind === 'body' && reg === input.frame.id))) subjects.add(rec.id);
+  }
+  const out: string[] = [];
+  for (const rec of all) {
+    if (rec.provider?.type !== 'body') continue;
+    const wanted = subjects.has(rec.id) || (rec.parentId !== undefined && subjects.has(rec.parentId));
     if (wanted && bodyLineAllowed(rec, input.scale)) out.push(rec.id);
   }
   return out;

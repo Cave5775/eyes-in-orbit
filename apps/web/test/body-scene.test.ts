@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { bodyEntityRecords } from '@eio/core';
 import { bodyLineAllowed, bodyLineIds, bodyPickExtras, gatherWithBodies, type BodyPickContext, type DrawnBody } from '../src/lib/body-scene';
-import { EARTH_CENTRE } from '../src/lib/frame';
+import { EARTH_CENTRE, type Centre } from '../src/lib/frame';
 import { SHOW_EXEMPT, type PickExtra, type PickSource } from '../src/lib/pick';
 
 const recs = bodyEntityRecords();
 const rec = (id: string) => recs.find((r) => r.id === id)!;
 const base = { selectedId: null, focusBodyId: null, frame: EARTH_CENTRE };
+/** a frame centred on an entity that is no body: no frame subject, so only the selection and the focus count */
+const NONE: Centre = { kind: 'entity', id: 'none' };
+const away = { ...base, frame: NONE };
 
 describe('body orbit lines', () => {
   it('the Moon always, the Earth in both scales, Mars only in the true scale, the Sun never', () => {
@@ -27,23 +30,54 @@ describe('body orbit lines', () => {
   });
 
   it('draws the line of the selected, the camera-centred and the frame-centre body', () => {
-    expect(bodyLineIds(recs, { ...base, scale: 'compressed' })).toEqual([]);
-    expect(bodyLineIds(recs, { ...base, selectedId: 'body-moon', scale: 'compressed' })).toEqual(['body-moon']);
-    expect(bodyLineIds(recs, { ...base, focusBodyId: 'MOON', scale: 'compressed' })).toEqual(['body-moon']);
-    expect(bodyLineIds(recs, { ...base, frame: { kind: 'body', id: 'MOON' }, scale: 'true' })).toEqual(['body-moon']);
-    // the Earth frame is the default: it draws nothing by itself
-    expect(bodyLineIds(recs, { ...base, scale: 'true' })).toEqual([]);
+    const MOON_FRAME = { kind: 'body', id: 'MOON' } as const;
+    expect(bodyLineIds(recs, { ...base, selectedId: 'body-moon', frame: MOON_FRAME, scale: 'compressed' })).toEqual(['body-moon']);
+    expect(bodyLineIds(recs, { ...base, focusBodyId: 'MOON', scale: 'compressed' }).sort()).toEqual(['body-earth', 'body-moon']);
+    expect(bodyLineIds(recs, { ...base, frame: MOON_FRAME, scale: 'true' })).toEqual(['body-moon']);
+  });
+
+  it('a frame centre or a camera focus is a subject like a selection: its own line and its direct children', () => {
+    const ids = (input: Partial<Parameters<typeof bodyLineIds>[1]>, scale: 'compressed' | 'true') => bodyLineIds(recs, { ...base, ...input, scale }).sort();
+    const frame = (id: string) => ({ frame: { kind: 'body', id } as const });
+    // EARTH tab (and the default view): the Earth around the Sun and the Moon around the Earth, in both scales
+    for (const scale of ['compressed', 'true'] as const) {
+      expect(ids({}, scale)).toEqual(['body-earth', 'body-moon']);
+      expect(ids({ ...frame('EARTH'), focusBodyId: null }, scale)).toEqual(['body-earth', 'body-moon']);
+      // MOON tab: its own line, no children
+      expect(ids({ ...frame('MOON'), focusBodyId: 'MOON' }, scale)).toEqual(['body-moon']);
+    }
+    // SUN tab: no line of its own; Earth and Mars in the true scale, the Earth only in the compressed one
+    expect(ids({ ...frame('SUN'), focusBodyId: 'SUN' }, 'true')).toEqual(['body-earth', 'body-mars']);
+    expect(ids({ ...frame('SUN'), focusBodyId: 'SUN' }, 'compressed')).toEqual(['body-earth']);
+    // MARS tab: the true scale only
+    expect(ids({ ...frame('MARS'), focusBodyId: 'MARS' }, 'true')).toEqual(['body-mars']);
+    expect(ids({ ...frame('MARS'), focusBodyId: 'MARS' }, 'compressed')).toEqual([]);
+    // the frame alone (before the camera focus is set, or when it is let go) and the focus alone (during a fly) both do it
+    expect(ids(frame('SUN'), 'true')).toEqual(['body-earth', 'body-mars']);
+    expect(ids({ focusBodyId: 'SUN' }, 'true')).toEqual(['body-earth', 'body-mars', 'body-moon']); // + the Earth frame's own subject
+    expect(ids({ ...frame('EARTH'), focusBodyId: 'MARS' }, 'true')).toEqual(['body-earth', 'body-mars', 'body-moon']);
+  });
+
+  it('a selected satellite keeps the lines of the frame and the focus, and an entity frame adds nothing', () => {
+    const ids = (input: Partial<Parameters<typeof bodyLineIds>[1]>) => bodyLineIds(recs, { ...base, ...input, scale: 'true' }).sort();
+    expect(ids({ frame: { kind: 'body', id: 'SUN' }, focusBodyId: 'SUN', selectedId: 'sat-25544' })).toEqual(['body-earth', 'body-mars']);
+    // an entity (LRO) frame, with the camera following it: only the default Earth subject is gone, nothing is added
+    expect(ids({ frame: { kind: 'entity', id: 'lro' } })).toEqual([]);
+    expect(ids({ frame: { kind: 'entity', id: 'sat-25544' }, selectedId: 'sat-25544' })).toEqual([]);
+    // an entity frame that is itself a body entity is that body, like a selection
+    expect(ids({ frame: { kind: 'entity', id: 'body-earth' } })).toEqual(['body-earth', 'body-moon']);
   });
 
   it('hides the Mars line in the compressed scale and shows it in the true scale, the Earth line in both', () => {
-    expect(bodyLineIds(recs, { ...base, selectedId: 'body-mars', scale: 'compressed' })).toEqual([]);
-    expect(bodyLineIds(recs, { ...base, selectedId: 'body-mars', scale: 'true' })).toEqual(['body-mars']);
+    expect(bodyLineIds(recs, { ...away, selectedId: 'body-mars', scale: 'compressed' })).toEqual([]);
+    expect(bodyLineIds(recs, { ...away, selectedId: 'body-mars', scale: 'true' })).toEqual(['body-mars']);
     expect(bodyLineIds(recs, { ...base, selectedId: 'body-earth', focusBodyId: 'EARTH', scale: 'compressed' })).toContain('body-earth');
     expect(bodyLineIds(recs, { ...base, selectedId: 'body-earth', focusBodyId: 'EARTH', scale: 'true' })).toContain('body-earth');
   });
 
   it('adds the direct children of the selected body, whatever the frame and the lock', () => {
-    const ids = (selectedId: string | null, scale: 'compressed' | 'true', frame = EARTH_CENTRE) => bodyLineIds(recs, { selectedId, focusBodyId: null, frame, scale }).sort();
+    // the frame is an entity that is no body, so that only the selection is a subject
+    const ids = (selectedId: string | null, scale: 'compressed' | 'true', frame: Centre = NONE) => bodyLineIds(recs, { selectedId, focusBodyId: null, frame, scale }).sort();
     // the Earth: its own line (around the Sun) and the Moon's (around the Earth), in the default frame
     expect(ids('body-earth', 'true')).toEqual(['body-earth', 'body-moon']);
     expect(ids('body-earth', 'compressed')).toEqual(['body-earth', 'body-moon']);
@@ -65,12 +99,12 @@ describe('body orbit lines', () => {
   });
 
   it('a selected object that is not a body adds no body lines', () => {
-    expect(bodyLineIds(recs, { ...base, selectedId: 'sat-25544', scale: 'true' })).toEqual([]);
+    expect(bodyLineIds(recs, { ...away, selectedId: 'sat-25544', scale: 'true' })).toEqual([]);
   });
 
   it('ignores records that are not body entities', () => {
     const sat = { id: 'sat', bodyId: 'EARTH', render: { orbitLine: true } };
-    expect(bodyLineIds([sat as never], { ...base, selectedId: 'sat', scale: 'true' })).toEqual([]);
+    expect(bodyLineIds([sat as never], { ...away, selectedId: 'sat', scale: 'true' })).toEqual([]);
   });
 });
 
