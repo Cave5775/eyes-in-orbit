@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { EARTH, enuBasis, geodeticToFixed } from '@eio/core';
 import {
   MAX_DIST_KM, MIN_ALT_KM, SMALL_FIT_TILT, altitudeOf, basisFromUp, basisOffset, boundingSphere, ellipsoidUp, fitAngles, fitDistance,
-  SURFACE_FIT_MAX_KM, SURFACE_FIT_MIN_KM, groundPanDelta, localBasis, minElevation, panGround, slerpDir, surfaceFitDistance,
+  SURFACE_FIT_MAX_KM, SURFACE_FIT_MIN_KM, groundPanDelta, localBasis, minElevation, moveOnSphere, slerpDir, surfaceFitDistance,
   surfaceRadius, viewAnglesFor, zoomDistance, type V3,
 } from '../src/lib/camera';
 
@@ -238,28 +238,20 @@ describe('surface view fit and ground pan', () => {
     expect(groundPanDelta(north, 0.01, 0, 10, 1).north).toBeCloseTo(50, 9);
   });
 
-  it('moves a geodetic point over the ground, widening longitude steps with latitude', () => {
-    const n = panGround(0, 0, 0, 10);
-    expect(n.lat * RE).toBeCloseTo(10, 6);
-    expect(n.lon).toBe(0);
-    const eq = panGround(0, 0, 10, 0).lon;
-    const hi = panGround(Math.PI / 3, 0, 10, 0).lon;
-    expect(hi / eq).toBeCloseTo(2, 3); // cos 60 deg = 0.5
-  });
-
-  it('moves along a sphere larger than the Earth when the target is held aloft', () => {
-    const ground = panGround(0, 0, 10, 0).lon;
-    const iss = panGround(0, 0, 10, 0, RE + 420).lon;
-    expect(ground / iss).toBeCloseTo((RE + 420) / RE, 9); // the same km is a smaller angle higher up
-    expect(panGround(0, 0, 0, 10, RE + 420).lat * (RE + 420)).toBeCloseTo(10, 6);
-  });
-
-  it('stops short of the poles and wraps the date line', () => {
-    const p = panGround(1.5, 0, 0, 1e6);
-    expect(p.lat).toBeLessThan(Math.PI / 2);
-    expect(Number.isFinite(panGround(Math.PI / 2 - 1e-3, 0, 1e5, 0).lon)).toBe(true);
-    const w = panGround(0, Math.PI - 1e-4, 100, 0);
-    expect(w.lon).toBeLessThan(0); // crossed +180 and came out as -179.x
-    expect(w.lon).toBeGreaterThan(-Math.PI);
+  it('moves a point over the sphere of its own radius, across the poles', () => {
+    const r = RE + 420;
+    const p: V3 = [r, 0, 0];
+    const north = moveOnSphere(p, [0, 0, 10]);
+    expect(Math.hypot(...north)).toBeCloseTo(r, 6);
+    expect(Math.asin(north[2] / r) * r).toBeCloseTo(10, 4); // 10 km along the surface at that height
+    expect(moveOnSphere(p, [0, 0, 0])).toEqual(p);
+    expect(moveOnSphere(p, [5, 0, 0])).toEqual(p); // the part along the vertical is ignored
+    // a quarter of the circumference north lands on the pole, twice that on the far side
+    const pole = moveOnSphere(p, [0, 0, (Math.PI / 2) * r]);
+    expect(pole[2]).toBeCloseTo(r, 6);
+    expect(Math.hypot(pole[0], pole[1])).toBeLessThan(1e-6);
+    const past = moveOnSphere(p, [0, 0, Math.PI * 0.75 * r]);
+    expect(past[0]).toBeLessThan(0);
+    expect(past[2]).toBeGreaterThan(0);
   });
 });

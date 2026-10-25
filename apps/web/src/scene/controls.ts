@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  MAX_DIST_KM, MIN_ALT_KM, altitudeOf, basisFromUp, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type V3,
+  MAX_DIST_KM, MIN_ALT_KM, advanceSurfaceFrame, altitudeOf, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceFrame, type V3,
 } from '../lib/camera';
 
 const MAX_EL = 1.5;
@@ -22,7 +22,8 @@ const tup = (v: THREE.Vector3): V3 => [v.x, v.y, v.z];
  * Orbit camera around a (possibly moving) target. Two modes:
  *  - `globe`: world z is up (the Earth's axis); az/el are measured in the world frame.
  *  - `surface`: the target is an object (or a ground point) and the frame is its local east/north/up, so "up" on screen is
- *    the local vertical, the horizon is level and az = -90 deg looks north.
+ *    the local vertical, the horizon is level and az = -90 deg looks north. The frame is north-up but carried along the
+ *    ground (see `advanceSurfaceFrame`), so the view does not spin when the target passes over a pole.
  * Left drag orbits, right/shift drag pans (in surface mode it slides the target along the ground, see `onGroundPan`), wheel and pinch zoom with a step proportional to the height
  * above the surface (see `zoomDistance`). Any user input cancels a fly-to or a mode transition.
  */
@@ -39,8 +40,10 @@ export class OrbitRig {
   readonly pan = new THREE.Vector3();
   readonly target = new THREE.Vector3();
   onUserInput?: () => void;
-  /** surface mode: a pan drag asks to move the ground target by this many km east and north */
-  onGroundPan?: (eastKm: number, northKm: number) => void;
+  /** surface mode: a pan drag asks to move the ground target by this many km along the frame's east and north axes */
+  onGroundPan?: (eastKm: number, northKm: number, frame: SurfaceFrame) => void;
+  /** surface mode: the horizontal frame of the last update (null until the first update after entering the mode) */
+  frame: SurfaceFrame | null = null;
 
   private flight: { t0: number; dur: number; from: THREE.Vector3; fromDist: number; fromAz: number; fromEl: number; to: FlyOptions } | null = null;
   private blend: { t0: number; dur: number; target: THREE.Vector3; offset: THREE.Vector3; up: THREE.Vector3 } | null = null;
@@ -133,6 +136,7 @@ export class OrbitRig {
     this.flight = null;
     this.pan.set(0, 0, 0);
     this.mode = mode;
+    this.frame = null;
   }
 
   /** Advance one frame. `anchor` is the live world position being followed, or null for the free target. */
@@ -154,8 +158,8 @@ export class OrbitRig {
 
     // the mode's own ("natural") pose
     if (this.mode === 'surface') {
-      const basis = basisFromUp(ellipsoidUp(tup(this.target)));
-      this.el = Math.max(this.minSurfaceEl(), Math.min(MAX_EL, this.el));
+      const basis = (this.frame = advanceSurfaceFrame(this.frame, ellipsoidUp(tup(this.target))));
+      this.el = this.clampSurfaceEl(this.el);
       const ce = Math.cos(this.el), se = Math.sin(this.el), ca = Math.cos(this.az), sa = Math.sin(this.az);
       const { e, n, u } = basis;
       this.natOffset.set(
@@ -204,7 +208,8 @@ export class OrbitRig {
 
   private orbitBy(dx: number, dy: number): void {
     this.az -= dx * 0.0055;
-    this.el = Math.max(this.mode === 'surface' ? this.minSurfaceEl() : -MAX_EL, Math.min(MAX_EL, this.el + dy * 0.0055));
+    const el = this.el + dy * 0.0055;
+    this.el = this.mode === 'surface' ? this.clampSurfaceEl(el) : Math.max(-MAX_EL, Math.min(MAX_EL, el));
   }
 
   /** Lowest surface-view elevation: above the horizon for a ground target, lower for a high object (the camera still clears the ground). */
@@ -212,12 +217,17 @@ export class OrbitRig {
     return minElevation(this.dist, MIN_ALT_KM, altitudeOf(tup(this.target)));
   }
 
+  /** Surface elevation limits: above the ground limit, and never straight up or down (the vertical would be parallel to the view). */
+  private clampSurfaceEl(el: number): number {
+    return Math.min(MAX_EL, Math.max(this.minSurfaceEl(), -MAX_EL, el));
+  }
+
   private panBy(dx: number, dy: number): void {
     const k = (2 * this.dist * Math.tan((this.camera.fov * Math.PI) / 360)) / this.dom.clientHeight;
     if (this.mode === 'surface') {
       // the target slides along the ground at its own height: the owner moves it (and stops following whatever it followed)
       const d = groundPanDelta(this.az, this.el, dx, dy, k);
-      this.onGroundPan?.(d.east, d.north);
+      if (this.frame) this.onGroundPan?.(d.east, d.north, this.frame);
       return;
     }
     const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);

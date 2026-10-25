@@ -147,6 +147,84 @@ export function basisFromUp(up: V3): { e: V3; n: V3; u: V3 } {
   return { e, n: cross(u, e), u };
 }
 
+/** A horizontal frame carried along the ground: east/north/up unit vectors plus how far it is turned from north-up. */
+export interface SurfaceFrame {
+  e: V3;
+  n: V3;
+  u: V3;
+  /** signed angle (rad, counter-clockwise seen from above) of `e` from the true east: 0 is the plain north-up frame */
+  psi: number;
+}
+
+/** A jump of the local vertical bigger than this (rad) in one update is a new place, not a movement: the frame restarts north-up. */
+export const FRAME_RESET_STEP = 0.8;
+/** Colatitudes (rad from the pole) between which the turn away from north-up starts to be undone again; nearer the pole it is kept. */
+export const POLE_ZONE_NEAR = (10 * Math.PI) / 180;
+export const POLE_ZONE_FAR = (20 * Math.PI) / 180;
+/**
+ * Most the turn from north-up is undone, per radian of ground travelled, outside the polar zone (a camera standing still never
+ * drifts). Driving east at colatitude c, north-up turns by cot(c) per radian relative to a carried frame, 2.75 at the edge of
+ * the zone (20 degrees), so the rate has to reach that for the north-up view of ordinary orbits to stay exact; 10% over.
+ */
+export const HEADING_RELAX = 1.1 / Math.tan(POLE_ZONE_FAR);
+
+const wrapPi = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
+
+/**
+ * Next horizontal frame of the surface view for the new local vertical `upIn`, continuous through the poles.
+ * The north-up frame (`basisFromUp`) turns by the whole longitude change when the point passes near a pole and is undefined on
+ * it, which spun the camera. Here the previous east axis is parallel-transported (projected onto the new tangent plane, the
+ * smallest possible turn), so the heading never jumps. Away from the poles the accumulated turn from north-up is wound back
+ * at a rate proportional to the distance travelled (at most `HEADING_RELAX` per radian), so the view returns to north-up and
+ * ordinary movement stays exactly north-up. Nearer a pole than `POLE_ZONE_NEAR` the frame is purely carried, which turns it
+ * by 0 per radian of travel; in between the two blend.
+ * `prev` null starts north-up.
+ */
+export function advanceSurfaceFrame(prev: SurfaceFrame | null, upIn: V3): SurfaceFrame {
+  const u = unit(upIn);
+  const north = basisFromUp(u);
+  const fresh = (): SurfaceFrame => ({ e: north.e, n: north.n, u, psi: 0 });
+  if (!Number.isFinite(u[0] + u[1] + u[2])) return prev ?? fresh();
+  if (!prev) return fresh();
+  const step = Math.acos(Math.max(-1, Math.min(1, dot(prev.u, u))));
+  if (!(step < FRAME_RESET_STEP)) return fresh();
+  const k = dot(prev.e, u);
+  let e: V3 = [prev.e[0] - k * u[0], prev.e[1] - k * u[1], prev.e[2] - k * u[2]];
+  const el = len(e);
+  if (!(el > 1e-6)) return fresh();
+  e = [e[0] / el, e[1] / el, e[2] / el];
+  // turn from north-up, nearest to the previous one (the north-up axes themselves are unreliable near a pole)
+  let psi = prev.psi + wrapPi(Math.atan2(dot(e, north.n), dot(e, north.e)) - prev.psi);
+  psi = wrapPi(psi);
+  const colat = Math.acos(Math.min(1, Math.abs(u[2])));
+  const t = Math.max(0, Math.min(1, (colat - POLE_ZONE_NEAR) / (POLE_ZONE_FAR - POLE_ZONE_NEAR)));
+  const lim = HEADING_RELAX * t * step;
+  const undo = Math.max(-lim, Math.min(lim, psi));
+  if (undo !== 0) {
+    const c = Math.cos(-undo), s = Math.sin(-undo);
+    const w = cross(u, e);
+    e = [e[0] * c + w[0] * s, e[1] * c + w[1] * s, e[2] * c + w[2] * s];
+    psi -= undo;
+  }
+  return { e, n: cross(u, e), u, psi };
+}
+
+/**
+ * Move `p` over the sphere of its own radius by the tangent vector `move` (km, the part along p is ignored) along the great circle,
+ * so a pan crosses the poles like any other place. Zero movement returns `p`.
+ */
+export function moveOnSphere(p: V3, move: V3): V3 {
+  const r = len(p);
+  if (r <= 0) return p;
+  const d: V3 = [p[0] / r, p[1] / r, p[2] / r];
+  const k = dot(move, d);
+  const t: V3 = [move[0] - k * d[0], move[1] - k * d[1], move[2] - k * d[2]];
+  const tl = len(t);
+  if (!(tl > 0)) return p;
+  const th = tl / r, c = Math.cos(th), s = Math.sin(th) / tl;
+  return [r * (d[0] * c + t[0] * s), r * (d[1] * c + t[1] * s), r * (d[2] * c + t[2] * s)];
+}
+
 /** East/north/up for geodetic latitude and (east) longitude in radians, in the frame the longitude refers to. */
 export function localBasis(lat: number, lon: number): { e: V3; n: V3; u: V3 } {
   const sl = Math.sin(lat), cl = Math.cos(lat), so = Math.sin(lon), co = Math.cos(lon);
@@ -209,18 +287,6 @@ export function groundPanDelta(az: number, el: number, dx: number, dy: number, k
   const ca = Math.cos(az), sa = Math.sin(az);
   const right = kmPerPx * dx, forward = (kmPerPx * dy) / Math.max(Math.sin(el), 0.2);
   return { east: sa * right - ca * forward, north: -ca * right - sa * forward };
-}
-
-/**
- * Move a geodetic point (radians) by `eastKm`/`northKm` over the ground; latitude is kept off the poles and longitude wrapped.
- * `radiusKm` is the sphere the point travels on: the Earth's radius for a ground point, plus the height for a point held aloft.
- */
-export function panGround(lat: number, lon: number, eastKm: number, northKm: number, radiusKm = RE): { lat: number; lon: number } {
-  const maxLat = Math.PI / 2 - 1e-3;
-  const nlat = Math.max(-maxLat, Math.min(maxLat, lat + northKm / radiusKm));
-  const dlon = eastKm / (radiusKm * Math.max(Math.cos(nlat), 1e-3));
-  const nlon = lon + dlon;
-  return { lat: nlat, lon: Math.atan2(Math.sin(nlon), Math.cos(nlon)) };
 }
 
 /** Camera azimuth/elevation that views a subject at `c` from outside, with the Earth behind it; null when `c` is near the centre (keep the current angles). */

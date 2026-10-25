@@ -7,7 +7,7 @@ import { modelViewDirection } from '../lib/attitude';
 import { bodyLineIds, bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
 import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
 import { isRegistryBody, refDisplay, refMaxDistKm, refMinDistKm, refViewDistKm, type RefBody } from '../lib/ref-body';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, maxDistKm, panGround, settleDistance, surfaceFitDistance, viewAnglesFor, type V3 } from '../lib/camera';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, maxDistKm, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
@@ -314,7 +314,7 @@ export class SceneController {
 
     this.camera.up.set(0, 0, 1);
     this.rig = new OrbitRig(this.camera, this.renderer.domElement);
-    this.rig.onGroundPan = (east, north) => this.panSurface(east, north);
+    this.rig.onGroundPan = (east, north, frame) => this.panSurface(east, north, frame);
     const sun0 = sunDirectionEci(clock.now());
     this.rig.az = Math.atan2(sun0[1], sun0[0]) + 0.5;
     this.rig.el = 0.35;
@@ -912,7 +912,7 @@ export class SceneController {
    * A pan drag in surface view: slide the target along the ground. A followed object is let go first and the target stays
    * where the object was, at its height, over the rotating ground; the drag then moves it along the sphere at that height.
    */
-  private panSurface(eastKm: number, northKm: number): void {
+  private panSurface(eastKm: number, northKm: number, frame: SurfaceFrame): void {
     if (!this.surfaceOn) return;
     if (this.follow) {
       this.setFollow(false);
@@ -921,7 +921,17 @@ export class SceneController {
     this.freezeSurfaceSource();
     const src = this.surfaceSrc;
     if (src?.kind !== 'latlon') return;
-    this.surfaceSrc = { ...src, ...panGround(src.lat, src.lon, eastKm, northKm, RE + (src.alt ?? 0)) };
+    // slide the target over the sphere along the camera frame's own axes: a great-circle move crosses the poles, where
+    // stepping latitude/longitude cannot (and where the longitude change per km blows up)
+    if (!this.surfaceTarget(this.tmp, clock.now())) return;
+    const move: V3 = [
+      frame.e[0] * eastKm + frame.n[0] * northKm,
+      frame.e[1] * eastKm + frame.n[1] * northKm,
+      frame.e[2] * eastKm + frame.n[2] * northKm,
+    ];
+    const p = moveOnSphere([this.tmp.x, this.tmp.y, this.tmp.z], move);
+    const ll = this.latLonOfWorld(this.tmp.set(p[0], p[1], p[2]), false);
+    if (ll?.kind === 'latlon') this.surfaceSrc = { kind: 'latlon', lat: ll.lat, lon: ll.lon, alt: src.alt };
   }
 
   /** World position of the surface camera's target at sim time `t`: the object itself, or a point over the ground. Null when its source has no position. */
