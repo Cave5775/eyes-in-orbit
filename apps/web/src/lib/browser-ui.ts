@@ -94,6 +94,81 @@ export function categoryOf(rec: { kind: string; group?: string; render?: { color
   return 'other';
 }
 
+// ---------------------------------------------------------------- the `type` tag
+
+/**
+ * Other spellings of the categories (the old `cat:` aliases), by their hyphenated form. A word that is also a kind
+ * (`moon`, `planets`, `ground_station`, `pad`) is that kind first, see `normaliseType`.
+ */
+export const CATEGORY_ALIASES: Readonly<Record<string, CategoryId>> = {
+  vehicle: 'launch-vehicles', vehicles: 'launch-vehicles', rocket: 'launch-vehicles', rockets: 'launch-vehicles', launch: 'launch-vehicles',
+  nav: 'navigation', gnss: 'navigation', gps: 'navigation', 'ground-station': 'ground', 'ground-stations': 'ground', pads: 'ground', pad: 'ground',
+  sats: 'satellites', sat: 'satellites', body: 'bodies', planets: 'bodies', planet: 'bodies', moons: 'bodies', moon: 'bodies',
+};
+
+/** The entity kinds the app knows (`EntityKind` in @eio/core, the connectors and the mock catalogue); any other string is a kind too. */
+export const KNOWN_KINDS: ReadonlySet<string> = new Set([
+  'satellite', 'station', 'probe', 'launch_vehicle', 'stage', 'capsule', 'drone', 'rover', 'lander', 'ground_station', 'pad', 'debris',
+  'star', 'planet', 'moon', 'asteroid', 'dwarf_planet',
+]);
+
+const CATEGORY_IDS: ReadonlySet<string> = new Set(CATEGORIES.map((c) => c.id));
+
+/**
+ * The canonical form of a `type:` value (lower case): a general category keeps its id (`launch-vehicles`, also reached by
+ * `launch_vehicles`, `Launch Vehicles` and the aliases `nav`, `gps`, `rockets`...), anything else is a kind with `_` between
+ * the words (`ground-station` is `ground_station`; a plural of a known kind is the kind: `rovers` is `rover`).
+ */
+export function normaliseType(raw: string): string {
+  const d = raw.trim().toLowerCase();
+  const h = d.replace(/[\s_]+/g, '-');
+  if (CATEGORY_IDS.has(h)) return h;
+  const k = d.replace(/[\s-]+/g, '_');
+  const single = k.length > 1 && k.endsWith('s') ? k.slice(0, -1) : k;
+  if (KNOWN_KINDS.has(k)) return k;
+  if (KNOWN_KINDS.has(single)) return single;
+  return CATEGORY_ALIASES[h] ?? k;
+}
+
+interface TypeMatcher {
+  category?: CategoryId;
+  kinds?: readonly string[];
+}
+
+const typeMatchers = new Map<string, TypeMatcher>();
+
+function typeMatcher(value: string): TypeMatcher {
+  let m = typeMatchers.get(value);
+  if (m) return m;
+  const v = normaliseType(value);
+  if (CATEGORY_IDS.has(v)) m = { category: v as CategoryId };
+  else {
+    // a kind, singular or plural (`rover`, `rovers`)
+    const base = v.length > 1 && v.endsWith('s') ? v.slice(0, -1) : v;
+    m = { kinds: v === base ? [v, `${v}s`] : [v, base] };
+  }
+  if (typeMatchers.size > 500) typeMatchers.clear();
+  typeMatchers.set(value, m);
+  return m;
+}
+
+/**
+ * Does the entity match the tag `type:<value>`? The one question of the old `cat:` and `kind:` tags. The value is, ignoring case,
+ * singular or plural and the difference of `-`, `_` and space, either
+ *
+ * - a general category id (`satellites`, `launch-vehicles`, `debris`, `ground`, `bodies`...): the entities `categoryOf` puts
+ *   there (`type:satellites` is the plain satellites, not the navigation ones; the category chips count exactly these), or
+ * - an entity kind (`satellite`, `probe`, `ground_station`, `moon`, `stage`...): the entities of that kind, so `type:satellite`
+ *   is every satellite and `type:probe` only the probes, not the rovers (use `type:probes` for the whole family).
+ *
+ * A word that is both an old category alias and a kind (`moon`, `planets`, `pad`) is the kind.
+ */
+export function matchesType(rec: { kind: string; group?: string; render?: { colorKey?: string } }, value: string): boolean {
+  const m = typeMatcher(value);
+  if (m.category) return categoryOf(rec) === m.category;
+  return !!m.kinds && m.kinds.includes(rec.kind.toLowerCase());
+}
+
 /** Entities per category (all categories present, in chip order; `other` only when it has members). */
 export function categoryCounts(records: Iterable<{ kind: string; group?: string; render?: { colorKey?: string } }>): [CategoryId, number][] {
   const n = new Map<CategoryId, number>();

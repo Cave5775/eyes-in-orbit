@@ -134,12 +134,15 @@ const LEGACY_HIDDEN_KEY = 'eio.hidden';
 const HIGHLIGHT_KEY = 'eio.highlight';
 
 /**
- * The tag terms remembered in this browser (empty when storage is blocked or the value is malformed). A leftover
- * `eio.hidden` becomes hide terms once and is deleted.
+ * The tag terms remembered in this browser (empty when storage is blocked or the value is malformed); the old `cat` and `kind`
+ * tags come back as `type`. A leftover `eio.hidden` becomes hide terms once and is deleted.
  */
 function loadQuery(): Query {
   try {
-    let q = parseStoredQuery(localStorage.getItem(QUERY_KEY));
+    const stored = localStorage.getItem(QUERY_KEY);
+    let q = parseStoredQuery(stored);
+    // an old `cat` / `kind` tag was migrated to `type`: write it back once so the old keys are gone from storage
+    if (stored !== null && serialiseQuery(q) !== stored) saveQuery(q);
     const legacy = localStorage.getItem(LEGACY_HIDDEN_KEY);
     if (legacy !== null) {
       q = addTerms(q, legacyHiddenTerms(legacy));

@@ -35,15 +35,15 @@ afterEach(() => install(saved));
 describe('query state', () => {
   it('toggles terms, keeps the text term and clears: CLEAR keeps the hidden groups, SHOW ALL keeps the rest', async () => {
     const s = (await freshStore(mem())).getState;
-    s().toggleTerm('kind', 'probe');
-    s().toggleTerm('cat', 'debris', 'hide');
+    s().toggleTerm('type', 'probe');
+    s().toggleTerm('type', 'debris', 'hide');
     s().setText('iss');
-    expect(s().query.terms.map(termWord)).toEqual(['kind:probe', 'cat:debris', 'iss']);
-    s().toggleTerm('kind', 'probe', 'hide'); // an only term switched by the eye
+    expect(s().query.terms.map(termWord)).toEqual(['type:probe', 'type:debris', 'iss']);
+    s().toggleTerm('type', 'probe', 'hide'); // an only term switched by the eye
     expect(s().query.terms.map((t) => t.effect)).toEqual(['hide', 'hide', 'only']);
-    s().toggleTerm('kind', 'probe', 'hide'); // and the eye again removes it
+    s().toggleTerm('type', 'probe', 'hide'); // and the eye again removes it
     s().clearQuery();
-    expect(s().query.terms.map(termWord)).toEqual(['cat:debris']);
+    expect(s().query.terms.map(termWord)).toEqual(['type:debris']);
     s().setText('x');
     s().showAll();
     expect(s().query.terms.map(termWord)).toEqual(['x']);
@@ -53,9 +53,9 @@ describe('query state', () => {
 
   it('does not touch the state for an equal query', async () => {
     const s = (await freshStore(mem())).getState;
-    s().toggleTerm('kind', 'probe');
+    s().toggleTerm('type', 'probe');
     const q = s().query;
-    s().addTerms([{ key: 'kind', value: 'probe', effect: 'only' }]);
+    s().addTerms([{ key: 'type', value: 'probe', effect: 'only' }]);
     s().setText('');
     expect(s().query).toBe(q);
   });
@@ -70,7 +70,7 @@ describe('query state', () => {
     expect([...s().textIds!]).toEqual(['sat-2', 'sat-3']);
     s().setText('starlink'); // same text: same lookup
     const hits = s().textHits;
-    s().toggleTerm('kind', 'probe');
+    s().toggleTerm('type', 'probe');
     expect(s().textHits).toBe(hits);
     s().upsertEntities([rec('sat-5', 'STARLINK-1009', 'satellite', 'starlink')]);
     expect(s().textHits?.map((h) => h.id)).toEqual(['sat-2', 'sat-3', 'sat-5']);
@@ -83,27 +83,44 @@ describe('query state', () => {
     const storage = mem();
     const s = (await freshStore(storage)).getState;
     s().toggleTerm('group', 'starlink');
-    s().toggleTerm('cat', 'debris', 'hide');
+    s().toggleTerm('type', 'debris', 'hide');
     s().setText('iss');
     expect(JSON.parse(storage.data.get('eio.query')!).terms).toEqual([
       { key: 'group', value: 'starlink', effect: 'only' },
-      { key: 'cat', value: 'debris', effect: 'hide' },
+      { key: 'type', value: 'debris', effect: 'hide' },
     ]);
     const back = (await freshStore(storage)).getState();
-    expect(back.query.terms.map((t) => `${termWord(t)}/${t.effect}`)).toEqual(['group:starlink/only', 'cat:debris/hide']);
+    expect(back.query.terms.map((t) => `${termWord(t)}/${t.effect}`)).toEqual(['group:starlink/only', 'type:debris/hide']);
   });
 
   it('turns a stored eio.hidden into hide terms once and deletes the key', async () => {
     const storage = mem({ 'eio.hidden': '{"cat":["debris"],"group":["starlink"]}' });
     const s = (await freshStore(storage)).getState();
-    expect(s.query.terms.map((t) => `${termWord(t)}/${t.effect}`)).toEqual(['group:starlink/hide', 'cat:debris/hide']);
+    expect(s.query.terms.map((t) => `${termWord(t)}/${t.effect}`)).toEqual(['type:debris/hide', 'group:starlink/hide']);
     expect(storage.data.has('eio.hidden')).toBe(false);
     expect(JSON.parse(storage.data.get('eio.query')!).terms).toHaveLength(2);
     // the terms are merged into an existing query; a malformed old value just disappears
-    const both = mem({ 'eio.query': '{"terms":[{"key":"kind","value":"probe","effect":"only"}]}', 'eio.hidden': 'garbage' });
+    const both = mem({ 'eio.query': '{"terms":[{"key":"type","value":"probe","effect":"only"}]}', 'eio.hidden': 'garbage' });
     const t = (await freshStore(both)).getState();
-    expect(t.query.terms.map(termWord)).toEqual(['kind:probe']);
+    expect(t.query.terms.map(termWord)).toEqual(['type:probe']);
     expect(both.data.has('eio.hidden')).toBe(false);
+  });
+
+  it('migrates a stored cat / kind query to type terms and writes it back once', async () => {
+    const old = '{"terms":[{"key":"cat","value":"debris","effect":"hide"},{"key":"kind","value":"Launch-Vehicle","effect":"only","neg":true},{"key":"kind","value":"debris","effect":"only"},{"key":"group","value":"starlink","effect":"only"}]}';
+    const storage = mem({ 'eio.query': old, 'eio.hidden': '{"cat":["debris","stations"],"kind":["probe"]}' });
+    const s = (await freshStore(storage)).getState();
+    const words = (q: typeof s.query) => q.terms.map((t) => `${termWord(t)}/${t.effect}`);
+    expect(words(s.query)).toEqual(['type:debris/hide', '-type:launch_vehicle/only', 'group:starlink/only', 'type:stations/hide', 'type:probe/hide']);
+    const saved = storage.data.get('eio.query')!;
+    expect(saved).not.toMatch(/"(cat|kind)"/);
+    expect(JSON.parse(saved).terms).toHaveLength(5);
+    expect(storage.data.has('eio.hidden')).toBe(false);
+    // the next start reads the migrated form as it is
+    expect(words((await freshStore(storage)).getState().query)).toEqual(words(s.query));
+    // garbage in eio.query is the empty query, and is replaced
+    const junk = mem({ 'eio.query': '{"terms":[{"key":"cat"},null,5]}' });
+    expect((await freshStore(junk)).getState().query.terms).toEqual([]);
   });
 
   it('survives blocked storage', async () => {
@@ -112,7 +129,7 @@ describe('query state', () => {
     vi.resetModules();
     const store = (await import('../src/state/store')).useStore;
     expect(store.getState().query.terms).toEqual([]);
-    expect(() => { store.getState().toggleTerm('kind', 'probe'); store.getState().setHighlight(true); }).not.toThrow();
+    expect(() => { store.getState().toggleTerm('type', 'probe'); store.getState().setHighlight(true); }).not.toThrow();
   });
 });
 

@@ -27,22 +27,22 @@ const ids = (query: Query, ctx = { focus: NO_FOCUS } as Parameters<typeof classi
 describe('classify: only terms', () => {
   it('matches group, kind, id, body, launch and category', () => {
     expect(ids(q('group:starlink'))).toEqual(['sat-44713']);
-    expect(ids(q('kind:probe'))).toEqual(['dsn-LRO']);
+    expect(ids(q('type:probe'))).toEqual(['dsn-LRO']);
     expect(ids(q('id:25544'))).toEqual(['sat-25544']);
     expect(ids(q('body:moon'))).toEqual(['dsn-LRO']);
     expect(ids(q('launch:1993'))).toEqual(['sat-33791', 'sat-33792']);
     expect(ids(q('launch:1993-036'))).toEqual(['sat-33791', 'sat-33792']);
-    expect(ids(q('cat:navigation'))).toEqual(['sat-24876']);
+    expect(ids(q('type:navigation'))).toEqual(['sat-24876']);
   });
   it('ANDs different keys and ORs the values of one key', () => {
     expect(ids(q('group:starlink group:gps-ops'))).toEqual(['sat-44713', 'sat-24876']);
-    expect(ids(q('kind:satellite group:gps-ops'))).toEqual(['sat-24876']);
-    expect(ids(q('kind:station group:gps-ops'))).toEqual([]);
+    expect(ids(q('type:satellite group:gps-ops'))).toEqual(['sat-24876']);
+    expect(ids(q('type:station group:gps-ops'))).toEqual([]);
   });
   it('negation removes matches, alone or with an inclusion', () => {
-    expect(ids(q('-kind:satellite'))).toEqual(['sat-25544', 'sat-33791', 'sat-33792', 'dsn-LRO', 'body-moon']);
-    expect(ids(q('kind:satellite -group:starlink'))).toEqual(['sat-24876']);
-    expect(ids(q('-group:starlink -group:gps-ops -kind:debris'))).toEqual(['sat-25544', 'dsn-LRO', 'body-moon']);
+    expect(ids(q('-type:satellite'))).toEqual(['sat-25544', 'sat-33791', 'sat-33792', 'dsn-LRO', 'body-moon']);
+    expect(ids(q('type:satellite -group:starlink'))).toEqual(['sat-24876']);
+    expect(ids(q('-group:starlink -group:gps-ops -type:debris'))).toEqual(['sat-25544', 'dsn-LRO', 'body-moon']);
   });
   it('is off without terms, and a negation alone is a restriction', () => {
     expect(ALL.map((r) => classify(r, NO_QUERY))).toEqual(ALL.map(() => 'off'));
@@ -69,13 +69,13 @@ describe('classify: the typed text', () => {
   it('an empty or blank text is no term', () => {
     expect(withText(NO_QUERY, '  ')).toBe(NO_QUERY);
     expect(withText(text, '')).toEqual(NO_QUERY);
-    expect(textOf(withText(q('kind:probe'), ' iss zarya '))).toBe('iss zarya');
+    expect(textOf(withText(q('type:probe'), ' iss zarya '))).toBe('iss zarya');
   });
 });
 
 describe('classify: hide terms', () => {
   it('hide the entities of a category or tag, not the others; they are not filters', () => {
-    const h = q('cat:debris', 'hide');
+    const h = q('type:debris', 'hide');
     expect(classify(DEB, h)).toBe('hide');
     expect(classify(STAR, h)).toBe('off');
     expect(queryActive(h)).toBe(false);
@@ -83,21 +83,21 @@ describe('classify: hide terms', () => {
     expect(ids(h)).toEqual(['sat-25544', 'sat-44713', 'sat-24876', 'dsn-LRO', 'body-moon']);
   });
   it('OR together, across keys', () => {
-    expect(ids(q('kind:station body:moon', 'hide'))).toEqual(['sat-44713', 'sat-24876', 'sat-33791', 'sat-33792', 'body-moon']);
-    expect(ids(q('group:starlink cat:debris', 'hide'))).toEqual(['sat-25544', 'sat-24876', 'dsn-LRO', 'body-moon']);
+    expect(ids(q('type:station body:moon', 'hide'))).toEqual(['sat-44713', 'sat-24876', 'sat-33791', 'sat-33792', 'body-moon']);
+    expect(ids(q('group:starlink type:debris', 'hide'))).toEqual(['sat-25544', 'sat-24876', 'dsn-LRO', 'body-moon']);
   });
   it('never hide the bodies, which are scenery', () => {
-    expect(classify(MOON, q('cat:bodies kind:moon group:bodies body:earth', 'hide'))).toBe('off');
+    expect(classify(MOON, q('type:bodies type:moon group:bodies body:earth', 'hide'))).toBe('off');
   });
   it('compose with only terms: both must let the entity through, and hide says so over out', () => {
-    const query: Query = { terms: [...q('kind:satellite').terms, ...q('group:starlink', 'hide').terms] };
+    const query: Query = { terms: [...q('type:satellite').terms, ...q('group:starlink', 'hide').terms] };
     expect(classify(GPS, query)).toBe('show');
     expect(classify(STAR, query)).toBe('hide');
     expect(classify(DEB, query)).toBe('out');
     expect(ids(query)).toEqual(['sat-24876']);
   });
   it('hide terms hide the objects of every category the same way the list counts them', () => {
-    const rows = filterRecords(ALL, q('cat:debris', 'hide'));
+    const rows = filterRecords(ALL, q('type:debris', 'hide'));
     expect(rows.map((r) => r.id)).not.toContain('sat-33791');
     expect(rows).toHaveLength(ALL.length - 2);
   });
@@ -106,9 +106,9 @@ describe('classify: hide terms', () => {
 describe('classify: the focus', () => {
   const focus = new Set(['sat-33791', 'sat-25544']);
   it('is never hidden by a hide term, nor left out by an only term', () => {
-    expect(classify(DEB, q('cat:debris', 'hide'), { focus })).toBe('off');
-    expect(classify(DEB, q('cat:debris kind:debris', 'hide'), { focus })).toBe('off');
-    expect(classify(DEB2, q('cat:debris', 'hide'), { focus })).toBe('hide');
+    expect(classify(DEB, q('type:debris', 'hide'), { focus })).toBe('off');
+    expect(classify(DEB, q('type:debris type:stations', 'hide'), { focus })).toBe('off');
+    expect(classify(DEB2, q('type:debris', 'hide'), { focus })).toBe('hide');
     expect(classify(DEB, q('group:starlink'), { focus })).toBe('show');
     expect(classify(DEB2, q('group:starlink'), { focus })).toBe('out');
     expect(classify(ISS, withText(NO_QUERY, 'zzz'), { focus, text: new Set() })).toBe('show');
@@ -118,75 +118,103 @@ describe('classify: the focus', () => {
 describe('terms', () => {
   it('reads the words of a term back', () => {
     expect(termFromWord('#starlink')).toEqual({ key: 'group', value: 'starlink', effect: 'only' });
-    expect(termFromWord('-kind:debris', 'hide')).toEqual({ key: 'kind', value: 'debris', neg: true, effect: 'hide' });
+    expect(termFromWord('-type:debris', 'hide')).toEqual({ key: 'type', value: 'debris', neg: true, effect: 'hide' });
     expect(termFromWord('plain')).toBeNull();
-    expect(termWord(termFromWord('-type:launch-vehicle')!)).toBe('-kind:launch_vehicle');
+    expect(termWord(termFromWord('-type:launch-vehicle')!)).toBe('-type:launch_vehicle');
     expect(termWord({ key: 'text', value: 'iss', effect: 'only' })).toBe('iss');
   });
   it('toggleTerm adds, removes and switches the effect', () => {
-    const a = toggleTerm(NO_QUERY, 'cat', 'debris', 'hide');
-    expect(a.terms).toEqual([{ key: 'cat', value: 'debris', effect: 'hide' }]);
-    expect(toggleTerm(a, 'cat', 'debris', 'hide')).toEqual(NO_QUERY);
-    expect(toggleTerm(a, 'cat', 'debris', 'only').terms[0].effect).toBe('only');
-    expect(toggleTerm(toggleTerm(a, 'cat', 'debris', 'only'), 'cat', 'debris').terms).toEqual([]); // default effect is only
-    expect(toggleTerm(a, 'cat', 'debris', 'hide', true).terms).toHaveLength(2); // the negated term is another term
+    const a = toggleTerm(NO_QUERY, 'type', 'debris', 'hide');
+    expect(a.terms).toEqual([{ key: 'type', value: 'debris', effect: 'hide' }]);
+    expect(toggleTerm(a, 'type', 'debris', 'hide')).toEqual(NO_QUERY);
+    expect(toggleTerm(a, 'type', 'debris', 'only').terms[0].effect).toBe('only');
+    expect(toggleTerm(toggleTerm(a, 'type', 'debris', 'only'), 'type', 'debris').terms).toEqual([]); // default effect is only
+    expect(toggleTerm(a, 'type', 'debris', 'hide', true).terms).toHaveLength(2); // the negated term is another term
   });
   it('setTermEffect and removeTerm change one term and return the same query when nothing changes', () => {
-    const a = q('kind:probe cat:debris');
-    const b = setTermEffect(a, 'kind', 'probe', 'hide');
-    expect(findTerm(b, 'kind', 'probe')?.effect).toBe('hide');
-    expect(findTerm(b, 'cat', 'debris')?.effect).toBe('only');
-    expect(setTermEffect(a, 'kind', 'probe', 'only')).toBe(a);
-    expect(setTermEffect(a, 'kind', 'nope', 'hide')).toBe(a);
-    expect(removeTerm(a, 'kind', 'nope')).toBe(a);
-    expect(removeTerm(a, 'kind', 'probe').terms.map(termWord)).toEqual(['cat:debris']);
+    const a = q('type:probe type:debris');
+    const b = setTermEffect(a, 'type', 'probe', 'hide');
+    expect(findTerm(b, 'type', 'probe')?.effect).toBe('hide');
+    expect(findTerm(b, 'type', 'debris')?.effect).toBe('only');
+    expect(setTermEffect(a, 'type', 'probe', 'only')).toBe(a);
+    expect(setTermEffect(a, 'type', 'nope', 'hide')).toBe(a);
+    expect(removeTerm(a, 'type', 'nope')).toBe(a);
+    expect(removeTerm(a, 'type', 'probe').terms.map(termWord)).toEqual(['type:debris']);
   });
   it('addTerms keeps the text last, skips terms that are there and with override takes the new effect', () => {
-    const a = withText(q('kind:probe'), 'iss');
-    const b = addTerms(a, [termFromWord('cat:debris')!]);
-    expect(b.terms.map(termWord)).toEqual(['kind:probe', 'cat:debris', 'iss']);
-    expect(addTerms(b, [termFromWord('cat:debris')!])).toBe(b);
-    const h = q('cat:debris', 'hide');
-    expect(addTerms(h, [termFromWord('cat:debris')!])).toBe(h);
-    expect(findTerm(addTerms(h, [termFromWord('cat:debris')!], true), 'cat', 'debris')?.effect).toBe('only');
+    const a = withText(q('type:probe'), 'iss');
+    const b = addTerms(a, [termFromWord('type:debris')!]);
+    expect(b.terms.map(termWord)).toEqual(['type:probe', 'type:debris', 'iss']);
+    expect(addTerms(b, [termFromWord('type:debris')!])).toBe(b);
+    const h = q('type:debris', 'hide');
+    expect(addTerms(h, [termFromWord('type:debris')!])).toBe(h);
+    expect(findTerm(addTerms(h, [termFromWord('type:debris')!], true), 'type', 'debris')?.effect).toBe('only');
   });
   it('SHOW ALL and CLEAR each leave the other kind of term', () => {
-    const query: Query = withText({ terms: [...q('kind:probe').terms, ...q('cat:debris', 'hide').terms] }, 'iss');
-    expect(withoutHidden(query).terms.map(termWord)).toEqual(['kind:probe', 'iss']);
-    expect(withoutFilter(query).terms.map(termWord)).toEqual(['cat:debris']);
+    const query: Query = withText({ terms: [...q('type:probe').terms, ...q('type:debris', 'hide').terms] }, 'iss');
+    expect(withoutHidden(query).terms.map(termWord)).toEqual(['type:probe', 'iss']);
+    expect(withoutFilter(query).terms.map(termWord)).toEqual(['type:debris']);
     expect(withoutHidden(NO_QUERY)).toBe(NO_QUERY);
-    expect(withoutFilter(q('cat:debris', 'hide'))).toEqual(q('cat:debris', 'hide'));
+    expect(withoutFilter(q('type:debris', 'hide'))).toEqual(q('type:debris', 'hide'));
     expect(tagTerms(query)).toHaveLength(2);
   });
   it('compares queries by their terms', () => {
-    expect(sameQuery(q('kind:probe'), q('kind:probe'))).toBe(true);
-    expect(sameQuery(q('kind:probe'), q('kind:probe', 'hide'))).toBe(false);
-    expect(sameQuery(q('kind:probe'), q('-kind:probe'))).toBe(false);
+    expect(sameQuery(q('type:probe'), q('type:probe'))).toBe(true);
+    expect(sameQuery(q('type:probe'), q('type:probe', 'hide'))).toBe(false);
+    expect(sameQuery(q('type:probe'), q('-type:probe'))).toBe(false);
     expect(sameQuery(NO_QUERY, { terms: [] })).toBe(true);
   });
 });
 
 describe('storage', () => {
-  const query: Query = withText({ terms: [...q('kind:probe -group:starlink').terms, ...q('cat:debris', 'hide').terms] }, 'iss');
+  const query: Query = withText({ terms: [...q('type:probe -group:starlink').terms, ...q('type:debris', 'hide').terms] }, 'iss');
   it('round-trips the tag terms with their effects, not the text', () => {
     const back = parseStoredQuery(serialiseQuery(query));
-    expect(back.terms.map((t: Term) => `${termWord(t)}/${t.effect}`)).toEqual(['kind:probe/only', '-group:starlink/only', 'cat:debris/hide']);
+    expect(back.terms.map((t: Term) => `${termWord(t)}/${t.effect}`)).toEqual(['type:probe/only', '-group:starlink/only', 'type:debris/hide']);
     expect(serialiseQuery(NO_QUERY)).toBe('{"terms":[]}');
   });
   it('survives garbage and drops bad terms', () => {
     for (const raw of [null, undefined, '', 'nope', '[]', '42', 'null', '{}', '{"terms":"x"}', '{"terms":[1,null,{"key":"zzz","value":"a","effect":"only"}]}']) {
       expect(parseStoredQuery(raw as string | null | undefined)).toEqual(NO_QUERY);
     }
-    const raw = '{"terms":[{"key":"cat","value":"Satellite","effect":"only"},{"key":"cat","value":"satellites","effect":"hide"},{"key":"kind","value":"Launch-Vehicle","effect":"hide"},{"key":"kind","value":"x","effect":"dim"}]}';
+    const raw = '{"terms":[{"key":"type","value":"Satellite","effect":"only"},{"key":"type","value":"satellites","effect":"hide"},{"key":"type","value":"Launch-Vehicle","effect":"hide"},{"key":"type","value":"x","effect":"dim"}]}';
     expect(parseStoredQuery(raw).terms).toEqual([
-      { key: 'cat', value: 'satellites', effect: 'only' },
-      { key: 'kind', value: 'launch_vehicle', effect: 'hide' },
+      { key: 'type', value: 'satellite', effect: 'only' },
+      { key: 'type', value: 'satellites', effect: 'hide' },
+      { key: 'type', value: 'launch_vehicle', effect: 'hide' },
     ]);
+  });
+  it('migrates the stored cat and kind terms to type terms: deduplicated, effect and negation kept', () => {
+    const term = (key: unknown, value: unknown, effect: unknown, neg?: boolean) => ({ key, value, effect, ...(neg ? { neg: true } : {}) });
+    const raw = JSON.stringify({
+      terms: [
+        term('cat', 'debris', 'hide'), //                  -> type:debris (hide)
+        term('cat', 'Satellite', 'only'), //               the category it named -> type:satellites
+        term('cat', 'vehicles', 'only', true), //          alias, negated -> -type:launch-vehicles
+        term('kind', 'Launch-Vehicle', 'hide'), //         -> type:launch_vehicle
+        term('kind', 'debris', 'hide'), //                 same as the cat:debris term: dropped
+        term('kind', 'probe', 'only'),
+        term('kind', 'probe', 'only', true), //            a negated term is another term
+        term('cat', 'satellites', 'hide'), //              the same word as above (the effect does not matter): dropped
+        term('group', 'starlink', 'only'),
+        term('cat', '', 'only'), term('kind', 7, 'only'), term('kind', 'x', 'dim'), term('categ', 'x', 'only'), //  garbage
+        null, 3, 'cat:debris',
+      ],
+    });
+    expect(parseStoredQuery(raw).terms.map((t: Term) => `${termWord(t)}/${t.effect}`)).toEqual([
+      'type:debris/hide', 'type:satellites/only', '-type:launch-vehicles/only', 'type:launch_vehicle/hide', 'type:probe/only', '-type:probe/only', 'group:starlink/only',
+    ]);
+    // once migrated, the stored form has no cat or kind left and reads back the same
+    const again = serialiseQuery(parseStoredQuery(raw));
+    expect(again).not.toMatch(/"(cat|kind)"/);
+    expect(serialiseQuery(parseStoredQuery(again))).toBe(again);
+    // a stored query of nothing but garbage terms is the empty query
+    expect(parseStoredQuery('{"terms":[{"key":"cat","value":[],"effect":"only"},{"key":"kind"}]}')).toEqual(NO_QUERY);
   });
   it('reads the old hidden groups as hide terms', () => {
     const t = legacyHiddenTerms('{"cat":["debris","ground"],"group":["starlink"],"x":["y"]}');
-    expect(t.map((x) => `${termWord(x)}/${x.effect}`)).toEqual(['group:starlink/hide', 'cat:debris/hide', 'cat:ground/hide']);
-    expect(legacyHiddenTerms('{"cat":["debris",7,"debris"],"kind":["Launch-Vehicle"]}').map(termWord)).toEqual(['kind:launch_vehicle', 'cat:debris']);
+    expect(t.map((x) => `${termWord(x)}/${x.effect}`)).toEqual(['type:debris/hide', 'type:ground/hide', 'group:starlink/hide']);
+    expect(legacyHiddenTerms('{"cat":["debris",7,"debris"],"kind":["Launch-Vehicle","debris"]}').map(termWord)).toEqual(['type:debris', 'type:launch_vehicle']);
     for (const raw of [null, undefined, '', 'nope', '[]', '42', 'null', '{"cat":"debris"}', '{"cat":[1,null,""]}', '{"zzz":["a"]}']) {
       expect(legacyHiddenTerms(raw as string | null | undefined)).toEqual([]);
     }
@@ -196,7 +224,7 @@ describe('storage', () => {
 describe('classes are the four documented values', () => {
   it('off, show, out, hide', () => {
     const seen = new Set<Class>();
-    for (const r of ALL) for (const query of [NO_QUERY, q('kind:probe'), q('kind:probe', 'hide')]) seen.add(classify(r, query));
+    for (const r of ALL) for (const query of [NO_QUERY, q('type:probe'), q('type:probe', 'hide')]) seen.add(classify(r, query));
     expect([...seen].sort()).toEqual(['hide', 'off', 'out', 'show']);
   });
 });

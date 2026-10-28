@@ -47,12 +47,12 @@ function Eye({ off }: { off: boolean }) {
 
 const HELP_TAGS: [string, string][] = [
   ['#starlink  group:gps-ops', 'a CelesTrak group'],
-  ['kind:probe', 'an object type (launch_vehicle, ground_station...)'],
+  ['type:probe', 'what it is: a category (the chips above) or a kind (satellite, launch_vehicle, ground_station, moon...)'],
   ['launch:2024-123', 'one launch (launch:1993 is a year)'],
-  ['cat:navigation', 'a category (the chips above)'],
+  ['type:navigation', 'a whole category (probes also holds rovers and landers)'],
   ['id:25544', 'a NORAD, COSPAR or entity id'],
   ['body:moon', 'what orbits that body'],
-  ['-kind:debris', 'a leading - leaves those out'],
+  ['-type:debris', 'a leading - leaves those out'],
 ];
 
 export function EntityBrowser() {
@@ -110,14 +110,17 @@ export function EntityBrowser() {
   const categories = useMemo(() => categoryCounts(entities.values()), [entities]);
   const launchGroups = useMemo(() => buildLaunchGroups(entities.values()), [entities]);
 
-  // autocomplete for `group:` / `#`, `kind:`, `cat:`, `launch:`, `body:`
+  // autocomplete for `group:` / `#`, `type:`, `launch:`, `body:`
   const sources = useMemo((): Record<TagKey, TagSuggestion[]> => {
     const bodies = new Map<string, number>();
     for (const e of entities.values()) bodies.set(e.bodyId.toLowerCase(), (bodies.get(e.bodyId.toLowerCase()) ?? 0) + 1);
     return {
       group: facets.groups.map(([value, count]) => ({ value: value.toLowerCase(), count })),
-      kind: facets.kinds.map(([value, count]) => ({ value: value.toLowerCase(), count })),
-      cat: categories.map(([id, count]) => ({ value: id, label: categoryLabel(id), count })),
+      // the nine categories first, then the kinds (a kind named like a category, `debris`, is the category)
+      type: [
+        ...categories.map(([id, count]): TagSuggestion => ({ value: id, label: categoryLabel(id), count, first: true })),
+        ...facets.kinds.map(([value, count]): TagSuggestion => ({ value: value.toLowerCase(), count })).filter((s) => !CATEGORIES.some((c) => c.id === s.value)),
+      ],
       launch: launchGroups.map((g) => ({ value: g.id, label: g.label, count: g.count })),
       body: [...bodies].map(([value, count]) => ({ value, count })),
       id: [],
@@ -313,7 +316,7 @@ export function EntityBrowser() {
             <span className="row-name">{kindLabel(r.kind)}</span>
           </button>
           <span className="tree-count mono">{r.count.toLocaleString('en-US')}</span>
-          {!BODY_CATEGORY_KINDS.has(r.kind) && eyeButton(['kind', r.kind.toLowerCase()], `every ${kindLabel(r.kind)}`)}
+          {!BODY_CATEGORY_KINDS.has(r.kind) && eyeButton(['type', r.kind.toLowerCase()], `every ${kindLabel(r.kind)}`)}
         </div>
       );
     }
@@ -372,7 +375,7 @@ export function EntityBrowser() {
           <input
             ref={inputRef} type="text" role="combobox" aria-expanded={suggestOpen} aria-controls="tag-suggest" aria-autocomplete="list"
             aria-activedescendant={suggestOpen ? `tag-opt-${cur}` : undefined}
-            placeholder={chips.length ? '' : 'Name or #tag, e.g. kind:probe'}
+            placeholder={chips.length ? '' : 'Name or #tag, e.g. type:probe'}
             value={input} onChange={(e) => onInput(e.target.value)} onKeyDown={onKeyDown}
             onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
             spellCheck={false} autoComplete="off" aria-label="Search entities by name or tag"
@@ -411,15 +414,15 @@ export function EntityBrowser() {
       <div className="facets">
         <div className="chips" role="group" aria-label="Categories">
           {categories.map(([id, n]) => {
-            const term = findTerm(query, 'cat', id);
+            const term = findTerm(query, 'type', id);
             const on = term?.effect === 'only';
             const off = term?.effect === 'hide';
             const cat = CATEGORIES.find((c) => c.id === id);
             return (
               <span key={id} className={`chip-pair${off ? ' off' : ''}`}>
                 <button
-                  className={on ? 'chip on' : 'chip'} aria-pressed={on} title={`${cat?.hint ?? id} (tag cat:${id})`}
-                  onClick={() => toggleTerm('cat', id, 'only')}>
+                  className={on ? 'chip on' : 'chip'} aria-pressed={on} title={`${cat?.hint ?? id} (tag type:${id})`}
+                  onClick={() => toggleTerm('type', id, 'only')}>
                   <i className="swatch" style={{ background: `var(--c-${id})` }} />
                   {categoryLabel(id)} <small>{n.toLocaleString('en-US')}</small>
                 </button>
@@ -427,7 +430,7 @@ export function EntityBrowser() {
                   <button
                     className={off ? 'eye off' : 'eye'} aria-pressed={off} aria-label={`${off ? 'Show' : 'Hide'} ${categoryLabel(id)}`}
                     title={off ? `Show ${categoryLabel(id)} again` : `Hide ${categoryLabel(id)} (not drawn, not listed)`}
-                    onClick={() => toggleTerm('cat', id, 'hide')}>
+                    onClick={() => toggleTerm('type', id, 'hide')}>
                     <Eye off={off} />
                   </button>
                 )}

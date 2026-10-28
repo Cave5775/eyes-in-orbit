@@ -1,28 +1,28 @@
 import { defaultBodies, launchIdFromCospar } from '@eio/core';
-import { CATEGORIES, categoryOf } from './browser-ui';
+import { matchesType, normaliseType } from './browser-ui';
 
 /**
  * Tags in the entity search field (pure). The browser's chips only offer a few general categories; a specific group is a
  * tag typed in the field:
  *
  *   group:starlink  #starlink   CelesTrak group (also `group:cosmos` for `cosmos-2251-debris`: a word prefix)
- *   kind:probe      type:probe  entity kind (`launch_vehicle`, `ground_station`, ...)
- *   cat:navigation              general category (the chips: satellites, stations, navigation, probes, ...)
+ *   type:probe      what it is: a general category (the chips: satellites, stations, navigation, probes, launch-vehicles,
+ *                   debris, ground, bodies, other) or an entity kind (satellite, launch_vehicle, ground_station, moon, ...)
  *   launch:2024-123             launch group from the COSPAR designator (`launch:1993` is every launch of that year)
  *   id:25544        norad:25544 an id or alias value: entity id, NORAD, COSPAR, ...
  *   body:earth                  what orbits that body or one of its moons (the tree nodes)
  *
  * Different keys AND together, repeated values of one key OR (`group:gps-ops group:galileo`), a leading `-` negates
- * (`-kind:debris`). Everything else, including unknown `key:value` words, is plain text for the name search. What a tag
- * does (show only those, or hide them) is the `effect` of its term in lib/query.ts.
+ * (`-type:debris`). Everything else, including unknown `key:value` words (the old `cat:` and `kind:` too), is plain text for
+ * the name search. What a tag does (show only those, or hide them) is the `effect` of its term in lib/query.ts.
  */
 
-export type TagKey = 'kind' | 'group' | 'launch' | 'cat' | 'id' | 'body';
-export const TAG_KEYS: readonly TagKey[] = ['kind', 'group', 'launch', 'cat', 'id', 'body'];
+export type TagKey = 'type' | 'group' | 'launch' | 'id' | 'body';
+export const TAG_KEYS: readonly TagKey[] = ['type', 'group', 'launch', 'id', 'body'];
 
 /** Other spellings of the keys. */
 const KEY_ALIASES: Record<string, TagKey> = {
-  kind: 'kind', type: 'kind', group: 'group', launch: 'launch', cat: 'cat', category: 'cat', id: 'id', norad: 'id', cospar: 'id', body: 'body',
+  type: 'type', group: 'group', launch: 'launch', id: 'id', norad: 'id', cospar: 'id', body: 'body',
 };
 
 /** Values by key. */
@@ -48,24 +48,9 @@ export interface TagToken {
   negated: boolean;
 }
 
-const CAT_ALIASES: Record<string, string> = {
-  vehicle: 'launch-vehicles', vehicles: 'launch-vehicles', rocket: 'launch-vehicles', rockets: 'launch-vehicles', launch: 'launch-vehicles',
-  nav: 'navigation', gnss: 'navigation', gps: 'navigation', ground_station: 'ground', 'ground-stations': 'ground', pads: 'ground', pad: 'ground',
-  sats: 'satellites', sat: 'satellites', body: 'bodies', planets: 'bodies', planet: 'bodies', moons: 'bodies', moon: 'bodies',
-};
-
-/** The canonical form of a tag value: lower case; kinds use `_`, categories their id (`cat:satellite` is `satellites`). */
+/** The canonical form of a tag value: lower case; a type is a category id or a kind with `_` (see `normaliseType`). */
 export function normaliseValue(key: TagKey, raw: string): string {
-  const v = raw.trim().toLowerCase();
-  if (key === 'kind') return v.replace(/[\s-]+/g, '_');
-  if (key === 'cat') {
-    const d = v.replace(/_/g, '-');
-    const alias = CAT_ALIASES[d];
-    if (alias) return alias;
-    if (CATEGORIES.some((c) => c.id === d)) return d;
-    return CATEGORIES.find((c) => c.id === `${d}s`)?.id ?? d;
-  }
-  return v;
+  return key === 'type' ? normaliseType(raw) : raw.trim().toLowerCase();
 }
 
 const TOKEN = /^(-?)(?:#|([A-Za-z]+):)(.*)$/;
@@ -125,8 +110,8 @@ export interface TagTarget {
 /** Does `rec` match the single tag `key:value` (value already normalised)? */
 export function matchesTag(rec: TagTarget, key: TagKey, value: string): boolean {
   switch (key) {
-    case 'kind':
-      return rec.kind.toLowerCase() === value;
+    case 'type':
+      return matchesType(rec, value);
     case 'group': {
       const g = (rec.group ?? '').toLowerCase();
       return g === value || g.startsWith(`${value}-`);
@@ -135,8 +120,6 @@ export function matchesTag(rec: TagTarget, key: TagKey, value: string): boolean 
       const l = launchIdFromCospar(rec.aliases?.cospar);
       return !!l && (l === value || l.startsWith(`${value}-`));
     }
-    case 'cat':
-      return categoryOf(rec) === value;
     case 'id': {
       if (rec.id?.toLowerCase() === value) return true;
       for (const a of Object.values(rec.aliases ?? {})) if (String(a).toLowerCase() === value) return true;
@@ -198,14 +181,18 @@ export interface TagSuggestion {
   /** shown next to the value, e.g. the launch's name */
   label?: string;
   count: number;
+  /** wins ties of the rank over the others (the general categories before the kinds) */
+  first?: boolean;
 }
 
-/** Suggestions for the tag being typed: value prefix first, then word prefix, then substring; ties by count. */
+/** Suggestions for the tag being typed: value prefix first, then word prefix, then substring; ties categories first, then by count. */
 export function suggestTags(active: ActiveTag, source: readonly TagSuggestion[], limit = 8): TagSuggestion[] {
-  const q = normaliseValue(active.key, active.partial);
+  // a type is compared as typed (`sat` must still find the kind `satellite`, which the alias `sat` would hide), `-` and `_` alike
+  const typed = active.key === 'type';
+  const q = typed ? active.partial.trim().toLowerCase().replace(/[\s_]+/g, '-') : normaliseValue(active.key, active.partial);
   const scored: { s: TagSuggestion; rank: number }[] = [];
   for (const s of source) {
-    const v = s.value.toLowerCase();
+    const v = typed ? s.value.toLowerCase().replace(/_/g, '-') : s.value.toLowerCase();
     const label = (s.label ?? '').toLowerCase();
     let rank = -1;
     if (!q) rank = 3;
@@ -215,7 +202,7 @@ export function suggestTags(active: ActiveTag, source: readonly TagSuggestion[],
     else if (v.includes(q) || label.includes(q)) rank = 3;
     if (rank >= 0) scored.push({ s, rank });
   }
-  scored.sort((a, b) => a.rank - b.rank || b.s.count - a.s.count || a.s.value.localeCompare(b.s.value));
+  scored.sort((a, b) => a.rank - b.rank || (b.s.first ? 1 : 0) - (a.s.first ? 1 : 0) || b.s.count - a.s.count || a.s.value.localeCompare(b.s.value));
   return scored.slice(0, limit).map((x) => x.s);
 }
 

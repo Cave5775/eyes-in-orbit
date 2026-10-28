@@ -1,9 +1,9 @@
-import { BODY_CATEGORY_KINDS } from './browser-ui';
+import { BODY_CATEGORY_KINDS, CATEGORIES, CATEGORY_ALIASES, normaliseType } from './browser-ui';
 import { TAG_KEYS, matchesTag, normaliseValue, parseToken, tagToken, type TagKey, type TagTarget } from './search-tags';
 
 /**
  * THE query: the one thing the search field, the entity list, the tree counts, the scene, the labels, FIT VISIBLE and the 3D
- * model layer agree on (pure). A query is a list of terms; a term is a tag (`group:starlink`, `-kind:debris`) or the typed
+ * model layer agree on (pure). A query is a list of terms; a term is a tag (`group:starlink`, `-type:debris`) or the typed
  * text, and carries an effect:
  *
  *   only  the objects must match (AND across keys, OR within a key, a negated value must not match; the text is a key too)
@@ -20,7 +20,7 @@ export interface Term {
   key: TermKey;
   /** normalised tag value (see `normaliseValue`), or the typed text for the `text` key */
   value: string;
-  /** a negated tag (`-kind:debris`); never set on the text */
+  /** a negated tag (`-type:debris`); never set on the text */
   neg?: boolean;
   effect: Effect;
 }
@@ -136,10 +136,10 @@ export const hideTerms = (q: Query): Term[] => q.terms.filter((t) => t.effect ==
 /** The typed text of a query ('' when none). */
 export const textOf = (q: Query): string => q.terms.find((t) => t.key === 'text')?.value ?? '';
 
-/** The word of a term as typed: `group:starlink`, `-kind:debris`; the text as it is. */
+/** The word of a term as typed: `group:starlink`, `-type:debris`; the text as it is. */
 export const termWord = (t: Term): string => (t.key === 'text' ? t.value : tagToken(t.key, t.value, !!t.neg));
 
-/** A term from a tag word (`#starlink`, `-kind:debris`); null when it is not one. */
+/** A term from a tag word (`#starlink`, `-type:debris`); null when it is not one. */
 export function termFromWord(word: string, effect: Effect = 'only'): Term | null {
   const t = parseToken(word);
   if (!t) return null;
@@ -164,7 +164,7 @@ export function withText(q: Query, text: string): Query {
 
 /**
  * Add tag terms. One that is in the query already (same key, value and sign) is left alone, or with `override` takes the new
- * effect (typing `cat:debris` for a hidden category makes it an only term).
+ * effect (typing `type:debris` for a hidden category makes it an only term).
  */
 export function addTerms(q: Query, add: readonly Term[], override = false): Query {
   let terms = [...q.terms];
@@ -215,6 +215,24 @@ export const serialiseQuery = (q: Query): string =>
 
 const isTagKey = (k: unknown): k is TagKey => typeof k === 'string' && (TAG_KEYS as readonly string[]).includes(k);
 
+/**
+ * The stored `cat` and `kind` tags became `type` (migration of `eio.query` and `eio.hidden`). A `cat` value keeps its old
+ * meaning: the category it named (`cat:satellite` was the category `satellites`, `cat:moon` all the bodies) as the type of
+ * that id; a `kind` value is the kind. null for a key that is neither (nor a current one) and for an empty value.
+ */
+export function migrateLegacyTag(key: unknown, value: unknown): { key: TagKey; value: string } | null {
+  if (typeof value !== 'string') return null;
+  let v: string;
+  if (key === 'cat') {
+    const d = value.trim().toLowerCase().replace(/_/g, '-');
+    v = CATEGORY_ALIASES[d] ?? (CATEGORIES.some((c) => c.id === d) ? d : CATEGORIES.find((c) => c.id === `${d}s`)?.id ?? d);
+    v = normaliseType(v);
+  } else if (key === 'kind') v = normaliseType(value);
+  else if (isTagKey(key)) v = normaliseValue(key, value);
+  else return null;
+  return v ? { key: key === 'cat' || key === 'kind' ? 'type' : (key as TagKey), value: v } : null;
+}
+
 /** Parse the stored form; anything malformed gives the empty query, bad terms are dropped. */
 export function parseStoredQuery(raw: string | null | undefined): Query {
   if (!raw) return NO_QUERY;
@@ -230,17 +248,17 @@ export function parseStoredQuery(raw: string | null | undefined): Query {
   for (const x of list) {
     if (!x || typeof x !== 'object') continue;
     const { key, value, neg, effect } = x as Record<string, unknown>;
-    if (!isTagKey(key) || typeof value !== 'string' || (effect !== 'only' && effect !== 'hide')) continue;
-    const v = normaliseValue(key, value);
-    if (!v || terms.some((t) => termIs(t, key, v, neg === true))) continue;
-    terms.push(neg === true ? { key, value: v, neg: true, effect } : { key, value: v, effect });
+    if (effect !== 'only' && effect !== 'hide') continue;
+    const m = migrateLegacyTag(key, value);
+    if (!m || terms.some((t) => termIs(t, m.key, m.value, neg === true))) continue;
+    terms.push(neg === true ? { key: m.key, value: m.value, neg: true, effect } : { key: m.key, value: m.value, effect });
   }
   return terms.length ? { terms } : NO_QUERY;
 }
 
 /**
- * The old `localStorage['eio.hidden']` ({"cat":["debris"],"group":["starlink"]}) as hide terms; malformed values give none and
- * unknown keys and non-strings are dropped. Read once at startup, then the key is deleted.
+ * The old `localStorage['eio.hidden']` ({"cat":["debris"],"group":["starlink"]}) as hide terms (`cat` and `kind` become `type`);
+ * malformed values give none and unknown keys and non-strings are dropped. Read once at startup, then the key is deleted.
  */
 export function legacyHiddenTerms(raw: string | null | undefined): Term[] {
   if (!raw) return [];
@@ -252,13 +270,12 @@ export function legacyHiddenTerms(raw: string | null | undefined): Term[] {
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
   const out: Term[] = [];
-  for (const k of TAG_KEYS) {
+  for (const k of ['cat', 'kind', ...TAG_KEYS]) {
     const v = (obj as Record<string, unknown>)[k];
     if (!Array.isArray(v)) continue;
     for (const x of v) {
-      if (typeof x !== 'string') continue;
-      const value = normaliseValue(k, x);
-      if (value && !out.some((t) => termIs(t, k, value))) out.push({ key: k, value, effect: 'hide' });
+      const m = migrateLegacyTag(k, x);
+      if (m && !out.some((t) => termIs(t, m.key, m.value))) out.push({ key: m.key, value: m.value, effect: 'hide' });
     }
   }
   return out;

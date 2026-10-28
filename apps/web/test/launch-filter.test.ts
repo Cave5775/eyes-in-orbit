@@ -42,8 +42,8 @@ describe('launch: tags', () => {
   });
 
   it('combines with the other tags', () => {
-    expect(members(launch('launch:1993-036 kind:satellite'))).toEqual([]);
-    expect(members(launch('launch:1993-036 kind:debris'))).toEqual(['sat-22675', 'sat-33791', 'sat-33792']);
+    expect(members(launch('launch:1993-036 type:satellite'))).toEqual([]);
+    expect(members(launch('launch:1993-036 type:debris'))).toEqual(['sat-22675', 'sat-33791', 'sat-33792']);
     expect(members(launch('launch:1993-036 -group:cosmos-2251-debris'))).toEqual([]);
   });
 
