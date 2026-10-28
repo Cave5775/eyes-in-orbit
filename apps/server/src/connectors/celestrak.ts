@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Omm, StreamLink } from '@eio/core';
 import { clearBackoff, isBackedOff, isBlockError, isConnectError, readBackoff, recordFailure } from '../backoff';
@@ -37,7 +37,7 @@ const GROUP_PRIORITY: SatGroup[] = ['stations', 'starlink', ...DEBRIS_GROUPS, ..
  * Download order: the big, important groups first so a failure of a later group never delays them. Every group added
  * here is one more download (more exposure to the CelesTrak 403 rate limit, each with its own backoff gate).
  */
-const FETCH_ORDER: SatGroup[] = ['stations', 'starlink', 'active', ...DEBRIS_GROUPS, ...NAV_GROUPS, AMATEUR_GROUP];
+export const FETCH_ORDER: SatGroup[] = ['stations', 'starlink', 'active', ...DEBRIS_GROUPS, ...NAV_GROUPS, AMATEUR_GROUP];
 const TTL_MS = 3 * 3600_000;
 const ISS_NORAD = 25544;
 const STATION_NAME = /^(ISS|CSS)\b|^(POISK|NAUKA|ZARYA|ZVEZDA|TIANGONG|TIANHE|WENTIAN|MENGTIAN)\b/i;
@@ -134,12 +134,26 @@ export function loadGroupFile(dir: string, group: SatGroup): Omm[] | undefined {
 
 type Source = 'live' | 'cache' | 'file';
 
-/** Everything that does not touch the network: the SQLite entry of any age, then the hand-saved file. */
+/** Like `loadGroupFile`, with the time the file was saved so it can be compared with the cache. */
+export function loadGroupFileStamped(dir: string, group: SatGroup): { omms: Omm[]; savedAt: number } | undefined {
+  try {
+    const path = join(dir, `${group}.json`);
+    const omms = parseOmmJson(readFileSync(path, 'utf8'));
+    return { omms, savedAt: statSync(path).mtimeMs };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Everything that does not touch the network: the SQLite entry of any age or the saved file (`npm run celestrak:seed`,
+ * or by hand), whichever is newer, so a file seeded on another network beats an old cache entry.
+ */
 function localGroup(ctx: ConnectorContext, group: SatGroup): { omms: Omm[]; source: Source } | undefined {
   const cached = ctx.store.get<Omm[]>(`celestrak:${group}`);
-  if (cached) return { omms: cached.value, source: 'cache' };
-  const omms = loadGroupFile(join(ctx.config.dataDir, 'celestrak'), group);
-  return omms && { omms, source: 'file' };
+  const file = loadGroupFileStamped(join(ctx.config.dataDir, 'celestrak'), group);
+  if (cached && (!file || cached.fetchedAt >= file.savedAt)) return { omms: cached.value, source: 'cache' };
+  return file && { omms: file.omms, source: 'file' };
 }
 
 const hhmm = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
@@ -206,10 +220,12 @@ export function createCelestrak(opts: CelestrakOptions = {}): Connector {
           const res = await ctx.cachedFetch(source, url, TTL_MS, parseOmmJson, headers);
           groups[group] = res.value;
           if (res.stale) {
-            // cachedFetch fell back to an old entry because the download failed
+            // cachedFetch fell back to an old entry because the download failed; a newer saved file beats it
             const next = recordFailure(ctx.store, source, res.error ?? 'download failed');
             retryAt = Math.min(retryAt, next.notBefore);
-            degraded.push(`${group}: ${res.error ?? 'download failed'}, using cache`);
+            const local = localGroup(ctx, group);
+            if (local) groups[group] = local.omms;
+            degraded.push(`${group}: ${res.error ?? 'download failed'}, using ${local?.source === 'file' ? 'data file' : 'cache'}`);
             if (isBlockError(res.error ?? '')) halt = `${group} failed`;
           } else clearBackoff(ctx.store, source);
         } catch (err) {

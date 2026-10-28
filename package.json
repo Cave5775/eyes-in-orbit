@@ -13,7 +13,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p packages/core --noEmit && tsc -p apps/server --noEmit && tsc -p apps/web --noEmit",
     "assets": "node scripts/fetch-assets.mjs",
-    "celestrak:probe": "tsx apps/server/src/celestrak-probe.ts"
+    "celestrak:probe": "tsx apps/server/src/celestrak-probe.ts",
+    "celestrak:seed": "tsx apps/server/src/celestrak-seed.ts"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
