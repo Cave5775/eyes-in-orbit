@@ -11,7 +11,7 @@ const FLUSH_MS = 1000;
 /**
  * What an ISSLIVE item is, for building the structured `IssArrays` message.
  * Item ids and names come from the ISS Mimic project's public telemetry table (https://iss-mimic.github.io/Mimic/); the
- * `verified` flag says whether this project checked the item against live data (README, "ISS array telemetry").
+ * `verified` flag says whether this project checked the item against live data (docs/reference.md, "ISS array telemetry").
  */
 export type IssRole =
   | { kind: 'sarj'; side: 'port' | 'starboard' }
