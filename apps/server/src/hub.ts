@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import {
-  EntityGraph, type Article, type ConnectorHealth, type DsnSnapshot, type EntityRecord, type IssArrays, type IssFix, type Launch,
+  classifyFeed, EntityGraph, type Article, type ConnectorHealth, type DsnSnapshot, type EntityRecord, type IssArrays, type IssFix, type Launch,
   type LiveAscent, type TelemetryPoint,
 } from '@eio/core';
 import type { Trajectory } from './trajectory';
@@ -100,8 +100,9 @@ export class Hub extends EventEmitter {
     return h;
   }
 
+  /** The health records as sent to clients (REST and WebSocket): each carries its `feed` colour level and reason. */
   healthList(): ConnectorHealth[] {
-    return [...this.health.values()];
+    return [...this.health.values()].map((h) => ({ ...h, feed: classifyFeed(h) }));
   }
 
   subscribe(topic: string): void {

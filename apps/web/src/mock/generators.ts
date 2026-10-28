@@ -1,5 +1,5 @@
 import {
-  DEG, EARTH, LL2_STATUS, MARS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, deriveMissionState,
+  DEG, EARTH, LL2_STATUS, classifyFeed, MARS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, deriveMissionState,
   missionTimingFor, modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, orbitSegmentsOf, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
@@ -444,9 +444,10 @@ export function mockNews(nowMs: number, q?: string): Article[] {
   return needle ? arts.filter((a) => a.title.toLowerCase().includes(needle.split(/\s+/)[0])) : arts;
 }
 
+/** Sample connectors in every colour level so the mock health indicator shows them (the server attaches `feed` the same way). */
 export function mockHealth(nowMs: number): ConnectorHealth[] {
   const ok = (id: string, ageSec: number, runs: number, note?: string): ConnectorHealth => ({ id, status: 'ok', lastOkAt: nowMs - ageSec * 1000, runs, note, nextRunAt: nowMs + 60_000 });
-  return [
+  const rows: ConnectorHealth[] = [
     ok('celestrak', 1800, 4, 'mock'),
     ok('launch-library-2', 240, 20, 'mock'),
     ok('spaceflight-news', 95, 31, 'mock'),
@@ -454,7 +455,13 @@ export function mockHealth(nowMs: number): ConnectorHealth[] {
     ok('horizons', 7200, 2, 'mock'),
     { id: 'bodies', status: 'ok', lastOkAt: nowMs, runs: 1, note: '4 bodies (mock)' },
     { id: 'iss-live', status: 'stub', runs: 0, note: 'mock' },
+    { id: 'spacetrack', status: 'ok', lastOkAt: nowMs - 3 * 3600_000, runs: 5, fromCache: true, lastError: 'earlier failure (next attempt 14:30Z)', note: '5000 Starlink element sets (mock)' },
+    { id: 'snapi', status: 'ok', lastOkAt: nowMs - 400_000, runs: 9, lastError: `HTTP 429 for https://api.spaceflightnewsapi.net/ [retry-after=900]`, fromCache: true },
+    { id: 'dsn-xml', status: 'error', lastOkAt: nowMs - 86_400_000, runs: 40, failures: 2, lastError: 'The operation was aborted due to timeout', lastErrorAt: nowMs - 30_000, nextRunAt: nowMs + 45_000 },
+    { id: 'iss-rest', status: 'error', runs: 12, failures: 6, lastError: 'fetch failed (UND_ERR_CONNECT_TIMEOUT)', lastErrorAt: nowMs - 10_000, nextRunAt: nowMs + 60_000 },
+    { id: 'flightclub', status: 'disabled', runs: 0, note: 'DISABLED_CONNECTORS' },
   ];
+  return rows.map((h) => ({ ...h, feed: classifyFeed(h) }));
 }
 
 export function mockIssFix(omm: Omm, tMs: number): IssFix | undefined {

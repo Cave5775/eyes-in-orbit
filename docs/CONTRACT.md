@@ -24,6 +24,20 @@ Environment notes: Windows, Git Bash/PowerShell, Node 24, npm workspaces (no pnp
 | `GET /api/credentials` | localhost only. `{credentials: CredentialInfo[]}` (`feeds.ts`): `{key, label, connector, secret, set, source: 'ui'\|'env'\|null, value?}`. `value` is present only for non-secret fields; secrets are never returned |
 | `PUT /api/credentials` | localhost only. Body `{values: {spacetrackUser?, spacetrackPassword?, ll2Token?}}`, a string sets, `null` or `""` removes the UI value (falls back to the env var). All-or-nothing validation, 400 with a message on unknown keys, non-strings, control characters or more than 256 chars. Applies at once (connectors waiting for credentials start; Space-Track cache and retry gate reset on a changed login). Replies `{ok, changed, credentials}` |
 
+**Health payload.** Each `ConnectorHealth` (`GET /api/health`, WebSocket `health`) keeps its raw fields (`status` idle|ok|error|disabled|stub, `lastOkAt`, `lastError`, `nextRunAt`, `runs`, `note`, `fromCache`) plus `failures` (consecutive failed runs), `offline` (OFFLINE=1 and the connector needs the network) and `feed`, computed by the server with `classifyFeed` (`packages/core/src/feed-state.ts`):
+
+```ts
+feed: {
+  level: 'ok' | 'orange' | 'red' | 'off', // green | degraded, data or a temporary cause | nothing usable | disabled/OFFLINE/stub/not run
+  reason: FeedReason,  // ok idle disabled offline stub no-credentials partial backoff rate-limited timeout server-error no-ephemeris stale blocked unreachable auth invalid repeated error
+  note?: string,       // the last error (or the connector note when ok)
+  retryUtc?: string,   // 'HH:MMZ' when the message says the feed is waiting for a retry time
+  hasData: boolean,    // an earlier run delivered data the app still holds
+}
+```
+
+Orange = degraded but data is still there or the cause is temporary (backoff while serving cache/file data, partial results, HTTP 429, stale-cache fallback, a timeout or 5xx for a feed that has delivered, no ephemeris for one target). Red = nothing usable (HTTP 403 / connect timeout / reset / unreadable response with no data, HTTP 401 or a failed login, 3 failed runs in a row with no data). Clients should use `feed` and may fall back to `classifyFeed(h)` for a record without it.
+
 ## WebSocket `/stream` (JSON `ServerMessage` / `ClientMessage` from `feeds.ts`)
 Server sends `hello` on connect, then pushes: `entities.changed` (client then refetches `/api/entities?since=`), `launches`, `news`, `dsn`, `health`, and `iss.fix` (1 Hz) / `iss.telemetry` / `iss.arrays` (about 1 Hz, `{type:'iss.arrays', arrays: IssArrays}`) **only while at least one client has subscribed to topic `iss`**. Client topics: `iss` (others always pushed). Server pings; client auto-reconnects with backoff.
 

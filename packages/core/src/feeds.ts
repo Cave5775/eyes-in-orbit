@@ -1,3 +1,4 @@
+import type { FeedState } from './feed-state';
 import type { MissionPhase, StreamLink } from './types';
 
 /** Normalised launch record (from Launch Library 2). */
@@ -119,6 +120,12 @@ export interface ConnectorHealth {
   note?: string;
   /** true when the last response was served from the local cache */
   fromCache?: boolean;
+  /** consecutive failed runs (0 after a successful one) */
+  failures?: number;
+  /** OFFLINE=1 and this connector would need the network */
+  offline?: boolean;
+  /** colour level and reason, computed by the server (`classifyFeed`); absent on records that did not come from it */
+  feed?: FeedState;
 }
 
 /** Messages pushed over the WebSocket. */

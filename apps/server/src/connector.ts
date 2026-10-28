@@ -69,6 +69,7 @@ export class Scheduler {
   ) {
     for (const connector of connectors) {
       const health = deps.hub.healthOf(connector.id);
+      if (deps.config.offline && connector.network !== false) health.offline = true;
       const slot: Slot = {
         connector, failures: 0, running: false, stopped: false, gated: false, stale: false, fetches: 0,
         ctx: {
@@ -183,7 +184,7 @@ export class Scheduler {
     try {
       await connector.run!(ctx);
       slot.failures = 0;
-      Object.assign(ctx.health, { status: 'ok', lastOkAt: Date.now() });
+      Object.assign(ctx.health, { status: 'ok', lastOkAt: Date.now(), failures: 0 });
       if (!slot.stale) ctx.health.lastError = undefined;
     } catch (err) {
       this.fail(slot, err);
@@ -206,7 +207,7 @@ export class Scheduler {
   private fail(slot: Slot, err: unknown): void {
     slot.failures++;
     const msg = err instanceof Error ? err.message : String(err);
-    Object.assign(slot.ctx.health, { status: 'error', lastError: msg, lastErrorAt: Date.now() });
+    Object.assign(slot.ctx.health, { status: 'error', lastError: msg, lastErrorAt: Date.now(), failures: slot.failures });
     slot.ctx.log(`error: ${msg}`);
   }
 

@@ -1,11 +1,11 @@
 import type { CredentialInfo, CredentialKey } from '@eio/core';
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
+import { feedView } from '../lib/feed-health';
 import { fmtAgo } from '../lib/format';
 import { useStore } from '../state/store';
 import { useWallNow } from './hooks';
 
-const STATUS_TONE: Record<string, string> = { ok: 'ok', error: 'bad', idle: 'dim', disabled: 'dim', stub: 'warn' };
 
 /**
  * API keys and logins for connectors that need them (Space-Track, Launch Library 2). Values go to the local server only,
@@ -70,7 +70,7 @@ export function CredentialsPanel() {
                   <span className="health-id">{id}</span>
                   {h && (
                     <span className="keys-status dim" title={h.lastError ?? h.note}>
-                      <i className={`dot ${STATUS_TONE[h.status] ?? 'dim'}`} />
+                      <i className={`dot ${feedView(h).tone}`} />
                       {h.status === 'ok' ? `ok ${fmtAgo(h.lastOkAt, now)}` : h.status}
                       {h.status === 'error' && h.lastError ? `: ${h.lastError}` : h.note ? `: ${h.note}` : ''}
                     </span>

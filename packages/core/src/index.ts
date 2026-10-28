@@ -10,6 +10,7 @@ export * from './entity-graph';
 export * from './providers';
 export * from './hierarchy';
 export * from './feeds';
+export * from './feed-state';
 export * from './ascent';
 export * from './ascent-model';
 export * from './booster';

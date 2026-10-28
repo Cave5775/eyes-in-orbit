@@ -10,6 +10,7 @@
   --ok: #58c28b;
   --warn: #e0a43a;
   --bad: #e0605a;
+  --orange: #ee7f2d; /* a datafeed that is degraded; red (--bad) = failed, grey (--dim) = off. Always paired with a text badge */
 
   /* the object categories (lib/browser-ui.ts CATEGORIES holds the same values): colour = category in the scene, lists, legend and labels.
      Nine colours for a dark background: contrast 4.8:1 or more against --bg, and told apart under protan, deutan and tritan vision. */
@@ -39,6 +40,7 @@ a:hover { text-decoration: underline; }
 .ok { color: var(--ok); }
 .warn { color: var(--warn); }
 .bad { color: var(--bad); }
+.orange { color: var(--orange); }
 .accent { color: var(--accent); }
 
 /* ---- layout ---- */
@@ -118,6 +120,7 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .chip.ok { border-color: rgba(88, 194, 139, 0.5); color: var(--ok); }
 .chip.warn { border-color: rgba(224, 164, 58, 0.5); color: var(--warn); }
 .chip.bad { border-color: rgba(224, 96, 90, 0.5); color: var(--bad); }
+.chip.orange { border-color: rgba(238, 127, 45, 0.55); color: var(--orange); }
 .chip.clear { color: var(--bad); border-color: rgba(224, 96, 90, 0.4); text-transform: uppercase; }
 .chip.link { color: var(--accent); text-transform: none; font-family: var(--mono); }
 .chip.link:disabled { color: var(--dim); cursor: default; }
@@ -125,6 +128,7 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .dot.warn { background: var(--warn); }
 .dot.bad { background: var(--bad); }
+.dot.orange { background: var(--orange); }
 .dot.accent { background: var(--accent); }
 
 /* ---- top bar ---- */
@@ -174,11 +178,14 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
   position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; background: var(--panel-2); border: 1px solid var(--line-2);
   border-radius: 4px; padding: 8px 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
 }
-.health-pop { width: 380px; }
+.health-pop { width: 460px; max-width: calc(100vw - 16px); }
 .pop-title { font-size: 10px; letter-spacing: 0.12em; color: var(--dim); margin-bottom: 6px; }
-.health-row { display: grid; grid-template-columns: 14px 128px 92px 1fr; align-items: center; gap: 4px; padding: 3px 0; border-top: 1px solid var(--line); }
+.health-row { display: grid; grid-template-columns: 14px 128px 104px 1fr; align-items: center; gap: 4px; padding: 3px 0; border-top: 1px solid var(--line); }
 .health-id { color: var(--text); font-family: var(--mono); font-size: 11px; }
 .health-row .mono { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.health-btn .chip { margin-left: 6px; }
+.health-badge { font-size: 10px; letter-spacing: 0.04em; }
+.health-badge.dim { color: var(--dim); }
 .health-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 
 /* ---- API keys panel ---- */

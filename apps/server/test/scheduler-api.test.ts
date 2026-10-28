@@ -113,6 +113,33 @@ describe('scheduler', () => {
     expect(hub.healthOf('local').runs).toBeGreaterThan(1);
     scheduler.stop();
   });
+
+  it('reports a feed level: orange after one failure, red once it keeps failing with no data, grey offline, green after a clean run', async () => {
+    let fail = true;
+    const { hub, scheduler } = setup([
+      { id: 'c', intervalMs: 1000, run: async () => { if (fail) throw new Error('boom'); } },
+      { id: 'soft', intervalMs: 1000, run: async (ctx) => ctx.softFail('stations: waiting until 14:30Z (HTTP 403), using cache', 60_000) },
+    ]);
+    const feed = (id: string) => hub.healthList().find((h) => h.id === id)!.feed;
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(hub.healthOf('c').failures).toBe(1);
+    expect(feed('c')).toMatchObject({ level: 'orange', reason: 'error' });
+    expect(feed('soft')).toMatchObject({ level: 'orange', reason: 'backoff', retryUtc: '14:30Z' });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(feed('c')).toMatchObject({ level: 'red', reason: 'repeated' });
+    fail = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(feed('c')).toMatchObject({ level: 'ok', reason: 'ok' });
+    expect(hub.healthOf('c').failures).toBe(0);
+    scheduler.stop();
+
+    const off = setup([{ id: 'net', intervalMs: 1000, run: async () => undefined }], { OFFLINE: '1' });
+    await off.scheduler.start();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(off.hub.healthList()[0].feed).toMatchObject({ level: 'off', reason: 'offline' });
+    off.scheduler.stop();
+  });
 });
 
 describe('api', () => {

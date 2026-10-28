@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { feedCounts, feedView, sortFeeds } from '../lib/feed-health';
 import { fmtAgo } from '../lib/format';
 import { useStore, type ConnState } from '../state/store';
 import { useWallNow } from './hooks';
@@ -11,40 +12,40 @@ const CONN_LABEL: Record<ConnState, [string, string]> = {
   mock: ['MOCK DATA', 'accent'],
 };
 
-const STATUS_TONE: Record<string, string> = { ok: 'ok', error: 'bad', idle: 'dim', disabled: 'dim', stub: 'warn' };
-
-/** Connection state plus per-connector freshness from `/api/health`. */
+/** Connection state plus per-connector freshness from `/api/health`; the dot colour of each connector comes from `lib/feed-health.ts`. */
 export function HealthIndicator() {
   const conn = useStore((s) => s.conn);
   const health = useStore((s) => s.health);
   const [open, setOpen] = useState(false);
   const now = useWallNow(1000);
   const [label, tone] = CONN_LABEL[conn];
-  const bad = health.filter((h) => h.status === 'error').length;
+  const { red, orange } = feedCounts(health);
 
   return (
     <div className="health">
       <button className="btn health-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <i className={`dot ${tone}`} />
         <span>{label}</span>
-        {bad > 0 && <span className="chip bad">{bad} ERR</span>}
+        {red > 0 && <span className="chip bad" title={`${red} data connector${red === 1 ? '' : 's'} failing`}>{red} FAIL</span>}
+        {orange > 0 && <span className="chip orange" title={`${orange} data connector${orange === 1 ? '' : 's'} degraded`}>{orange} WARN</span>}
       </button>
       {open && (
         <div className="popover health-pop">
           <div className="pop-title">DATA CONNECTORS</div>
           {health.length === 0 && <div className="dim">No health data yet.</div>}
-          {health.map((h) => (
-            <div key={h.id} className="health-row">
-              <i className={`dot ${STATUS_TONE[h.status] ?? 'dim'}`} />
-              <span className="health-id">{h.id}</span>
-              <span className="mono dim">{h.status === 'ok' ? fmtAgo(h.lastOkAt, now) : h.status}</span>
-              {(h.lastError || h.note || h.fromCache) && (
-                <span className="health-note dim" title={h.lastError ?? h.note}>
-                  {h.fromCache ? 'cached ' : ''}{h.status === 'error' ? h.lastError : h.note}
+          {sortFeeds(health).map((h) => {
+            const v = feedView(h);
+            return (
+              <div key={h.id} className="health-row" title={v.title} data-level={v.level}>
+                <i className={`dot ${v.tone}`} />
+                <span className="health-id">{h.id}</span>
+                <span className={`mono health-badge ${v.tone}`}>{v.level === 'ok' ? `${v.badge} ${fmtAgo(h.lastOkAt, now)}` : v.badge}</span>
+                <span className="health-note dim">
+                  {v.level === 'ok' ? (v.note ?? '') : `${v.words}${v.retry ? ` (${v.retry})` : ''}${v.note ? `: ${v.note}` : ''}`}
                 </span>
-              )}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
