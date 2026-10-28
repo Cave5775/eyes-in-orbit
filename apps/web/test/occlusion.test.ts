@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { EARTH, geodeticToFixed } from '@eio/core';
-import { ELLIPSOID_K, chordSagKm, earthOccludes, horizonDistanceKm, makeOccluder, occlusionC2, sphereOccludes, sphereView } from '../src/lib/occlusion';
+import { ELLIPSOID_K, MAX_OCCLUDERS, OccluderSet, chordSagKm, earthOccludes, horizonDistanceKm, sphereOccludes, sphereView, type SceneBody } from '../src/lib/occlusion';
 import type { V3 } from '../src/lib/camera';
+import { glslBodyHides } from './glsl-occlusion';
 
 const RE = EARTH.radiusKm;
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
+/** A drawn body at world position `c` seen from the camera at `cam` (what `CelestialLayer.bodies()` holds). */
+const body = (c: V3, radiusKm: number, cam: V3, flattening = 0, id = 'b'): SceneBody => ({ entityId: id, c, rel: sub(c, cam), radiusKm, k: 1, flattening });
+const earthBody = (cam: V3): SceneBody => body([0, 0, 0], RE, cam, EARTH.flattening, 'body-earth');
+/** The frame's occluders for these bodies (a 60 degree view on 700 px; `minPx` 0 keeps every body, whatever its size). */
+function occluders(bodies: SceneBody[], minPx = 0): OccluderSet {
+  const set = new OccluderSet();
+  set.build(bodies, 60, 700, minPx);
+  return set;
+}
 
 describe('chordSagKm', () => {
   it('matches the closed form and grows with the square of the chord', () => {
@@ -54,9 +65,9 @@ describe('earthOccludes', () => {
     expect(earthOccludes(cam, sub(at(400), cam))).toBe(true);
   });
 
-  it('makeOccluder agrees with earthOccludes', () => {
+  it('the OccluderSet with the Earth in it agrees with earthOccludes', () => {
     const cam: V3 = [RE + 3, 40, -20];
-    const occ = makeOccluder(cam);
+    const occ = occluders([earthBody(cam)]).hides;
     let hidden = 0;
     for (let i = 0; i < 400; i++) {
       const a = i * 0.7, b = i * 0.31;
@@ -74,11 +85,15 @@ describe('earthOccludes', () => {
   });
 
   it('exposes the c2 term used by the shader: positive outside, scaled in z by the flattening', () => {
-    expect(occlusionC2([RE + 1000, 0, 0])).toBeGreaterThan(0);
+    const view = (cam: V3) => sphereView([-cam[0], -cam[1], -cam[2]], RE, EARTH.flattening);
+    expect(view([RE + 1000, 0, 0]).c2).toBeGreaterThan(0);
     // polar axis: the ellipsoid is shorter there, so the same geocentric radius is further outside
-    const polar = occlusionC2([0, 0, RE * (1 - EARTH.flattening) + 10]);
-    expect(polar).toBeGreaterThan(0);
+    const polar = view([0, 0, RE * (1 - EARTH.flattening) + 10]);
+    expect(polar.c2).toBeGreaterThan(0);
+    expect(polar.k).toBeCloseTo(ELLIPSOID_K, 12);
     expect(ELLIPSOID_K).toBeGreaterThan(1);
+    // a 10 km polar altitude is outside; 10 km below the polar surface is inside (the sphere of radius a would say outside)
+    expect(view([0, 0, RE * (1 - EARTH.flattening) - 10]).c2).toBeLessThan(0);
   });
 
   it('horizonDistance matches the closed form', () => {
@@ -88,14 +103,14 @@ describe('earthOccludes', () => {
   });
 });
 
-describe('sphere occluders (Moon and Sun)', () => {
+describe('sphere occluders (Moon, Sun, Mars: any body)', () => {
   const MOON_R = 1737.4;
   const SUN_R = 695700;
   const moonC: V3 = [384400, 0, 0];
 
   it('hides a point behind the sphere, not one in front, beside it or on its near surface', () => {
     const cam: V3 = [RE + 400, 0, 0];
-    const occ = makeOccluder(cam, undefined, [{ c: moonC, r: MOON_R }]);
+    const occ = occluders([body(moonC, MOON_R, cam)]).hides;
     const rel = (p: V3) => sub(p, cam);
     const hidden = (p: V3) => occ(...rel(p));
     expect(hidden([moonC[0] + 5000, 0, 0])).toBe(true); // far behind the Moon
@@ -107,7 +122,7 @@ describe('sphere occluders (Moon and Sun)', () => {
     expect(hidden([moonC[0] - MOON_R + 0.05, 0, 0])).toBe(false); // on the near surface (a lander): margin keeps it shown
     expect(hidden([moonC[0] - MOON_R - 5, 0, 0])).toBe(false); // just above the near surface
     expect(hidden([moonC[0] + MOON_R + 5, 0, 0])).toBe(true); // just past the far surface
-    const far = makeOccluder([1e6, 0, 0], undefined, [{ c: moonC, r: MOON_R }]); // camera beyond the Moon
+    const far = occluders([body(moonC, MOON_R, [1e6, 0, 0])]).hides; // camera beyond the Moon
     expect(far(1e6, 0, 0)).toBe(false); // looking away from it
   });
 
@@ -115,7 +130,7 @@ describe('sphere occluders (Moon and Sun)', () => {
     const cam: V3 = [123456, -2e5, 3e4];
     const c: V3 = [cam[0] + 40000, cam[1] + 10000, cam[2] - 5000];
     const r = 6000;
-    const v = sphereView(cam, { c, r }, 0);
+    const v = sphereView(sub(c, cam), r, 0, 0);
     let hit = 0;
     for (let i = 0; i < 3000; i++) {
       // directions within about 3 angular radii of the sphere's centre, so a good share of the cases hit it
@@ -141,16 +156,18 @@ describe('sphere occluders (Moon and Sun)', () => {
 
   it('ignores a sphere the camera is inside, and a radius of zero', () => {
     const cam: V3 = [moonC[0] + 500, 0, 0]; // inside the Moon
-    const occ = makeOccluder(cam, undefined, [{ c: moonC, r: MOON_R }]);
+    const occ = occluders([body(moonC, MOON_R, cam)]).hides;
     expect(occ(1e6, 0, 0)).toBe(false);
-    const never = makeOccluder([RE + 400, 0, 0], undefined, [{ c: [0, 0, 0], r: 0 }]);
-    expect(never(1000, 0, 0)).toBe(false);
+    const set = occluders([body([0, 0, 0], 0, [RE + 400, 0, 0])]);
+    expect(set.count).toBe(0); // a radius of zero gets no slot
+    expect(set.hides(1000, 0, 0)).toBe(false);
+    expect(occluders([body(moonC, MOON_R, cam)]).count).toBe(0); // inside the Moon: no slot either
   });
 
   it('keeps the Earth path unchanged and combines with the spheres', () => {
     const cam: V3 = [RE + 1000, 0, 0];
-    const plain = makeOccluder(cam);
-    const both = makeOccluder(cam, undefined, [{ c: moonC, r: MOON_R }]);
+    const plain = occluders([earthBody(cam)]).hides;
+    const both = occluders([earthBody(cam), body(moonC, MOON_R, cam)]).hides;
     for (let i = 0; i < 300; i++) {
       const a = i * 0.7, b = i * 0.31;
       const p: V3 = [Math.cos(a) * Math.cos(b) * (RE + (i % 7) * 900), Math.sin(a) * Math.cos(b) * (RE + (i % 5) * 400), Math.sin(b) * (RE + (i % 3) * 5000)];
@@ -164,28 +181,10 @@ describe('sphere occluders (Moon and Sun)', () => {
 
   it('works with the Moon camera view: points behind the lunar limb are hidden, the sky above is not', () => {
     const cam: V3 = [moonC[0], moonC[1] + MOON_R * 1.5, moonC[2]]; // 870 km above the surface
-    const occ = makeOccluder(cam, undefined, [{ c: moonC, r: MOON_R }]);
+    const occ = occluders([body(moonC, MOON_R, cam)]).hides;
     expect(occ(...sub([moonC[0], moonC[1] - MOON_R - 300, moonC[2]], cam))).toBe(true); // far side
     expect(occ(...sub([moonC[0], moonC[1] + MOON_R + 300, moonC[2]], cam))).toBe(false); // above the camera's surface
   });
-
-  /** Float32 mirror of the shader's sphere test (every operation rounded), inputs rounded as the uniforms and attributes are. */
-  function shaderSphere(cRel: V3, r: number, c2: number, rel: V3): boolean {
-    const f = Math.fround;
-    const cx = f(cRel[0]), cy = f(cRel[1]), cz = f(cRel[2]);
-    const px = f(rel[0]), py = f(rel[1]), pz = f(rel[2]);
-    const L = f(Math.sqrt(f(f(f(px * px) + f(py * py)) + f(pz * pz))));
-    if (L <= 0) return false;
-    const ux = f(px / L), uy = f(py / L), uz = f(pz / L);
-    const b = f(f(f(ux * cx) + f(uy * cy)) + f(uz * cz));
-    if (b <= 0) return false;
-    const x = f(f(uy * cz) - f(uz * cy)), y = f(f(uz * cx) - f(ux * cz)), z = f(f(ux * cy) - f(uy * cx));
-    const p = f(Math.sqrt(f(f(f(x * x) + f(y * y)) + f(z * z))));
-    const R = f(r);
-    if (p >= R) return false;
-    const root = f(Math.sqrt(f(f(R - p) * f(R + p))));
-    return f(f(c2) / f(b + root)) < L;
-  }
 
   it('stays accurate in float32 for the Sun at 1.5e8 km (true scale) and for the compressed Sun', () => {
     for (const [dist, radius] of [[1.496e8, SUN_R], [2.4e6, SUN_R * (2.4e6 / 1.496e8)]] as const) {
@@ -193,7 +192,7 @@ describe('sphere occluders (Moon and Sun)', () => {
       const dir: V3 = [0.8, 0.5, 0.33166];
       const n = Math.hypot(...dir);
       const c: V3 = [dir[0] / n * dist, dir[1] / n * dist, dir[2] / n * dist];
-      const v = sphereView(cam, { c, r: radius });
+      const v = sphereView(sub(c, cam), radius);
       const ang = radius / dist; // angular radius, rad
       let agree = 0, hid = 0;
       for (let i = 0; i < 4000; i++) {
@@ -214,7 +213,7 @@ describe('sphere occluders (Moon and Sun)', () => {
         if (wiggle(0.9995) !== exact || wiggle(1.0005) !== exact) continue;
         agree++;
         if (exact) hid++;
-        expect(shaderSphere([v.x, v.y, v.z], v.r, v.c2, rel), `dist ${dist} case ${i}`).toBe(exact);
+        expect(glslBodyHides({ slots: [v], count: 1 }, rel[0], rel[1], rel[2]), `dist ${dist} case ${i}`).toBe(exact);
       }
       expect(agree).toBeGreaterThan(1500);
       expect(hid).toBeGreaterThan(300);

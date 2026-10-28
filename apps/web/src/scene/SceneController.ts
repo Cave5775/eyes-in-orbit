@@ -11,16 +11,16 @@ import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_CTX, NO_QUERY, classify, isDrawn, queryActive, type Class, type Ctx, type Query } from '../lib/query';
-import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
+import { OccluderSet } from '../lib/occlusion';
 import { liftNearSurface } from '../lib/paths';
 import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
-import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM, discGroups, hiddenByDisc, type DiscGroup } from '../lib/disc-hide';
+import { discGroups, hiddenByDisc, type DiscGroup } from '../lib/disc-hide';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
-import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial } from './materials';
+import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial, setOccluderUniforms } from './materials';
 import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
 import type { DetailView } from '../lib/earth-detail';
 import { CelestialLayer } from './celestial';
@@ -182,8 +182,10 @@ export class SceneController {
   /** What is actually rendered: same orientation and lens, but at the origin (floating origin, see `lib/floating-origin.ts`). */
   private rcam = new THREE.PerspectiveCamera(45, 1, NEAR_KM, FAR_KM);
   private frameInfo = new RenderFrame();
-  /** Earth occlusion test for camera-relative points, rebuilt every frame */
-  private occ: (x: number, y: number, z: number) => boolean = () => false;
+  /** the occluders of this frame (every drawn body, lib/occlusion.ts): the point shader's uniforms and `occ` read the same slots, rebuilt in `prepareRender` */
+  readonly occluders = new OccluderSet();
+  /** is the camera-relative point behind a drawn body (the Earth, the Moon, the Sun, Mars, ...)? CPU twin of the point shader's test */
+  private readonly occ = this.occluders.hides;
   /** cones of the small, far bodies that hide the non-exempt points over them (lib/disc-hide.ts), rebuilt every frame in `prepareRender` */
   private discCones: DiscGroup[] = discGroups([], 45, 1);
   private rig: OrbitRig;
@@ -1219,7 +1221,7 @@ export class SceneController {
 
   /**
    * Every visible object near a screen point, highest in the hierarchy first, then newest (lib/pick.ts does the scan).
-   * Points hidden behind the Earth (or the Moon and Sun, through `occ`), filtered out or out of scope are skipped, and so are
+   * Points hidden behind a drawn body (the Earth, Moon, Sun, Mars: `occ`), filtered out or out of scope are skipped, and so are
    * the non-exempt ones over a small, far body's disc (`discCones`, the point shader's own test): the click then finds the
    * body. A plain click uses the first entry, so it agrees with the popup's list; hover takes the nearest object (`nearestFirst`).
    */
@@ -1467,6 +1469,8 @@ export class SceneController {
     const rc = this.rcam;
     rc.fov = cam.fov;
     rc.aspect = cam.aspect;
+    // every drawn body hides what is behind it: ONE list (`celestial.bodies()`) gives the occluder slots, which feed the point
+    // shader's uniforms and the CPU test (`this.occ`) alike, and the disc cones below (uniform updates, no buffer upload)
     rc.near = NEAR_KM;
     rc.far = FAR_KM;
     rc.updateProjectionMatrix();
@@ -1479,26 +1483,11 @@ export class SceneController {
     this.celestial.update(t, f.origin);
 
     const u = this.pointMat.uniforms;
-    u.uOriginS.value.set(f.origin.x, f.origin.y, f.origin.z * ELLIPSOID_K);
-    u.uC2.value = occlusionC2(f.originV3);
-    u.uOccK.value = ELLIPSOID_K;
-    // the displayed Moon and Sun hide what is behind them like the Earth does (shader uniforms, same maths as `this.occ`)
-    // (the shader has uniforms for exactly two: [Moon, Sun]; every other drawn body, Mars, hides CPU-side points only)
-    const shaderBodies = this.celestial.shaderSpheres();
-    const sph = [u.uSph0.value, u.uSph1.value];
-    for (let i = 0; i < 2; i++) {
-      const sv = sphereView(f.originV3, shaderBodies[i]);
-      sph[i].set(sv.x, sv.y, sv.z, sv.r);
-      u.uSphC2.value.setComponent(i, sv.c2);
-    }
-    this.occ = makeOccluder(f.originV3, undefined, this.celestial.occluders());
-
-    // small, far bodies hide the non-exempt points over their disc: one cone per drawn body (a uniform update, no buffer upload)
-    const o = f.originV3;
-    this.discCones = discGroups(
-      this.celestial.bodies().map((b) => ({ rel: [b.c[0] - o[0], b.c[1] - o[1], b.c[2] - o[2]] as V3, radiusKm: b.radiusKm, k: b.k, reachKm: isEarthCentre(b.entityId) ? EARTH_SYSTEM_REACH_KM : 0, depthKm: isEarthCentre(b.entityId) ? EARTH_SYSTEM_DEPTH_KM : 0 })),
-      this.camera.fov, this.container.clientHeight,
-    );
+    const bodies = this.celestial.bodies();
+    this.occluders.build(bodies, this.camera.fov, this.container.clientHeight);
+    setOccluderUniforms(u, this.occluders);
+    // small, far bodies hide the non-exempt points over their disc: one cone per drawn body
+    this.discCones = discGroups(bodies, this.camera.fov, this.container.clientHeight);
     this.discCones.forEach((g, i) => {
       u.uGroup.value[i].set(g.x, g.y, g.z, g.sinR);
       u.uGroupD.value[i] = g.dist;
@@ -1592,7 +1581,7 @@ export class SceneController {
     const radius = scopeRadius(this.rig.dist);
     const sel = this.selectedId, hov = this.hoverId, fol = this.followId;
     const f = this.frameInfo;
-    const occluded = this.occ; // built by prepareRender this frame: the Earth, the Moon and the Sun
+    const occluded = this.occ; // the slots built by prepareRender this frame: every drawn body
     const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
     let total = 0, rendered = 0;
     const tmp = this.tmp2;

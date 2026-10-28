@@ -23,8 +23,12 @@
 import type { V3 } from './camera';
 import { BODY_MIN_HIT_PX, GROUP_DISC_PX, bodyDiscRadiusPx } from './pick';
 
-/** Bodies the point shader has a slot for: Earth, Moon, Sun, Mars (every drawn body, so a click that lands on one finds nothing hidden-but-visible). */
-export const GROUP_SLOTS = 4;
+/**
+ * Cone slots in the point shader. The cones are made from the same body list as the occluders (`SceneBody` in lib/occlusion.ts,
+ * `CelestialLayer.bodies()`), in the layer's order: the first `GROUP_SLOTS` bodies get one (Earth, Moon, Sun, Mars and the
+ * planets to come; a body past the last slot has no cone, the objects over its disc stay drawn).
+ */
+export const GROUP_SLOTS = 8;
 
 /** How far above the surface the Earth's crowded low orbits reach, km: the upper edge of the LEO shell (the ISS flies at 420 km, the Starlink shells at 340 to 570 km, debris clouds to about 2000 km). */
 export const EARTH_SYSTEM_REACH_KM = 2000;
@@ -35,7 +39,7 @@ export const EARTH_SYSTEM_DEPTH_KM = 42_164;
 /** Screen margin, px, added to the cone and to the shell (the same 3 px the body's pick hit area adds to its disc). */
 export const GROUP_MARGIN_PX = 3;
 
-/** A drawn body as the camera sees it. */
+/** A drawn body as the camera sees it: a `SceneBody` (lib/occlusion.ts) is one, so the cones and the occluders share a list. */
 export interface GroupBody {
   /** centre relative to the camera in display space, km */
   rel: V3;

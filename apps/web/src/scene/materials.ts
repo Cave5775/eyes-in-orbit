@@ -1,35 +1,41 @@
 import * as THREE from 'three';
-import { EARTH } from '@eio/core';
 import { GROUP_SLOTS, offGroup } from '../lib/disc-hide';
-import { OCCLUSION_MARGIN_KM } from '../lib/occlusion';
+import { MAX_OCCLUDERS, type OccluderSet } from '../lib/occlusion';
 import { SHOW_EXEMPT_MIN } from '../lib/pick';
 
 /**
- * Uniforms the point shader needs for the analytic Earth occlusion test (see `lib/occlusion.ts`, same maths):
- * the camera in Earth-scaled space, `|o'|^2 - R'^2` computed in float64 on the CPU, the shrunk Earth radius R' and the
- * ellipsoid z scale. The test is the stable sphere form (miss distance `|cross(u, o')|`, see `sphereHides`): with the camera
- * 1.5e8 km out (the Sun frame) `b^2 - c2` would be pure float32 cancellation (b^2 ~ 2e16, R^2 ~ 4e7).
- * Plus the displayed Moon (`uSph0`) and Sun (`uSph1`) as spheres: xyz = centre relative to the camera (float64 on the
- * CPU), w = radius; `uSphC2` = `|centre|^2 - r^2` per sphere (<= 0 disables it: camera inside, or not placed yet).
+ * Uniforms the point shader needs for body occlusion: ONE array of `MAX_OCCLUDERS` slots, the camera-relative slots of the
+ * frame's `OccluderSet` (lib/occlusion.ts; every drawn body, Earth and Mars alike, chosen by apparent size) and the number in use.
+ * `uOccS[i]`: xyz = body centre relative to the camera with z scaled by the ellipsoid factor, w = shrunk radius (float64 on
+ * the CPU, then rounded); `uOccE[i]`: x = `|centre|^2 - r^2` (> 0: the camera is outside), y = the z scale (1 for a sphere, the
+ * Earth's 1 / (1 - f)). The test is the stable sphere form (`bodyHides`; miss distance `|cross(u, centre)|`): with the camera
+ * 1.5e8 km out (the Sun frame) `b^2 - c2` would be pure float32 cancellation (b^2 ~ 2e16, R^2 ~ 4e7). Arrays are built once
+ * and mutated (`setOccluderUniforms`): nothing is allocated per frame.
  */
 export function occlusionUniforms(): Record<string, THREE.IUniform> {
   return {
-    uOriginS: { value: new THREE.Vector3() },
-    uC2: { value: 0 },
-    uOccR: { value: EARTH.radiusKm - OCCLUSION_MARGIN_KM },
-    uOccK: { value: 1 },
-    uOcc: { value: 1 },
-    uSph0: { value: new THREE.Vector4() },
-    uSph1: { value: new THREE.Vector4() },
-    uSphC2: { value: new THREE.Vector2() },
+    uOccN: { value: 0 },
+    uOccS: { value: Array.from({ length: MAX_OCCLUDERS }, () => new THREE.Vector4()) },
+    uOccE: { value: Array.from({ length: MAX_OCCLUDERS }, () => new THREE.Vector2(0, 1)) },
   };
+}
+
+/** Copy the frame's occluder slots into the point material's uniforms (no allocation). */
+export function setOccluderUniforms(u: Record<string, THREE.IUniform>, set: OccluderSet): void {
+  const s = u.uOccS.value as THREE.Vector4[], e = u.uOccE.value as THREE.Vector2[];
+  for (let i = 0; i < set.count; i++) {
+    const v = set.slots[i];
+    s[i].set(v.x, v.y, v.z, v.r);
+    e[i].set(v.c2, v.k);
+  }
+  u.uOccN.value = set.count;
 }
 
 /**
  * Per-point colour, pixel size (0 hides), glyph and scope flag; screen-space sized so 12k objects stay legible.
  * Positions arrive camera-relative (floating origin). Points are NOT depth tested: a sprite has one depth for all its
- * pixels, so against the Earth's depth it was half clipped at the limb (and z-fought on the ground). Instead the vertex
- * shader hides a point whose line of sight crosses the Earth (analytic ray test) and `aShow` (scope policy, 0/1) hides
+ * pixels, so against a body's depth it was half clipped at the limb (and z-fought on the ground). Instead the vertex
+ * shader hides a point whose line of sight crosses any drawn body (analytic ray test against the occluder slots) and `aShow` (scope policy, 0/1) hides
  * out-of-scope points. `aShow >= 1.5` (2) marks a point exempt from the small-disc hiding: `uGroup[i]` is a body's cone
  * (xyz unit direction from the camera, w the sine of its angular radius, > 1 = off) and `uGroupD[i]` the distance to its
  * centre and `uGroupE[i]` the radius of a shell about it (the body's own system, LEO for the Earth) and how far behind the centre
@@ -53,14 +59,9 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
       attribute float aGlyph;
       attribute float aShow;
       uniform float uPx;
-      uniform vec3 uOriginS;
-      uniform float uC2;
-      uniform float uOccR;
-      uniform float uOccK;
-      uniform float uOcc;
-      uniform vec4 uSph0;
-      uniform vec4 uSph1;
-      uniform vec2 uSphC2;
+      uniform int uOccN;
+      uniform vec4 uOccS[${MAX_OCCLUDERS}];
+      uniform vec2 uOccE[${MAX_OCCLUDERS}];
       uniform vec4 uGroup[${GROUP_SLOTS}];
       uniform float uGroupD[${GROUP_SLOTS}];
       uniform vec2 uGroupE[${GROUP_SLOTS}];
@@ -82,31 +83,27 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         }
         return false;
       }
-      bool earthHides(vec3 rel) {
-        if (uOcc < 0.5 || uC2 <= 0.0) return false;
-        vec3 d = vec3(rel.xy, rel.z * uOccK);
-        float L = length(d);
-        if (L <= 0.0) return false;
-        vec3 u = d / L;
-        float b = dot(uOriginS, u);
-        if (b >= 0.0) return false;
-        float p = length(cross(uOriginS, u));
-        if (p >= uOccR) return false;
-        return uC2 / (-b + sqrt((uOccR - p) * (uOccR + p))) < L;
-      }
-      // Moon / Sun: sphere s (xyz camera-relative centre, w radius) with c2 = |centre|^2 - r^2 from the CPU. The miss
-      // distance is |cross(u, centre)| (no |centre|^2 - t^2 cancellation: the Sun is 1.5e8 km away, its radius 7e5) and the
-      // near hit is c2 / (b + sqrt((r - p)(r + p))). Same maths as sphereOccludes in lib/occlusion.ts.
-      bool sphereHides(vec3 rel, vec4 s, float c2) {
-        if (uOcc < 0.5 || c2 <= 0.0) return false;
-        float L = length(rel);
-        if (L <= 0.0) return false;
-        vec3 u = rel / L;
-        float b = dot(u, s.xyz);
-        if (b <= 0.0) return false;
-        float p = length(cross(u, s.xyz));
-        if (p >= s.w) return false;
-        return c2 / (b + sqrt((s.w - p) * (s.w + p))) < L;
+      // Any drawn body in front of the point: slot s (xyz camera-relative centre with z scaled by the ellipsoid factor k, w radius,
+      // e.x = c2 = |centre|^2 - r^2, e.y = k) from the CPU. The miss distance is |cross(u, centre)| (no |centre|^2 - t^2
+      // cancellation: the Sun is 1.5e8 km away, its radius 7e5) and the near hit is c2 / (b + sqrt((r - p)(r + p))).
+      // THE same maths as sphereOccludes in lib/occlusion.ts (the CPU test), over the same slots, line for line.
+      bool bodyHides(vec3 rel) {
+        for (int i = 0; i < ${MAX_OCCLUDERS}; i++) {
+          if (i >= uOccN) break;
+          vec4 s = uOccS[i];
+          vec2 e = uOccE[i];
+          if (e.x <= 0.0) continue;
+          vec3 d = vec3(rel.xy, rel.z * e.y);
+          float L = length(d);
+          if (L <= 0.0) continue;
+          vec3 u = d / L;
+          float b = dot(u, s.xyz);
+          if (b <= 0.0) continue;
+          float p = length(cross(u, s.xyz));
+          if (p >= s.w) continue;
+          if (e.x / (b + sqrt((s.w - p) * (s.w + p))) < L) return true;
+        }
+        return false;
       }
       void main() {
         vColor = aColor;
@@ -114,7 +111,7 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = aSize * uPx;
         // size 0 means hidden: a zero point size is clamped up to 1 px on some GPUs/ANGLE, so also clip the vertex away
-        if (aSize <= 0.0 || aShow < 0.5 || earthHides(position) || sphereHides(position, uSph0, uSphC2.x) || sphereHides(position, uSph1, uSphC2.y) || (aShow < ${SHOW_EXEMPT_MIN.toFixed(2)} && discHides(position))) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        if (aSize <= 0.0 || aShow < 0.5 || bodyHides(position) || (aShow < ${SHOW_EXEMPT_MIN.toFixed(2)} && discHides(position))) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
       varying vec3 vColor;

@@ -2,43 +2,118 @@ import { EARTH } from '@eio/core';
 import type { V3 } from './camera';
 
 /**
- * Analytic Earth occlusion, shared by the picker, the label layer and the point shader (which has the same maths in GLSL).
- * The displayed Moon and Sun are added as plain spheres (`OccluderSphere`, `sphereOccludes`), tested the same way.
+ * Occlusion by the drawn bodies: ONE list of bodies, ONE test, shared by the point shader and every CPU consumer.
  *
- * The Earth is the ellipsoid (a, a, b = a (1 - f)); scaling z by 1 / (1 - f) maps it to a sphere of radius `a`, so a ray
- * test against a sphere is exact for it. The test sphere is shrunk by a small margin so a marker lying ON the surface
- * (a pad, a landed booster) is never taken to be hidden by the ground it stands on.
+ * Every body the scene draws (the Earth, the Moon, the Sun, Mars, and any body added later) reaches this module as a
+ * `SceneBody` from `CelestialLayer.bodies()`: its centre relative to the camera (`rel`, subtracted in float64), its radius and
+ * its flattening. `OccluderSet.build` turns that list, once a frame, into at most `MAX_OCCLUDERS` slots (`SphereView`): the
+ * bodies that cover the most sky first, those under `MIN_OCCLUDER_PX` px skipped. The point shader (scene/materials.ts) gets
+ * the very same slots as a uniform array and runs the same test in GLSL (`sphereOccludes` is the reference for it); the
+ * picker, hover, labels and the other CPU tests call `OccluderSet.hides`. Nothing here names a body, so adding one needs
+ * nothing but `CelestialLayer` exposing it (see docs/frames.md, "Adding a body").
  *
- * Positions are camera-relative where that matters: the ray starts at the camera (`origin`, world coordinates) and
- * ends at `origin + rel`. Keeping `rel` separate (computed in float64 by the caller) is what keeps the test accurate
- * for a camera metres away from the target.
+ * A body is a sphere or, when it has a flattening f, an ellipsoid (a, a, b = a (1 - f)): scaling z by `k = 1 / (1 - f)` maps it
+ * to a sphere of radius `a`, so a ray test against a sphere is exact for it (the Earth is the only one with f > 0). Each test
+ * sphere is shrunk by a small margin so a marker lying ON the surface (a pad, a lander) is never taken to be hidden by the
+ * ground it stands on.
+ *
+ * Positions are camera-relative: the ray starts at the camera (the origin) and ends at `rel`, both computed in float64 by
+ * the caller, which is what keeps the test accurate for a camera metres from the target and for a Sun 1.5e8 km away.
  */
 
+/** Ellipsoid z scale of the Earth, 1 / (1 - f). */
 export const ELLIPSOID_K = 1 / (1 - EARTH.flattening);
 /** Occluder radius reduction, km (above the mesh facet sag, below anything meant to hover above the ground). */
 export const OCCLUSION_MARGIN_KM = 0.3;
 
-/** `|o'|^2 - R'^2` for the camera in Earth-scaled space: > 0 when the camera is outside the (shrunk) Earth. */
-export function occlusionC2(origin: V3, marginKm = OCCLUSION_MARGIN_KM): number {
-  const ox = origin[0], oy = origin[1], oz = origin[2] * ELLIPSOID_K;
-  const r = EARTH.radiusKm - marginKm;
-  return ox * ox + oy * oy + oz * oz - r * r;
+/**
+ * Slots in the point shader's occluder array (two vec4-sized uniforms each: 2 x 24 = 48 vectors). Sized for every planet and
+ * the large moons to be drawn with room over; WebGL2 guarantees at least 256 vertex uniform vectors (WebGL1: 128), and the
+ * rest of the point shader uses about 30. More bodies than slots: the ones covering the most sky win and `overflow` counts the rest.
+ */
+export const MAX_OCCLUDERS = 24;
+/** A body whose apparent radius is under this many px cannot hide a point visibly and is not given a slot. */
+export const MIN_OCCLUDER_PX = 0.25;
+
+/** A drawn body as occlusion and the disc hiding (lib/disc-hide.ts) see it: the one list `CelestialLayer.bodies()` returns. */
+export interface SceneBody {
+  entityId: string;
+  /** centre in world space, km (the frame of the camera `origin`) */
+  c: V3;
+  /** centre relative to the camera, km, in float64: refreshed by the layer each frame (`CelestialLayer.update`) */
+  rel: V3;
+  /** true radius, km, and the factor it is drawn with (always 1: everything is drawn to scale) */
+  radiusKm: number;
+  k: number;
+  /** flattening (0 for a sphere; the Earth's for the Earth), see `ELLIPSOID_K` */
+  flattening?: number;
+  /** how far the body's own system reaches above its surface and behind its centre plane, km (lib/disc-hide.ts) */
+  reachKm?: number;
+  depthKm?: number;
 }
 
-/** True when the (shrunk) Earth lies between the camera at `origin` and the point at `origin + rel`. */
-export function earthOccludes(origin: V3, rel: V3, marginKm = OCCLUSION_MARGIN_KM): boolean {
-  const c2 = occlusionC2(origin, marginKm);
-  if (c2 <= 0) return false; // camera inside the planet: nothing sensible to hide
-  const dx = rel[0], dy = rel[1], dz = rel[2] * ELLIPSOID_K;
-  const L = Math.hypot(dx, dy, dz);
+/**
+ * A body seen from the camera, in the form the point shader receives: `(x, y, z)` is the centre RELATIVE to the camera with z
+ * scaled by `k` (the ellipsoid), `r` the shrunk radius and `c2 = |centre|^2 - r^2` (float64: > 0 when the camera is outside).
+ */
+export interface SphereView {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  c2: number;
+  /** z scale of the ellipsoid, 1 for a sphere */
+  k: number;
+}
+
+export const newSphereView = (): SphereView => ({ x: 0, y: 0, z: 0, r: 0, c2: 0, k: 1 });
+
+/** Margin for a sphere: the Earth's absolute margin, but never more than 1 % of the radius (a small, far Sun). */
+const sphereMargin = (r: number, marginKm: number): number => Math.min(marginKm, r * 0.01);
+
+/** Fill `out` for a body whose centre is `(rx, ry, rz)` from the camera. */
+export function setSphereView(out: SphereView, rx: number, ry: number, rz: number, radiusKm: number, flattening = 0, marginKm = OCCLUSION_MARGIN_KM): SphereView {
+  const k = flattening > 0 ? 1 / (1 - flattening) : 1;
+  const z = rz * k;
+  const r = radiusKm - sphereMargin(radiusKm, marginKm);
+  out.x = rx;
+  out.y = ry;
+  out.z = z;
+  out.r = r;
+  out.c2 = rx * rx + ry * ry + z * z - r * r;
+  out.k = k;
+  return out;
+}
+
+/** A new view of a body at `rel` (the Earth: `flattening = EARTH.flattening`). */
+export const sphereView = (rel: V3, radiusKm: number, flattening = 0, marginKm = OCCLUSION_MARGIN_KM): SphereView =>
+  setSphereView(newSphereView(), rel[0], rel[1], rel[2], radiusKm, flattening, marginKm);
+
+/**
+ * True when the body `v` (see `SphereView`) lies between the camera and the point `rel` (camera-relative). Only a point whose
+ * segment to the camera crosses it is hidden: a point on the camera side of the near surface, beside the body, or looking away
+ * from it is not. A point inside the body is hidden. THE test: the point shader's GLSL is this function line for line.
+ *
+ * Written to stay accurate in float32 for huge distances: the miss distance is the length of `cross(u, centre)` (no
+ * `|centre|^2 - t^2` cancellation) and the near hit is `c2 / (b + sqrt((r - p)(r + p)))`.
+ */
+export function sphereOccludes(v: SphereView, rx: number, ry: number, rz: number): boolean {
+  if (v.c2 <= 0) return false; // camera inside the body: nothing sensible to hide
+  const dz = rz * v.k;
+  const L = Math.hypot(rx, ry, dz);
   if (L === 0) return false;
-  const b = (origin[0] * dx + origin[1] * dy + origin[2] * ELLIPSOID_K * dz) / L;
-  if (b >= 0) return false; // looking away from the centre
-  const disc = b * b - c2;
-  if (disc <= 0) return false; // the ray misses the sphere
-  // nearest hit distance, in the form that does not cancel when the camera is close to the surface
-  const t0 = c2 / (-b + Math.sqrt(disc));
-  return t0 < L;
+  const ux = rx / L, uy = ry / L, uz = dz / L;
+  const b = ux * v.x + uy * v.y + uz * v.z;
+  if (b <= 0) return false; // looking away from the centre
+  const cx = uy * v.z - uz * v.y, cy = uz * v.x - ux * v.z, cz = ux * v.y - uy * v.x;
+  const p = Math.hypot(cx, cy, cz);
+  if (p >= v.r) return false; // the ray misses the body
+  return v.c2 / (b + Math.sqrt((v.r - p) * (v.r + p))) < L;
+}
+
+/** True when the Earth (the ellipsoid, shrunk by the margin) lies between the camera at world `origin` and `origin + rel`. */
+export function earthOccludes(origin: V3, rel: V3, marginKm = OCCLUSION_MARGIN_KM): boolean {
+  return sphereOccludes(sphereView([-origin[0], -origin[1], -origin[2]], EARTH.radiusKm, EARTH.flattening, marginKm), rel[0], rel[1], rel[2]);
 }
 
 /**
@@ -52,85 +127,69 @@ export function chordSagKm(chordKm: number, radiusKm: number = EARTH.radiusKm): 
 }
 
 /**
- * A sphere that hides what is behind it: the Moon or the Sun (`c` = centre, the same frame as the camera
- * `origin`; `r` = radius).
+ * The occluders of one frame. `build` fills `slots` (preallocated, mutated: no allocation per frame) from the body list;
+ * `slots[0 .. count)` are the ones in use, the biggest in the sky first. The point shader reads the slots as uniforms and
+ * `hides` tests them on the CPU, so the two always see the same bodies and the same numbers.
  */
-export interface OccluderSphere {
-  c: V3;
-  r: number;
-}
+export class OccluderSet {
+  /** the slots; only the first `count` are meaningful */
+  readonly slots: SphereView[] = Array.from({ length: MAX_OCCLUDERS }, newSphereView);
+  /** slots in use */
+  count = 0;
+  /** bodies that qualified for a slot in the last build but did not get one (the smaller ones lose) */
+  overflow = 0;
+  /** the most `overflow` ever seen (a debug counter: nonzero means MAX_OCCLUDERS is too small for the scene) */
+  maxOverflow = 0;
+  private readonly sky = new Float64Array(MAX_OCCLUDERS);
+  private readonly scratch = newSphereView();
 
-/**
- * A sphere seen from the camera, in the form the point shader receives: `(x, y, z)` is the centre RELATIVE to the camera
- * (subtracted in float64 here, so the Sun at 1.5e8 km and the Moon 3,000 km away are both exact to float32 rounding of
- * the result), `r` the shrunk radius and `c2 = |centre|^2 - r^2` (computed in float64: > 0 when the camera is outside).
- */
-export interface SphereView {
-  x: number;
-  y: number;
-  z: number;
-  r: number;
-  c2: number;
-}
-
-/** Margin for a sphere: the Earth's absolute margin, but never more than 1 % of the radius (a small, far Sun). */
-const sphereMargin = (r: number, marginKm: number): number => Math.min(marginKm, r * 0.01);
-
-export function sphereView(origin: V3, s: OccluderSphere, marginKm = OCCLUSION_MARGIN_KM): SphereView {
-  const x = s.c[0] - origin[0], y = s.c[1] - origin[1], z = s.c[2] - origin[2];
-  const r = s.r - sphereMargin(s.r, marginKm);
-  return { x, y, z, r, c2: x * x + y * y + z * z - r * r };
-}
-
-/**
- * True when the sphere `v` (camera-relative centre, see `sphereView`) lies between the camera and the point `rel`
- * (camera-relative). Only a point whose segment to the camera crosses the sphere is hidden: a point on the camera side
- * of the near surface, beside the sphere, or looking away from it is not. A point inside the sphere is hidden.
- *
- * Written the way the shader is, to stay accurate in float32 for huge distances: the miss distance is the length of
- * `cross(u, centre)` (no `|centre|^2 - t^2` cancellation) and the near hit is `c2 / (b + sqrt((r - p)(r + p)))`.
- */
-export function sphereOccludes(v: SphereView, rx: number, ry: number, rz: number): boolean {
-  if (v.c2 <= 0) return false; // camera inside the sphere: nothing sensible to hide
-  const L = Math.hypot(rx, ry, rz);
-  if (L === 0) return false;
-  const ux = rx / L, uy = ry / L, uz = rz / L;
-  const b = ux * v.x + uy * v.y + uz * v.z;
-  if (b <= 0) return false; // looking away from the centre
-  const cx = uy * v.z - uz * v.y, cy = uz * v.x - ux * v.z, cz = ux * v.y - uy * v.x;
-  const p = Math.hypot(cx, cy, cz);
-  if (p >= v.r) return false; // the ray misses the sphere
-  return v.c2 / (b + Math.sqrt((v.r - p) * (v.r + p))) < L;
-}
-
-/**
- * `earthOccludes` (plus the Moon and Sun spheres, when given) for many points from one camera: the camera terms are
- * computed once and no arrays are allocated per point (the scope pass tests every catalogue object a few times a second).
- * The Earth part is unchanged; `spheres` only add to what is hidden.
- */
-export function makeOccluder(
-  origin: V3,
-  marginKm = OCCLUSION_MARGIN_KM,
-  spheres: readonly OccluderSphere[] = [],
-): (rx: number, ry: number, rz: number) => boolean {
-  const c2 = occlusionC2(origin, marginKm);
-  const ox = origin[0], oy = origin[1], oz = origin[2] * ELLIPSOID_K;
-  const views = spheres.map((s) => sphereView(origin, s, marginKm)).filter((v) => v.c2 > 0);
-  const earth = c2 > 0;
-  if (!earth && views.length === 0) return () => false;
-  return (rx, ry, rz) => {
-    if (earth) {
-      const dz = rz * ELLIPSOID_K;
-      const L = Math.hypot(rx, ry, dz);
-      if (L !== 0) {
-        const b = (ox * rx + oy * ry + oz * dz) / L;
-        if (b < 0) {
-          const disc = b * b - c2;
-          if (disc > 0 && c2 / (-b + Math.sqrt(disc)) < L) return true;
-        }
+  /**
+   * Choose the slots for the bodies in `bodies` seen with vertical field of view `fovDeg` on a viewport `viewportPx` high.
+   * Skipped: a body under `minPx` px (apparent radius) and one the camera is inside. When more qualify than there are slots,
+   * the ones with the largest angular radius win.
+   */
+  build(bodies: readonly SceneBody[], fovDeg: number, viewportPx: number, minPx = MIN_OCCLUDER_PX, marginKm = OCCLUSION_MARGIN_KM): void {
+    const focalPx = viewportPx / (2 * Math.tan((fovDeg * Math.PI) / 360));
+    const slots = this.slots, sky = this.sky, s = this.scratch;
+    let count = 0, overflow = 0;
+    for (const b of bodies) {
+      const [x, y, z] = b.rel;
+      const dist = Math.hypot(x, y, z);
+      const radius = b.radiusKm * b.k;
+      if (!(dist > 0) || !(radius > 0)) continue;
+      const ang = radius / dist; // angular radius, rad (tan of it is the pixel ratio below, near enough for a cutoff)
+      if (!(ang * focalPx >= minPx)) continue;
+      setSphereView(s, x, y, z, radius, b.flattening ?? 0, marginKm);
+      if (s.c2 <= 0) continue; // the camera is inside it
+      let pos: number;
+      if (count < MAX_OCCLUDERS) pos = count++;
+      else {
+        overflow++;
+        if (!(ang > sky[MAX_OCCLUDERS - 1])) continue;
+        pos = MAX_OCCLUDERS - 1; // replaces the smallest in use
+      }
+      const t = slots[pos];
+      t.x = s.x; t.y = s.y; t.z = s.z; t.r = s.r; t.c2 = s.c2; t.k = s.k;
+      sky[pos] = ang;
+      // keep the slots sorted by angular radius, largest first (insertion: swap the objects, no allocation)
+      while (pos > 0 && sky[pos - 1] < ang) {
+        const o = slots[pos - 1];
+        slots[pos - 1] = slots[pos];
+        slots[pos] = o;
+        sky[pos] = sky[pos - 1];
+        sky[pos - 1] = ang;
+        pos--;
       }
     }
-    for (let i = 0; i < views.length; i++) if (sphereOccludes(views[i], rx, ry, rz)) return true;
+    this.count = count;
+    this.overflow = overflow;
+    if (overflow > this.maxOverflow) this.maxOverflow = overflow;
+  }
+
+  /** Is the camera-relative point hidden behind any slot? Bound so it can be passed around (`occluded: set.hides`). */
+  readonly hides = (rx: number, ry: number, rz: number): boolean => {
+    const slots = this.slots;
+    for (let i = 0, n = this.count; i < n; i++) if (sphereOccludes(slots[i], rx, ry, rz)) return true;
     return false;
   };
 }

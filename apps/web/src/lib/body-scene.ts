@@ -5,8 +5,8 @@
  */
 import type { EntityRecord } from '@eio/core';
 import type { V3 } from './camera';
-import { isEarthCentre, type Centre } from './frame';
-import { earthOccludes, sphereOccludes, sphereView } from './occlusion';
+import type { Centre } from './frame';
+import { newSphereView, setSphereView, sphereOccludes } from './occlusion';
 import { gatherCandidates, bodyPickExtra, resolvePick, type PickExtra, type PickOptions, type PickResolution, type PickSource } from './pick';
 
 /** A body as the scene draws it this frame (true position and radius). */
@@ -18,6 +18,8 @@ export interface DrawnBody {
   /** true radius, km, and the factor it is drawn with (always 1: everything is drawn to scale) */
   radiusKm: number;
   k: number;
+  /** flattening (0 or absent: a sphere; the Earth's: the ellipsoid), as lib/occlusion.ts `SceneBody` */
+  flattening?: number;
 }
 
 type LineRec = Pick<EntityRecord, 'id' | 'bodyId' | 'provider' | 'render' | 'attrs' | 'parentId'>;
@@ -72,20 +74,21 @@ export interface BodyPickContext {
 
 /**
  * One pick extra per drawn body under the cursor (`bodyPickExtra`: hit radius at least 14 px, the disc's angular radius plus
- * 3 px). No ranks. A body behind the Earth or another body is dropped here, with its own sphere left out of its own test
- * (the centre of a body is inside it, which `sphereOccludes` takes for hidden) and the Earth never tested against itself.
+ * 3 px). No ranks. A body behind another body (the Earth included, one test for all: `sphereOccludes`) is dropped here, with
+ * its own sphere left out of its own test (the centre of a body is inside it, which `sphereOccludes` takes for hidden).
  */
 export function bodyPickExtras(bodies: readonly DrawnBody[], ctx: BodyPickContext): PickExtra[] {
   const out: PickExtra[] = [];
+  const view = newSphereView();
   for (const b of bodies) {
     const rel: V3 = [b.c[0] - ctx.origin[0], b.c[1] - ctx.origin[1], b.c[2] - ctx.origin[2]];
     const extra = bodyPickExtra({ id: b.entityId, rel, radiusKm: b.radiusKm, k: b.k, fovDeg: ctx.fovDeg, m: ctx.m, w: ctx.w, h: ctx.h, px: ctx.px, py: ctx.py });
     if (!extra) continue;
-    if (!isEarthCentre(b.entityId) && earthOccludes(ctx.origin, rel)) continue;
     let hidden = false;
     for (const o of bodies) {
-      if (o === b || isEarthCentre(o.entityId)) continue;
-      if (sphereOccludes(sphereView(ctx.origin, { c: o.c, r: o.radiusKm * o.k }), rel[0], rel[1], rel[2])) {
+      if (o === b) continue;
+      setSphereView(view, o.c[0] - ctx.origin[0], o.c[1] - ctx.origin[1], o.c[2] - ctx.origin[2], o.radiusKm * o.k, o.flattening);
+      if (sphereOccludes(view, rel[0], rel[1], rel[2])) {
         hidden = true;
         break;
       }

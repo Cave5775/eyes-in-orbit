@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { DEG, EARTH, EntityGraph, bodyEntityRecords, norm, type EntityRecord, type Sample, type Vec3 } from '@eio/core';
 import { MAX_DIST_KM, fitDistance, fitDistanceClamped, settleDistance, zoomDistance, boundingSphere } from '../src/lib/camera';
-import { OCCLUSION_MARGIN_KM } from '../src/lib/occlusion';
+import { sphereView } from '../src/lib/occlusion';
+import { glslBodyHides } from './glsl-occlusion';
 import { liftNearSurface, makePathBuffers, nowIndex, planPathWindow, samplePath } from '../src/lib/paths';
 import { NEAR_EARTH_LIMIT_KM, refDisplay, refPositionEci, refRadiusKm, refViewDistKm } from '../src/lib/ref-body';
 import { toCameraRelative, spinOf } from '../src/lib/floating-origin';
@@ -105,27 +106,20 @@ describe('Mars and its orbiters are drawn in one frame at one scale', () => {
   });
 });
 
-describe('the point shader Earth test with the camera 1.5e8 km out (the Sun frame)', () => {
-  // scene/materials.ts earthHides, written with float32 rounding at every step. The camera is 1.5e8 km from the Earth: the old
-  // `b * b - c2` form lost every digit there (b^2 ~ 2e16, the Earth's R^2 ~ 4e7), the miss distance |cross(u, o)| does not.
+describe('the point shader body test with the camera 1.5e8 km out (the Sun frame)', () => {
+  // scene/materials.ts bodyHides (the Earth as an ellipsoid slot), written with float32 rounding at every step (test/glsl-occlusion.ts).
+  // The camera is 1.5e8 km from the Earth: the old `b * b - c2` form lost every digit there (b^2 ~ 2e16, the Earth's R^2 ~ 4e7),
+  // the miss distance |cross(u, centre)| does not.
   const f = Math.fround;
-  const R = EARTH.radiusKm - OCCLUSION_MARGIN_KM;
-  function hides(o: Vec3, rel: Vec3, c2: number): boolean {
-    const L = f(Math.hypot(f(rel[0]), f(rel[1]), f(rel[2])));
-    const u: Vec3 = [f(rel[0] / L), f(rel[1] / L), f(rel[2] / L)];
-    const b = f(f(f(o[0] * u[0]) + f(o[1] * u[1])) + f(o[2] * u[2]));
-    if (b >= 0) return false;
-    const cx = f(f(o[1] * u[2]) - f(o[2] * u[1])), cy = f(f(o[2] * u[0]) - f(o[0] * u[2])), cz = f(f(o[0] * u[1]) - f(o[1] * u[0]));
-    const p = f(Math.hypot(cx, cy, cz));
-    if (p >= R) return false;
-    return f(c2 / f(-b + f(Math.sqrt(f(f(R - p) * f(R + p)))))) < L;
+  function hides(o: Vec3, rel: Vec3): boolean {
+    const slot = sphereView([-o[0], -o[1], -o[2]], EARTH.radiusKm, EARTH.flattening); // float64 on the CPU, rounded by the emulation like the uniforms
+    return glslBodyHides({ slots: [slot], count: 1 }, rel[0], rel[1], rel[2]);
   }
 
   it('hides a point behind the Earth and keeps one beside it, for a camera at 1 AU in any direction', () => {
     for (const dir of [[1, 0, 0], [0, 1, 0], [0.6, 0.64, 0.48], [-0.3, 0.1, 0.9486832980505138]] as Vec3[]) {
       const u = dir.map((c) => c / norm(dir)) as Vec3;
       const o = u.map((c) => f(c * 1.4959787e8)) as Vec3; // the camera, float32 like the uniform
-      const c2 = f(o[0] ** 2 + o[1] ** 2 + o[2] ** 2 - R * R); // float64 on the CPU, then rounded to the uniform
       // a unit vector across the line of sight
       const a: Vec3 = Math.abs(u[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
       const k = a[0] * u[0] + a[1] * u[1] + a[2] * u[2];
@@ -135,7 +129,7 @@ describe('the point shader Earth test with the camera 1.5e8 km out (the Sun fram
         // the point is 7,000 km behind the Earth's centre as seen from the camera, `lateral` km off the line of sight
         const P = [0, 1, 2].map((i) => -u[i] * 7000 + (s[i] / sn) * lateral);
         const rel = [0, 1, 2].map((i) => P[i] - o[i]) as Vec3; // camera-relative, float64 then rounded by hides()
-        expect(hides(o, rel, c2), `${dir} lateral ${lateral}`).toBe(expected);
+        expect(hides(o, rel), `${dir} lateral ${lateral}`).toBe(expected);
       }
     }
   });

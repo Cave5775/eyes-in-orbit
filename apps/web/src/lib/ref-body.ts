@@ -25,8 +25,8 @@ export const REF_LABEL: Record<string, string> = Object.fromEntries(defaultBodie
 
 export const REF_RADIUS_KM: Record<string, number> = Object.fromEntries(defaultBodies.all().map((b) => [b.id, b.radiusKm]));
 
-/** True radius of a body (km); an id the registry does not know gets the Earth's, so nothing divides by zero. */
-export const refRadiusKm = (body: RefBody): number => REF_RADIUS_KM[body] ?? EARTH.radiusKm;
+/** True radius of a body (km), read from the registry as it is now (a body registered later counts); an id it does not know gets the Earth's, so nothing divides by zero. */
+export const refRadiusKm = (body: RefBody): number => (defaultBodies.has(body) ? defaultBodies.get(body).radiusKm : EARTH.radiusKm);
 
 /** Centre of the body in the Earth-inertial frame at `tMs`, km (core `bodyStateEci`; the origin for an unknown body). */
 export function refPositionEci(body: RefBody, tMs: number): Vec3 {

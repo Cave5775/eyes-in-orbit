@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { EARTH, MARS, MOON, SUN, bodyOf, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
 import { bodyFixedToInertial, fitMapSize } from '../lib/body-map';
 import type { DrawnBody } from '../lib/body-scene';
-import type { OccluderSphere } from '../lib/occlusion';
+import type { SceneBody } from '../lib/occlusion';
+import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM } from '../lib/disc-hide';
 import { isRegistryBody, refDisplay, refPositionEci, refRadiusKm } from '../lib/ref-body';
 import { createMapMaterial } from './materials';
 
@@ -38,23 +39,24 @@ export function createMapSphere(radiusKm: number, widthSegments = 128, heightSeg
 const BODY_TINT: Record<string, [number, number, number]> = { MARS: [0.74, 0.36, 0.2] };
 const DEFAULT_TINT: [number, number, number] = [0.55, 0.55, 0.58];
 
-const ZERO: [number, number, number] = [0, 0, 0];
-
-/** One body the layer knows: its entity, where it is displayed and (all but the Earth) its meshes. */
-interface Drawn {
+/**
+ * One body the layer knows: its entity, where it is displayed and (all but the Earth) its meshes. It IS the `SceneBody` the
+ * occluders, the disc cones, the picker and the labels read (`CelestialLayer.bodies()`): a body added to the layer gets all of
+ * them with no other code.
+ */
+interface Drawn extends SceneBody {
   entityId: string;
   bodyId: string;
   radiusKm: number;
-  /** centre, km, and drawn-radius factor (always 1; set by `update`) */
+  /** centre, km, and drawn-radius factor (always 1; set by `update`); `rel` = centre minus the camera (float64) */
   c: [number, number, number];
+  rel: [number, number, number];
   k: number;
   /** meshes added to the scene (none for the Earth); `place` positions them relative to the camera */
   objects: THREE.Object3D[];
   /** set when the body leaves the layer (a map still loading is then dropped) */
   removed?: boolean;
   place?: (origin: THREE.Vector3, t: number) => void;
-  /** sphere handed to the occlusion tests (centre, radius) */
-  sphere: OccluderSphere;
 }
 
 /**
@@ -63,8 +65,10 @@ interface Drawn {
  * - the Moon (textured when /textures/moon.jpg loads, else procedural, IAU rotation) and the Sun (emissive disc and glow)
  *   look and sit exactly as before; Mars is a sphere with the USGS/Viking map (/textures/mars.jpg) on its IAU rotation, a tinted
  *   sphere until (or unless) it loads; any other registry body is a plain tinted sphere, both lit from the Sun's direction;
- * - the Earth is NOT drawn here (SceneController keeps its own mesh group); the layer only knows its centre and radius, so
- *   picking, labels and occluders see it with the others.
+ * - the Earth is NOT drawn here (SceneController keeps its own mesh group); the layer only knows its centre, radius and
+ *   flattening, so picking, labels, occluders and the disc cones see it with the others.
+ * `bodies()` is the one list of what is drawn: the point shader's occluders (lib/occlusion.ts `OccluderSet`), the CPU
+ * occlusion tests, the disc cones (lib/disc-hide.ts) and picking all derive from it.
  * Everything is drawn to scale at its true position (`refDisplay`, k = 1: the Sun at 1.5e8 km, Mars wherever it is). Like the
  * Earth they are placed camera-relative (float64 position minus the floating origin), so a camera 3,000 km from the Moon or 1.5e8 km from
  * the Earth sees them without float32 jitter.
@@ -73,8 +77,8 @@ export class CelestialLayer {
   private readonly drawn = new Map<string, Drawn>();
   private readonly rot = new THREE.Matrix4();
   private disposed = false;
-  /** shader spheres, always [Moon, Sun]; radius 0 (hides nothing) while a body is not in the layer */
-  private readonly shader: [OccluderSphere, OccluderSphere] = [{ c: [0, 0, 0], r: 0 }, { c: [0, 0, 0], r: 0 }];
+  /** the bodies in layer order, rebuilt when the set changes (the objects are the `drawn` values, mutated by `update`) */
+  private list: Drawn[] = [];
   private moonMat: THREE.ShaderMaterial | null = null;
   /** 'texture' once /textures/moon.jpg has loaded */
   mode: 'texture' | 'procedural' = 'procedural';
@@ -103,13 +107,20 @@ export class CelestialLayer {
       if (d) d.entityId = entityId;
       else this.drawn.set(bodyId, this.create(bodyId, entityId));
     }
-    this.syncShaderSpheres();
+    this.list = [...this.drawn.values()];
   }
 
   private create(bodyId: string, entityId: string): Drawn {
     const d: Drawn = {
-      entityId, bodyId, radiusKm: refRadiusKm(bodyId), c: [0, 0, 0], k: 1, objects: [], sphere: { c: ZERO, r: 0 },
+      entityId, bodyId, radiusKm: refRadiusKm(bodyId), c: [0, 0, 0], rel: [0, 0, 0], k: 1, objects: [],
     };
+    if (bodyId === 'EARTH') {
+      // the one ellipsoid; its low orbits (LEO shell) and GEO belt are what the disc cone hides (lib/disc-hide.ts)
+      d.radiusKm = EARTH.radiusKm;
+      d.flattening = EARTH.flattening;
+      d.reachKm = EARTH_SYSTEM_REACH_KM;
+      d.depthKm = EARTH_SYSTEM_DEPTH_KM;
+    }
     if (bodyId === 'MOON') this.buildMoon(d);
     else if (bodyId === 'SUN') this.buildSun(d);
     else if (bodyId !== 'EARTH') this.buildGeneric(d, BODY_MAPS[bodyId]);
@@ -266,45 +277,22 @@ export class CelestialLayer {
       if (d.place) d.place(origin, t);
       else {
         // the Earth: its own mesh group sits at the origin at true size
-        d.c = [0, 0, 0];
+        d.c[0] = d.c[1] = d.c[2] = 0;
         d.k = 1;
       }
-      d.sphere.c = d.c;
-      d.sphere.r = d.radiusKm * d.k;
-    }
-    this.syncShaderSpheres();
-  }
-
-  private syncShaderSpheres(): void {
-    for (const [i, id] of ['MOON', 'SUN'].entries()) {
-      const s = this.drawn.get(id)?.sphere;
-      this.shader[i].c = s ? s.c : ZERO;
-      this.shader[i].r = s ? s.r : 0;
+      d.rel[0] = d.c[0] - origin.x;
+      d.rel[1] = d.c[1] - origin.y;
+      d.rel[2] = d.c[2] - origin.z;
     }
   }
 
   /**
-   * Every drawn body except the Earth as at the last `update` (centre, radius): the
-   * Moon and the Sun first, then the others (Mars) in registry order. The Earth has its own ellipsoid test in `makeOccluder`.
+   * THE list of drawn bodies, Earth included, as at the last `update` (centre, camera-relative centre, radius, flattening,
+   * system reach): the same array every call, no allocation. The point shader's occluders, the CPU occlusion, the disc cones,
+   * picking and the labels all read it, so a body appears in all of them once it is here.
    */
-  occluders(): readonly OccluderSphere[] {
-    const out: OccluderSphere[] = [];
-    for (const id of ['MOON', 'SUN']) {
-      const d = this.drawn.get(id);
-      if (d) out.push(d.sphere);
-    }
-    for (const [id, d] of this.drawn) if (id !== 'MOON' && id !== 'SUN' && id !== 'EARTH') out.push(d.sphere);
-    return out;
-  }
-
-  /** The two spheres the point shader has uniforms for (its fixed layout, `uSph0` and `uSph1`): [Moon, Sun]. */
-  shaderSpheres(): readonly [OccluderSphere, OccluderSphere] {
-    return this.shader;
-  }
-
-  /** Every body in the layer, Earth included, as at the last `update` (for picking and labels). */
-  bodies(): DrawnBody[] {
-    return [...this.drawn.values()].map((d) => ({ entityId: d.entityId, c: d.c, radiusKm: d.radiusKm, k: d.k }));
+  bodies(): readonly SceneBody[] {
+    return this.list;
   }
 
   /** Visit every body, Earth included, without allocating (the label pass runs every frame): entity id, centre, true radius and drawn-radius factor (1). */
