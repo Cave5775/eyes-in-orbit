@@ -68,7 +68,7 @@ export interface TelemetryPoint {
   value: string;
   unit?: string;
   t: number;
-  /** true when the item id to meaning mapping was checked against live data (see README, ISS array telemetry); absent = not claimed */
+  /** true when the item id to meaning mapping was checked against live data (see docs/reference.md, ISS array telemetry); absent = not claimed */
   verified?: boolean;
 }
 
