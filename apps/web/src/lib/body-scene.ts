@@ -1,11 +1,9 @@
 /**
- * Pure parts of the scene's handling of body entities (docs/frames.md, "Scene"): which body orbit lines to draw, the pick
- * extras of the drawn bodies and the rule that decides when a body is listed with the objects under the cursor
- * (`resolvePick`: only where no object is; objects over a small far body are hidden, lib/disc-hide.ts). No three.js.
+ * Pure parts of the scene's handling of body entities (docs/frames.md, "Scene"): the pick extras of the drawn bodies and the
+ * rule that decides when a body is listed with the objects under the cursor (`resolvePick`: only where no object is; objects
+ * over a small far body are hidden, lib/disc-hide.ts). No three.js. (Which orbit lines are drawn: lib/orbit-lines.ts.)
  */
-import type { EntityRecord } from '@eio/core';
 import type { V3 } from './camera';
-import type { Centre } from './frame';
 import { newSphereView, setSphereView, sphereOccludes } from './occlusion';
 import { gatherCandidates, bodyPickExtra, resolvePick, type PickExtra, type PickOptions, type PickResolution, type PickSource } from './pick';
 
@@ -20,43 +18,6 @@ export interface DrawnBody {
   k: number;
   /** flattening (0 or absent: a sphere; the Earth's: the ellipsoid), as lib/occlusion.ts `SceneBody` */
   flattening?: number;
-}
-
-type LineRec = Pick<EntityRecord, 'id' | 'bodyId' | 'provider' | 'render' | 'attrs' | 'parentId'>;
-
-/**
- * Can the orbit line of this body entity be drawn? It needs `render.orbitLine` (not the Sun). Every line is the true orbit
- * about what the body orbits (the Moon about the Earth, the Earth and Mars about the Sun), drawn to scale like the bodies.
- */
-export function bodyLineAllowed(rec: Pick<EntityRecord, 'provider' | 'render'>): boolean {
-  return rec.provider?.type === 'body' && !!rec.render?.orbitLine;
-}
-
-export interface BodyLineInput {
-  /** the selected entity, if any */
-  selectedId: string | null;
-  /** the frame of reference (an entity id) */
-  frame: Centre;
-}
-
-/**
- * Body entities whose orbit line is drawn. The subjects are the selected entity and the frame centre; the camera subject is
- * always one of them (selecting flies to the selection, which also becomes the frame unless the frame is locked). Each
- * subject that is a body draws its own line (relative to what it orbits, whatever the frame or the lock is) and the lines of
- * its direct children (`parentId`: the Earth gives the Moon, the Sun the Earth and Mars; no grandchildren), each only where
- * `bodyLineAllowed`. So selecting a body from the tree, a breadcrumb, the scene or the popup shows the same lines. The default
- * frame (the Earth) is a subject too: the Earth's line and the Moon's. Bodies that are none of these stay unlined.
- */
-export function bodyLineIds(recs: Iterable<LineRec>, input: BodyLineInput): string[] {
-  const subjects = new Set<string>([input.frame]);
-  if (input.selectedId !== null) subjects.add(input.selectedId);
-  const out: string[] = [];
-  for (const rec of recs) {
-    if (rec.provider?.type !== 'body') continue;
-    const wanted = subjects.has(rec.id) || (rec.parentId !== undefined && subjects.has(rec.parentId));
-    if (wanted && bodyLineAllowed(rec)) out.push(rec.id);
-  }
-  return out;
 }
 
 export interface BodyPickContext {

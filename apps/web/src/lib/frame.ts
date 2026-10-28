@@ -4,9 +4,10 @@ import { bodyEntityId, isBodyEntity, type EntityGraph, type EntityRecord, type S
  * Frame of reference (see docs/frames.md). The frame is a centre, and a centre is an ENTITY ID: a body entity (`body-moon`)
  * or any other entity (an orbitable asteroid, a satellite the user locked the frame to). There is no second, registry-id
  * representation of a body here. Frames are translations only (no rotation): the centre is a point `c(t)` in Earth-inertial
- * coordinates. Entities stay stored and drawn in Earth-inertial space; the frame changes what depends on time: paths,
- * trails and orbit lines are sampled relative to the centre at each sample time and drawn around the centre's current
- * position, and readouts are relative to it.
+ * coordinates. Entities stay stored and drawn in Earth-inertial space; the frame changes what depends on time: paths and
+ * trails are sampled relative to the centre at each sample time and drawn around the centre's current position, and
+ * readouts are relative to it. An orbit LINE does not depend on the frame: it is the orbit round the entity's primary body
+ * (lib/orbit-lines.ts, scene/overlays.ts).
  */
 export type Centre = string;
 
@@ -16,12 +17,13 @@ export const EARTH_CENTRE: Centre = bodyEntityId('EARTH');
 export const isEarthCentre = (c: Centre): boolean => c === EARTH_CENTRE;
 
 /**
- * The frame an entity's own paths and orbit line are drawn in: the active centre, except that
+ * The frame an entity's own path and trail are drawn in: the active centre, except that
  * - nothing can be drawn relative to itself (a single point), so the entity that is the centre is drawn relative to its
  *   primary body, and
- * - a body ENTITY always draws its orbit in its parent body's frame whatever the active centre is: the Moon as an ellipse
- *   around the Earth, Earth and Mars around the Sun's current position. The Sun orbits nothing (its `bodyId` names itself)
- *   and keeps the active centre.
+ * - a body ENTITY is always drawn in its parent body's frame whatever the active centre is: the Moon round the Earth, Earth
+ *   and Mars round the Sun's current position. The Sun orbits nothing (its `bodyId` names itself) and keeps the active centre.
+ * The orbit line of an entity is in its primary body's frame (`bodyEntityId(rec.bodyId)`) whatever the centre is; a trail is
+ * only drawn where this frame is not that one.
  */
 export function frameForRec(centre: Centre, rec: Pick<EntityRecord, 'id' | 'bodyId' | 'provider'>): Centre {
   const primary = bodyEntityId(rec.bodyId);

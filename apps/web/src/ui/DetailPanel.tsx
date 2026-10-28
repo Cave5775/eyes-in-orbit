@@ -67,7 +67,7 @@ export function DetailPanel() {
       ) : (
         <button
           className="btn frame-action" onClick={() => setFrame(rec.id, true)}
-          title={`Make ${rec.name} the frame of reference and lock it: orbit lines, trails, paths and range / speed readouts of every object you select next are relative to it. Selecting other objects does not change the frame.`}>
+          title={`Make ${rec.name} the frame of reference and lock it: trails, paths and range / speed readouts of every object you select next are relative to it (orbit lines stay round what the object orbits). Selecting other objects does not change the frame.`}>
           LOCK FRAME TO THIS OBJECT
         </button>
       )}

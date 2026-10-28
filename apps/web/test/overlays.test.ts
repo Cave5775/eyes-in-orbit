@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { EARTH, EntityGraph, MOON, bodyEntityRecords, bodyStateEci, moonPositionEci, norm, type EntityRecord, type Sample, type Vec3 } from '@eio/core';
+import { DIM } from '../src/lib/dim';
 import { EARTH_CENTRE, framePathPoint, type Centre } from '../src/lib/frame';
+import { orbitPeriodSec } from '../src/lib/orbit';
 import { mockLaunches, mockSatellites } from '../src/mock/generators';
 import { EntityOverlay } from '../src/scene/overlays';
 
@@ -25,8 +27,9 @@ function setup(recs: EntityRecord[]) {
   for (const r of recs) graph.upsert(r);
   const overlay = new EntityOverlay(new THREE.Group(), new THREE.Color(0xffffff));
   let wall = 0;
+  /** `full`: the selected entity (orbit, trail, track, footprint); otherwise a dimmed child orbit */
   const update = (rec: EntityRecord, t = NOW, full = false, centre: Centre = EARTH_CENTRE) =>
-    overlay.update(graph, rec, t, (wall += 1000), full, centre);
+    overlay.update(graph, rec, t, (wall += 1000), full ? 'selected' : 'child', centre);
   return { graph, overlay, update };
 }
 
@@ -59,7 +62,7 @@ describe('EntityOverlay: Earth satellites', () => {
     expect(norm(sub(point(o.pos.world, o.n - 1), s.r))).toBeLessThan(150);
   });
 
-  it('keeps the orbit line round the Earth when the frame is the Moon, the trail follows the frame', () => {
+  it('keeps the orbit line round the Earth when the frame is the Moon; the trail is the tail seen from the frame', () => {
     const def = setup([iss]);
     def.update(iss, NOW, true);
     const moon = setup([iss]);
@@ -71,15 +74,35 @@ describe('EntityOverlay: Earth satellites', () => {
     expect(Array.from(b.orbit.pos.shift)).toEqual([0, 0, 0]);
     // every orbit point is near the Earth, none is a Moon-frame spiral
     for (let i = 0; i < b.orbit.n; i++) expect(norm(point(b.orbit.pos.world, i))).toBeLessThan(8000);
-    // the trail keeps the active frame: its last point is the satellite relative to the Moon at its time, drawn around the Moon now
+    // the frame is the Earth, the satellite's own primary: the trail would lie on the orbit line, so there is none
+    expect(a.trail.obj.visible).toBe(false);
+    // the Moon frame: the tail relative to the Moon, drawn around the Moon now, at most a sixth of a revolution long
+    expect(b.trail.obj.visible).toBe(true);
     expect(b.trail.n).toBeGreaterThan(1);
+    const sNow = def.graph.stateIn(iss.id, NOW, 'EARTH:inertial')!;
+    const period = orbitPeriodSec(def.graph, iss, sNow, NOW)!;
     const last = b.trail.n - 1;
-    const r = point(a.trail.pos.world, last); // default frame: the satellite itself
-    expect(point(b.trail.pos.world, last)).toEqual(framePathPoint(r, moonPositionEci(NOW), moonPositionEci(NOW)));
-    const first = point(b.trail.pos.world, 0), firstEarth = point(a.trail.pos.world, 0);
-    const tFirst = NOW - (iss.render?.trailSeconds ?? 900) * 1000;
-    expect(norm(sub(first, framePathPoint(firstEarth, moonPositionEci(tFirst), moonPositionEci(NOW))))).toBeLessThan(1e-6);
-    expect(norm(sub(first, firstEarth))).toBeGreaterThan(100); // not the Earth-frame trail
+    expect(point(b.trail.pos.world, last)).toEqual(framePathPoint(sNow.r, moonPositionEci(NOW), moonPositionEci(NOW)));
+    const tFirst = NOW - period * 1000 / 6;
+    const sFirst = def.graph.stateIn(iss.id, tFirst, 'EARTH:inertial')!;
+    expect(norm(sub(point(b.trail.pos.world, 0), framePathPoint(sFirst.r, moonPositionEci(tFirst), moonPositionEci(NOW))))).toBeLessThan(1e-6);
+    expect(norm(sub(point(b.trail.pos.world, 0), sFirst.r))).toBeGreaterThan(100); // not the Earth-frame trail
+  });
+
+  it('a child orbit is the dimmed line alone: no trail, footprint or ground track, and its colour is the selected colour dimmed by DIM', () => {
+    const child = setup([iss]);
+    child.update(iss, NOW, false, 'body-moon');
+    const sel = setup([iss]);
+    sel.update(iss, NOW, true, 'body-moon');
+    const c = child.overlay as unknown as { orbit: Peek['orbit'] & { obj: THREE.Line }; trail: Peek['trail']; footprint: { obj: THREE.Object3D }; track: { obj: THREE.Object3D } };
+    const s = sel.overlay as unknown as typeof c;
+    expect(child.overlay.hasOrbit).toBe(true);
+    expect([c.trail.obj.visible, c.footprint.obj.visible, c.track.obj.visible]).toEqual([false, false, false]);
+    expect([s.trail.obj.visible, s.footprint.obj.visible, s.track.obj.visible]).toEqual([true, true, true]);
+    const mc = c.orbit.obj.material as THREE.LineBasicMaterial, ms = s.orbit.obj.material as THREE.LineBasicMaterial;
+    expect(mc.color.r).toBeCloseTo(ms.color.r * DIM.colour, 6);
+    expect(mc.color.g).toBeCloseTo(ms.color.g * DIM.colour, 6);
+    expect(mc.opacity).toBe(ms.opacity);
   });
 
   it('rebuilds only when the period or the orbit frame changes, and follows a moving centre only for a body line', () => {
@@ -91,16 +114,11 @@ describe('EntityOverlay: Earth satellites', () => {
     expect(Array.from(peek(overlay).orbit.pos.shift)).toEqual([0, 0, 0]);
   });
 
-  it('draws nothing for a satellite beyond the near-Earth limit (2e6 km) and after hide()', () => {
+  it('draws nothing for a satellite beyond the near-Earth limit (2e6 km)', () => {
     const far: EntityRecord = { ...iss, id: 'far', provider: { type: 'sampled', frame: 'EARTH:inertial', samples: [[NOW - HOUR, 3e6, 0, 0, 0, 1, 0], [NOW + HOUR, 3e6, 3600, 0, 0, 1, 0]] } };
     const f = setup([far]);
     f.update(far);
     expect(f.overlay.hasOrbit).toBe(false);
-    const { overlay, update } = setup([iss]);
-    update(iss);
-    expect(overlay.hasOrbit).toBe(true);
-    overlay.hide();
-    expect(overlay.hasOrbit).toBe(false);
   });
 });
 
@@ -109,7 +127,7 @@ describe('EntityOverlay: a Moon orbiter', () => {
     const lro = lroLike();
     for (const centre of [EARTH_CENTRE, 'body-moon', 'body-sun']) {
       const { overlay, update } = setup([lro]);
-      update(lro, NOW, false, centre);
+      update(lro, NOW, true, centre);
       expect(overlay.hasOrbit).toBe(true);
       const o = peek(overlay).orbit;
       // a point on the line is ~1837 km from the Moon's centre at the time it was built for (the Moon moves ~1 km/s)
@@ -119,9 +137,40 @@ describe('EntityOverlay: a Moon orbiter', () => {
       expect(Array.from(o.pos.shift)).toEqual([0, 0, 0]);
     }
   });
+
+  it('selected: ONE orbit curve (round the Moon) in every frame; the frame adds a tail only where it is not the Moon', () => {
+    const lro = lroLike();
+    for (const [centre, trail] of [[EARTH_CENTRE, true], ['body-sun', true], ['body-moon', false], ['lro', false]] as const) {
+      const { overlay, update } = setup([lro]);
+      update(lro, NOW, true, centre);
+      const p = peek(overlay);
+      // the one orbit line is the same curve whatever the frame is
+      expect(overlay.hasOrbit, centre).toBe(true);
+      expect(p.orbit.n, centre).toBeGreaterThan(200);
+      for (let i = 0; i < p.orbit.n; i += 20) expect(norm(sub(point(p.orbit.pos.world, i), moonPositionEci(NOW)))).toBeLessThan(2000);
+      // the trail is no second orbit: absent when the frame is the Moon (or LRO itself, drawn relative to the Moon)
+      expect(p.trail.obj.visible, centre).toBe(trail);
+      if (trail) expect(p.trail.n).toBeGreaterThan(1);
+    }
+  });
+
+  it('as a child it is the dimmed orbit line only', () => {
+    const lro = lroLike();
+    const { overlay, update } = setup([lro]);
+    update(lro, NOW, false, 'body-sun');
+    expect(overlay.hasOrbit).toBe(true);
+    expect(peek(overlay).trail.obj.visible).toBe(false);
+  });
 });
 
 describe('EntityOverlay: body lines', () => {
+  it('the Sun has no orbit line, selected or not', () => {
+    const sun = body('body-sun');
+    const { overlay, update } = setup([sun]);
+    update(sun, NOW, true);
+    expect(overlay.hasOrbit).toBe(false);
+  });
+
   it('the Moon is the ellipse round the Earth', () => {
     const moon = body('body-moon');
     const { overlay, update } = setup([moon]);

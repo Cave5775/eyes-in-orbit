@@ -17,7 +17,7 @@ export function FrameBar() {
   const last = frame.crumbs.length - 1;
   return (
     <div className={frame.locked ? 'frame-bar locked' : 'frame-bar'} role="navigation" aria-label="Frame of reference">
-      <span className="frame-label" title="Frame of reference: orbit lines, trails, paths and range / speed readouts are relative to this centre">FRAME</span>
+      <span className="frame-label" title="Frame of reference: trails, paths and range / speed readouts are relative to this centre (orbit lines are always round what the object orbits)">FRAME</span>
       <ol className="frame-crumbs">
         {frame.crumbs.map((c, i) => {
           const usable = entities.has(c.id);
@@ -46,7 +46,7 @@ export function FrameBar() {
         {frame.locked ? 'LOCKED' : 'LOCK'}
       </button>
       {noState && (
-        <span className="frame-hint" role="status" title={`${frame.label} has no state at the simulation time (outside its data range), so paths and orbit lines relative to it cannot be drawn. Move the time, or pick another frame.`}>
+        <span className="frame-hint" role="status" title={`${frame.label} has no state at the simulation time (outside its data range), so trails and paths relative to it cannot be drawn. Move the time, or pick another frame.`}>
           NO STATE FOR {frame.label.toUpperCase()} AT THIS TIME: PATHS HIDDEN
         </span>
       )}

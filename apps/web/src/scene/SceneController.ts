@@ -4,7 +4,10 @@ import {
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
-import { bodyLineIds, bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
+import { bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
+import { DIM } from '../lib/dim';
+import { orbitPeriodSec } from '../lib/orbit';
+import { orbitLines, type OrbitRole } from '../lib/orbit-lines';
 import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
@@ -40,7 +43,6 @@ const RE = EARTH.radiusKm;
 /** a launch vehicle, stage or capsule is "in flight" (exempt from the small-disc hiding) once it is this high above the Earth's surface, km; on the pad it hides like the rest */
 const IN_FLIGHT_KM = 10;
 const PICK_RADIUS_PX = 11;
-const HINT_LIMIT = 6;
 /** FIT never frames a smaller sphere than this: the camera cannot come closer than MIN_ALT_KM to the ground anyway, km. */
 const MIN_FIT_RADIUS_KM = 1.5;
 const FIT_MARGIN = 1.3;
@@ -99,9 +101,6 @@ export interface SceneViewState {
 
 /** How a point is drawn: not at all, dimmed or enlarged by HIGHLIGHT, or as usual. */
 type Look = 'show' | 'hide' | 'dim' | 'boost';
-
-/** The hide terms of a query as one string: the orbit lines and footprints only depend on these. */
-const hideKey = (q: Query): string => q.terms.filter((t) => t.effect === 'hide').map((t) => `${t.neg ? '-' : ''}${t.key}:${t.value}`).join(' ');
 
 export interface SceneStats {
   fps: number;
@@ -196,9 +195,6 @@ export class SceneController {
   private celestial: CelestialLayer;
   /** ids of the body entities (`body-moon`): these are drawn by the CelestialLayer, not as points */
   private bodyIds = new Set<string>();
-  /** body entities whose orbit line is drawn now (selected / frame centre and their children, see lib/body-scene.ts) and their key */
-  private bodyLines: string[] = [];
-  private bodyLineKey = '';
   /** frame of reference (an entity id): paths, trails and orbit lines are sampled relative to this centre (set by `setFrame`, independent of the camera) */
   private frameCentre: Centre = EARTH_CENTRE;
   private frameLocked = false;
@@ -220,7 +216,8 @@ export class SceneController {
   private satSet = new Set<string>();
   private propagator = new PropagatorClient();
   private overlays = new Map<string, EntityOverlay>();
-  private fullOverlays = new Set<string>();
+  /** the role of each overlay: the selected entity's trajectory or the dimmed orbit of one of its children (lib/orbit-lines.ts) */
+  private overlayRoles = new Map<string, OrbitRole>();
   private pathOverlay: PathOverlay | null = null;
   private pathOverlayId: string | null = null;
   /** the trajectory under the cursor (hover highlight, cursor, tooltip); null when none */
@@ -273,8 +270,6 @@ export class SceneController {
   private scopeDirty = true;
   private lastScopeAt = -Infinity;
   private scopeCounts = { rendered: 0, total: 0 };
-  /** overlays (orbit lines, footprints) of entities that are in scope */
-  private overlayInScope = new Map<string, boolean>();
   /** 3D models of entities with `render.model`, drawn camera-relative while the camera is near them (scene/models/) */
   private models: ModelLayer;
   private modelFrame: ModelFrame;
@@ -430,7 +425,7 @@ export class SceneController {
         upserts.push({ id: rec.id, omm: rec.provider.omm });
         this.satSet.add(rec.id);
         if (prev && !isSgp4(prev)) dynChanged = true;
-        graph.remove(rec.id); // re-added below only if selected or hinted
+        graph.remove(rec.id); // re-added (refreshOrbitLines) only if selected or a child orbit drawn with the selection
       } else {
         if (prev && isSgp4(prev)) gone.push(rec.id);
         this.satSet.delete(rec.id);
@@ -454,14 +449,14 @@ export class SceneController {
     this.models.setEntities(this.recs.values());
     for (const rec of this.recs.values()) if (this.models.has(rec.id)) graph.upsert(rec);
     if (dynChanged) this.rebuildDyn();
-    this.refreshHints();
+    this.refreshOrbitLines();
     this.applyAppearance();
   }
 
   /**
    * THE view setter: the query, the ids its text matches, the selection with the objects related to it (parent, children, pad,
    * linked probes ...: never hidden, filtered out nor scoped out) and HIGHLIGHT arrive together, so the points are painted once.
-   * Orbit lines and footprints are refreshed when the selection or the hide terms change.
+   * The orbit lines are refreshed when the selection, the catalog or what the query shows changes.
    */
   setView(v: SceneViewState): void {
     const focus = new Set(v.related);
@@ -470,12 +465,11 @@ export class SceneController {
     const sameFocus = focus.size === old.focus.size && [...focus].every((id) => old.focus.has(id));
     const selChanged = v.selectedId !== this.selectedId;
     if (!selChanged && sameFocus && v.query === this.query && v.text === (old.text ?? null) && v.highlight === this.highlight) return;
-    const hideChanged = v.query !== this.query && hideKey(v.query) !== hideKey(this.query);
     this.query = v.query;
     this.highlight = v.highlight;
     this.ctx = { focus, text: v.text };
     this.selectedId = v.selectedId;
-    if (selChanged || hideChanged) this.refreshHints(); // a hidden group keeps no orbit line or footprint
+    this.refreshOrbitLines(); // a hidden group keeps no orbit line
     this.applyAppearance();
     this.scopeDirty = true;
     if (selChanged) {
@@ -552,7 +546,7 @@ export class SceneController {
   }
 
   /**
-   * Frame of reference (state `frame` / `frameLocked`): orbit lines, trails and paths are sampled relative to `centre`.
+   * Frame of reference (state `frame` / `frameLocked`): trails and paths are sampled relative to `centre` (orbit lines are not: lib/orbit-lines.ts).
    * Independent of the camera; `focus({centre})` moves the camera. The overlays rebuild when the centre changes.
    */
   setFrame(centre: Centre, locked = false): void {
@@ -1074,12 +1068,12 @@ export class SceneController {
     const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, look: Look) => {
       const key: ColorKey = rec ? colorKeyOf(rec) : 'satellites';
       const c = colors[key];
-      const k = look === 'dim' ? 0.3 : 1;
+      const k = look === 'dim' ? DIM.colour : 1;
       set.color.setXYZ(i, c.r * k, c.g * k, c.b * k);
       set.glyph.setX(i, rec?.render?.glyph ? GLYPH_ID[rec.render.glyph] : 0);
       // a 3D model drawn for the entity replaces its sprite
       const replaced = !!rec && this.models.spriteHidden.has(rec.id);
-      set.size.setX(i, look === 'hide' || replaced ? 0 : POINT_SIZE[key] * (look === 'dim' ? 0.7 : look === 'boost' ? 1.8 : 1));
+      set.size.setX(i, look === 'hide' || replaced ? 0 : POINT_SIZE[key] * (look === 'dim' ? DIM.size : look === 'boost' ? 1.8 : 1));
     };
     // with an only / text term, the objects it lets through ('show') are exempt from the scope policy
     const active = queryActive(this.query);
@@ -1124,26 +1118,27 @@ export class SceneController {
     this.pads.color.needsUpdate = this.pads.size.needsUpdate = true;
   }
 
-  /** Keep overlays for the selected entity (full) and for entities hinting `orbitLine`/`footprint` (light). */
-  private refreshHints(): void {
-    const want = new Map<string, boolean>();
-    let hinted = 0;
-    for (const rec of this.recs.values()) {
-      // body entities have their own rule (selected / followed / frame centre), below
-      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyIds.has(rec.id) && classify(rec, this.query, this.ctx) !== 'hide') {
-        want.set(rec.id, false);
-        hinted++;
-        graph.upsert(rec);
-      }
+  private onClosedOrbit(rec: EntityRecord): boolean {
+    graph.upsert(rec);
+    const t = clock.now();
+    const s = graph.stateIn(rec.id, t, 'EARTH:inertial');
+    return !!s && orbitPeriodSec(graph, rec, s, t) !== null;
+  }
+
+  /**
+   * THE orbit lines (lib/orbit-lines.ts): the selected entity's trajectory and the dimmed orbits of its children, nothing else.
+   * They depend on the selection, the catalog and what the query shows, never on the frame or the camera, so this runs when
+   * one of those changes and not per frame. A child object that the data does not flag with `render.orbitLine` is a candidate
+   * only while it is on a closed orbit (a probe far out is not, and must not take a place of the cap).
+   */
+  private refreshOrbitLines(): void {
+    const want = new Map<string, OrbitRole>();
+    const wanted = (rec: EntityRecord) => this.lookOf(rec) !== 'hide' && (!!rec.render?.orbitLine || isBodyEntity(rec) || this.onClosedOrbit(rec));
+    for (const l of orbitLines(this.recs, this.selectedId, wanted)) {
+      want.set(l.id, l.role);
+      graph.upsert(this.recs.get(l.id)!); // an SGP4 entity is in the main-thread graph only while it has an overlay
     }
-    this.bodyLines = this.currentBodyLines();
-    this.bodyLineKey = this.bodyLines.join(',');
-    for (const id of this.bodyLines) want.set(id, false);
     const sel = this.selectedId ? this.recs.get(this.selectedId) : undefined;
-    if (sel) {
-      graph.upsert(sel);
-      want.set(sel.id, true);
-    }
     for (const [id, o] of this.overlays) {
       if (!want.has(id)) {
         o.dispose();
@@ -1155,7 +1150,7 @@ export class SceneController {
       const rec = this.recs.get(id)!;
       this.overlays.set(id, new EntityOverlay(this.scene, this.palette.colors[colorKeyOf(rec)]));
     }
-    this.fullOverlays = new Set([...want].filter(([, full]) => full).map(([id]) => id));
+    this.overlayRoles = want;
 
     // trajectory path for a selected entity that has no SGP4 orbit of its own
     const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' && !this.bodyIds.has(sel.id) ? sel.id : null;
@@ -1167,12 +1162,6 @@ export class SceneController {
       this.pathStatus = { active: false, frame: 'inertial', plan: null };
       if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
     }
-  }
-
-  /** Body entities that get an orbit line now (lib/body-scene.ts `bodyLineIds`). */
-  private currentBodyLines(): string[] {
-    if (this.bodyIds.size === 0) return [];
-    return bodyLineIds(this.recs.values(), { selectedId: this.selectedId, frame: this.frameCentre });
   }
 
   // ------------------------------------------------------------------ geometry queries
@@ -1469,8 +1458,6 @@ export class SceneController {
     const rc = this.rcam;
     rc.fov = cam.fov;
     rc.aspect = cam.aspect;
-    // every drawn body hides what is behind it: ONE list (`celestial.bodies()`) gives the occluder slots, which feed the point
-    // shader's uniforms and the CPU test (`this.occ`) alike, and the disc cones below (uniform updates, no buffer upload)
     rc.near = NEAR_KM;
     rc.far = FAR_KM;
     rc.updateProjectionMatrix();
@@ -1482,6 +1469,8 @@ export class SceneController {
     this.atmo.position.copy(f.origin).negate();
     this.celestial.update(t, f.origin);
 
+    // every drawn body hides what is behind it: ONE list (`celestial.bodies()`) gives the occluder slots, which feed the point
+    // shader's uniforms and the CPU test (`this.occ`) alike, and the disc cones below (uniform updates, no buffer upload)
     const u = this.pointMat.uniforms;
     const bodies = this.celestial.bodies();
     this.occluders.build(bodies, this.camera.fov, this.container.clientHeight);
@@ -1620,15 +1609,6 @@ export class SceneController {
     scan(this.dyn, this.dynIds, false, this.dynKeep, this.dynExempt);
     scan(this.pads, this.launches.map((l) => l.entityId), false, null, null);
     this.scopeCounts = { rendered, total };
-
-    // light overlays (orbit line, footprint) of entities that are scoped out are not drawn either
-    this.overlayInScope.clear();
-    for (const id of this.overlays.keys()) {
-      const keep = this.ctx.focus.has(id) || this.bodyIds.has(id); // a body line is already limited to what is looked at
-      let d = 0;
-      if (!keep && this.pointPos(id, tmp)) d = Math.hypot(tmp.x - focus.x, tmp.y - focus.y, tmp.z - focus.z);
-      this.overlayInScope.set(id, inScope({ d, key: 0, bulk: false, keep }, radius, mode));
-    }
   }
 
   private updateDyn(t: number): void {
@@ -1680,13 +1660,9 @@ export class SceneController {
   private updateOverlays(t: number, wall: number): void {
     const centre = this.frameCentre;
     this.ensureCentreInGraph(); // the record may have been replaced by a refresh
-    // the body lines depend on the selection and the frame: re-evaluate every frame (4 records)
-    if (this.bodyIds.size && this.currentBodyLines().join(',') !== this.bodyLineKey) this.refreshHints();
     for (const [id, o] of this.overlays) {
       const rec = this.recs.get(id);
-      if (!rec) continue;
-      if (this.overlayInScope.get(id) === false) o.hide();
-      else o.update(graph, rec, t, wall, this.fullOverlays.has(id), centre);
+      if (rec) o.update(graph, rec, t, wall, this.overlayRoles.get(id) ?? 'child', centre);
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
     if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, centre);

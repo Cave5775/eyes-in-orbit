@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { EARTH, bodyEntityId, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
-import { bodyLineAllowed } from '../lib/body-scene';
+import { dimmed } from '../lib/dim';
 import {
   EARTH_CENTRE, centrePositionEci, framePathPoint, frameForRec, frameSampler, graphLookup, type Centre, type EntityLookup, type FrameSampler,
 } from '../lib/frame';
 import { chordSagKm } from '../lib/occlusion';
 import { orbitPeriodSec } from '../lib/orbit';
+import type { OrbitRole } from '../lib/orbit-lines';
 import { NEAR_EARTH_LIMIT_KM } from '../lib/ref-body';
 import { RelPositions, type RenderFrame } from './relative';
 
@@ -17,6 +18,10 @@ const FOOTPRINT_POINTS = 96;
 /** Lines above the ground stay this far off it (the mesh is inscribed in the ellipsoid, so it never pokes above). */
 const SURFACE_LIFT_KM = 0.5;
 const DEFAULT_TRAIL_SEC = 900;
+/** Opacity of an orbit line. The selected entity's line is drawn in its colour, a child's dimmed (colour times `DIM.colour`, lib/dim.ts). */
+const ORBIT_ALPHA = 0.9;
+/** A trail never covers more than this fraction of a revolution, so it stays a tail and never turns into a second ellipse. */
+const TRAIL_MAX_REVOLUTION = 1 / 6;
 
 const ZERO3: readonly [number, number, number] = [0, 0, 0];
 
@@ -55,6 +60,8 @@ function makeLine<T extends THREE.Line>(Ctor: new (g: THREE.BufferGeometry, m: T
 /**
  * Orbit line, trail, visibility footprint and ground track for one entity. All vertices are float64 world positions
  * re-based on the camera every frame (`uploadFrame`), so the lines do not wobble when the camera is metres from them.
+ * The role says how much is drawn (lib/orbit-lines.ts): the SELECTED entity gets everything, a CHILD of the selection only
+ * its dimmed orbit line.
  */
 export class EntityOverlay {
   private readonly orbit: Line;
@@ -66,12 +73,13 @@ export class EntityOverlay {
   private orbitWall = -Infinity;
   private trackWall = -Infinity;
   private period: number | null = null;
+  private role: OrbitRole | null = null;
   /** frame centre (key) the orbit line was built for, and where that centre was then (Earth-inertial, km) */
   private centreKeyBuilt = '';
   private orbitRef: Vec3 | null = null;
 
   constructor(world: THREE.Object3D, private color: THREE.Color) {
-    this.orbit = makeLine(THREE.Line, ORBIT_POINTS + 1, color, 0.55, false);
+    this.orbit = makeLine(THREE.Line, ORBIT_POINTS + 1, color, ORBIT_ALPHA, false);
     this.trail = makeLine(THREE.Line, TRAIL_POINTS, color, 0.95, false, true);
     this.footprint = makeLine(THREE.LineLoop, FOOTPRINT_POINTS, color, 0.45, false);
     this.track = makeLine(THREE.Line, TRACK_POINTS, color, 0.9, true, true);
@@ -92,41 +100,35 @@ export class EntityOverlay {
     }
   }
 
-  /** Draw nothing this frame (the entity is out of scope). `update` makes the right lines visible again. */
-  hide(): void {
-    for (const l of [this.orbit, this.trail, this.footprint, this.track]) l.obj.visible = false;
-  }
-
   /** Refill the GPU buffers relative to this frame's camera. Call once per frame after `update`. */
   uploadFrame(f: RenderFrame): void {
     for (const l of [this.orbit, this.trail, this.footprint, this.track]) if (l.obj.visible) l.pos.upload(f, l.n);
   }
 
   /**
-   * `full` adds trail and ground track (selected entity); otherwise orbit line and footprint only. `centre` is the frame
-   * of reference: the trail is sampled relative to it (lib/frame.ts) and rebuilt when it changes. The orbit LINE is the
-   * orbit round what the object orbits whatever the frame is (orbit-line rule, docs/frames.md): an object's primary body, a
-   * body entity's parent (`frameForRec`). The footprint and the ground track are Earth surface features of an Earth
-   * satellite and ignore the frame.
+   * The orbit LINE is the orbit round what the object orbits, whatever the frame is (orbit-line rule, docs/frames.md): its
+   * primary body (a body entity's parent). A `child` draws nothing else. The `selected` entity adds its footprint and ground
+   * track (Earth surface features of an Earth satellite, they ignore the frame) and its trail: the tail of its motion seen
+   * from the frame of reference `centre` (lib/frame.ts), drawn only when that frame is not the primary body itself, where the
+   * tail would just lie on the orbit line.
    */
-  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, full: boolean, centre: Centre = EARTH_CENTRE): void {
+  update(graph: EntityGraph, rec: EntityRecord, t: number, wall: number, role: OrbitRole, centre: Centre = EARTH_CENTRE): void {
+    this.setRole(role);
+    const selected = role === 'selected';
     const s = graph.stateIn(rec.id, t, 'EARTH:inertial');
     const r = s ? norm(s.r) : 0;
-    // a body entity (Moon, Earth, Mars) has its orbit line only (in its parent's frame, `frameForRec`): no footprint, trail or
-    // ground track, and no Earth-distance window (lib/body-scene.ts)
+    // a body entity (Moon, Earth, Mars) has its orbit line only, where it has one (the Sun does not); an object needs a state
+    // and, round the Earth, to be clear of the surface and inside the near-Earth limit
     const isBody = rec.provider?.type === 'body';
-    const usable = isBody ? !!s && bodyLineAllowed(rec) : !!s && r > RE + 50 && r < NEAR_EARTH_LIMIT_KM;
     const earthBound = !isBody && rec.bodyId === 'EARTH';
-    if (isBody) full = false;
-    this.footprint.obj.visible = usable && earthBound && (full || !!rec.render?.footprint);
+    const usable = !!s && (isBody ? !!rec.render?.orbitLine : !earthBound || (r > RE + 50 && r < NEAR_EARTH_LIMIT_KM));
+    this.footprint.obj.visible = usable && earthBound && selected;
     this.orbit.obj.visible = this.trail.obj.visible = this.track.obj.visible = false;
     if (!s || !usable) return;
 
-    if (earthBound) this.updateFootprint(s, r);
+    if (this.footprint.obj.visible) this.updateFootprint(s, r);
     const period = orbitPeriodSec(graph, rec, s, t);
-    const trailCentre = frameForRec(centre, rec);
-    // the orbit line: a body entity's parent frame (the same as the trail's), any other object's primary body
-    const orbitCentre = isBody ? trailCentre : bodyEntityId(rec.bodyId);
+    const orbitCentre = bodyEntityId(rec.bodyId);
     if (period !== this.period || orbitCentre !== this.centreKeyBuilt) {
       this.period = period;
       this.centreKeyBuilt = orbitCentre;
@@ -145,8 +147,9 @@ export class EntityOverlay {
     this.orbit.pos.shift = this.orbitRef ? centreShift(orbitCentre, t, lookup, this.orbitRef) : ZERO3;
     this.orbit.obj.visible = this.orbit.n > 1;
 
-    if (!full) return;
-    this.updateTrail(graph, rec, t, frameSampler(trailCentre, t, lookup));
+    if (!selected || isBody) return;
+    const trailCentre = frameForRec(centre, rec);
+    if (trailCentre !== orbitCentre) this.updateTrail(graph, rec, t, period, frameSampler(trailCentre, t, lookup));
     if (!earthBound) return;
     if (Math.abs(t - this.trackT) > (period * 1000) / 80 || wall - this.trackWall > 3000) {
       this.buildTrack(graph, rec, t, period);
@@ -154,6 +157,16 @@ export class EntityOverlay {
       this.trackWall = wall;
     }
     this.track.obj.visible = true;
+  }
+
+  /** Orbit line colour and opacity of the role: full for the selected entity, dimmed (as HIGHLIGHT dims) for a child. */
+  private setRole(role: OrbitRole): void {
+    if (role === this.role) return;
+    this.role = role;
+    const m = this.orbit.obj.material as THREE.LineBasicMaterial;
+    const c = this.color;
+    if (role === 'selected') m.color.copy(c);
+    else m.color.setRGB(dimmed(c.r), dimmed(c.g), dimmed(c.b));
   }
 
   private updateFootprint(s: StateVector, r: number): void {
@@ -205,8 +218,8 @@ export class EntityOverlay {
     this.orbit.obj.geometry.setDrawRange(0, n);
   }
 
-  private updateTrail(graph: EntityGraph, rec: EntityRecord, t: number, inFrame?: FrameSampler): void {
-    const span = (rec.render?.trailSeconds ?? DEFAULT_TRAIL_SEC) * 1000;
+  private updateTrail(graph: EntityGraph, rec: EntityRecord, t: number, periodSec: number, inFrame?: FrameSampler): void {
+    const span = Math.min(rec.render?.trailSeconds ?? DEFAULT_TRAIL_SEC, periodSec * TRAIL_MAX_REVOLUTION) * 1000;
     const pos = this.trail.pos, col = this.trail.color!;
     let n = 0;
     for (let i = 0; i < TRAIL_POINTS && (!inFrame || inFrame.ref); i++) {
