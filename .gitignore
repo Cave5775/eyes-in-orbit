@@ -1,9 +1,12 @@
 node_modules
 dist
 data/*.sqlite*
+data/celestrak/
+data/imagery/
 data/trajectories/*.local.*
 .env
 apps/web/public/textures/*.jpg
 npmOutput.txt
 *.log
 .claude/
+plans.md

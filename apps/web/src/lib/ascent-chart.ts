@@ -1,5 +1,5 @@
 import {
-  ascentPhaseAt, sampleAscentRows, type AscentEvent, type AscentPhaseSpan, type AscentRow, type AscentSeries,
+  ORBIT_TAIL_SEC, ascentPhaseAt, sampleAscentRows, type AscentEvent, type AscentPhaseSpan, type AscentRow, type AscentSeries,
 } from '@eio/core';
 
 /** Pure helpers behind `ui/detail/AscentTelemetry.tsx`: scales, ticks, series selection, label layout. */
@@ -49,6 +49,12 @@ export function fmtTPlus(sec: number): string {
 export function fmtAxisT(sec: number): string {
   const s = Math.round(sec);
   return `${Math.floor(s / 60)}:${p2(s % 60)}`;
+}
+
+/** T+ (s) under pixel `px` of a plot that maps [0, tMax] onto [x0, x1]; null outside the plot. */
+export function plotTimeAt(px: number, x0: number, x1: number, tMax: number): number | null {
+  if (!(px >= x0 && px <= x1) || !(x1 > x0)) return null;
+  return ((px - x0) / (x1 - x0)) * tMax;
 }
 
 /** SVG path through the points, one decimal. */
@@ -119,6 +125,17 @@ export function phaseNow(s: AscentSeries, tSec: number): AscentPhaseSpan | undef
   return ascentPhaseAt(timelinePhases(s), tSec);
 }
 
+/**
+ * Status text for a time after the last modeled phase. The flight goes on in the modeled orbit (`on orbit (modeled)`, a placeholder
+ * until a TLE exists) for ORBIT_TAIL_SEC when the launch reached orbit (`onOrbit`: mission phase ON_ORBIT); before and after
+ * that window, and without a modeled series, the ascent is just complete.
+ */
+export function postAscentLabel(s: AscentSeries, tSec: number, onOrbit: boolean): string {
+  const phases = timelinePhases(s);
+  const end = phases.length ? phases[phases.length - 1].toSec : undefined;
+  return onOrbit && end !== undefined && tSec >= end && tSec <= end + ORBIT_TAIL_SEC ? 'ON ORBIT (MODELED)' : 'ASCENT COMPLETE';
+}
+
 export interface PlacedLabel {
   x: number;
   text: string;
@@ -143,6 +160,15 @@ export function layoutLabels(items: { x: number; text: string }[], width: number
     rowEnd[row] = x0 + w;
     return { x: it.x, text: it.text, row, anchor };
   });
+}
+
+/**
+ * Baseline y of a label row above the event band. Row 0 (the earliest label of a cluster) is the highest and later rows
+ * sit below it, so a later label's leader line, which runs down to the band, starts below the earlier labels' text
+ * instead of cutting through it.
+ */
+export function labelY(row: number, rows: number, bandY: number, rowH: number): number {
+  return bandY - 4 - (Math.max(1, rows) - 1 - Math.min(row, rows - 1)) * rowH;
 }
 
 // ---------------------------------------------------------------- cursor readout

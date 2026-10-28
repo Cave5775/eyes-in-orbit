@@ -1,6 +1,8 @@
 import { formatCountdown, type Launch } from '@eio/core';
 import { fmtLat, fmtLon, fmtUtc } from '../../lib/format';
 import { liveMission, statusTone } from '../../lib/launch';
+import { skipTitle } from '../../lib/launch-seek';
+import { skipToLaunch } from '../../state/seek';
 import { useSimNow } from '../hooks';
 import { AscentTelemetry } from './AscentTelemetry';
 import { Field } from './Field';
@@ -13,6 +15,13 @@ export function LaunchTab({ launch }: { launch: Launch }) {
   return (
     <div>
       <div className="countdown mono">{formatCountdown(net - now)}</div>
+      {Number.isFinite(net) && (
+        <div className="skip-row">
+          <button className="btn" onClick={() => skipToLaunch(launch)} title={skipTitle(launch.status.id, `${fmtUtc(net)} UTC`)}>
+            SKIP TO LAUNCH
+          </button>
+        </div>
+      )}
       <div className="chips tight">
         <span className={`chip ${statusTone(launch.status.id)}`}>{launch.status.name}</span>
         <span className="chip">{m.phase.replace(/_/g, ' ')}</span>

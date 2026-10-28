@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { PANELS, clampSize, loadSizes, maxSize, resolveSizes, saveSizes, type PanelKey, type PanelSizes } from '../lib/layout';
+import { usePanels } from '../state/panels';
 import { Splitter } from './Splitter';
 
 function viewport() {
@@ -42,11 +43,15 @@ export function ResizableLayout({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // hidden panels (PANELS menu) give their space back; the stored sizes are untouched, so showing one restores it
+  const shown = usePanels((s) => s.visible);
+  const bottomShown = shown.board || shown.dsn;
   const style = {
     '--left-w': `${sizes.left}px`,
     '--right-w': `${sizes.right}px`,
-    '--bottom-h': `${sizes.bottom}px`,
+    '--bottom-h': bottomShown ? `${sizes.bottom}px` : '0px',
     '--dsn-w': `${sizes.dsn}px`,
+    '--ticker-h': shown.ticker ? '26px' : '0px',
   } as CSSProperties;
 
   const sp = (key: PanelKey, extra: { orientation: 'vertical' | 'horizontal'; grow: 1 | -1; label: string; className: string }) => (
@@ -65,8 +70,8 @@ export function ResizableLayout({ children }: { children: ReactNode }) {
       {children}
       {sp('left', { orientation: 'vertical', grow: 1, label: 'Resize entity list', className: 'sp-left' })}
       {sp('right', { orientation: 'vertical', grow: -1, label: 'Resize detail panel', className: 'sp-right' })}
-      {sp('bottom', { orientation: 'horizontal', grow: -1, label: 'Resize bottom panels', className: 'sp-bottom' })}
-      {sp('dsn', { orientation: 'vertical', grow: -1, label: 'Resize DSN panel', className: 'sp-dsn' })}
+      {bottomShown && sp('bottom', { orientation: 'horizontal', grow: -1, label: 'Resize bottom panels', className: 'sp-bottom' })}
+      {shown.board && shown.dsn && sp('dsn', { orientation: 'vertical', grow: -1, label: 'Resize DSN panel', className: 'sp-dsn' })}
     </div>
   );
 }

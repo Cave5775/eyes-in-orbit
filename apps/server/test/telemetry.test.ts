@@ -214,6 +214,10 @@ describe('POST/GET /api/telemetry/:launchId', () => {
     const res = await app.inject({ method: 'POST', url: `/api/telemetry/${ID}`, payload: { rows: full } });
     expect(res.json()).toMatchObject({ source: 'live', extrapolatedFromSec: null });
     expect(hub.graph.get(`launch-${ID}`)!.attrs).toMatchObject({ trajectorySource: 'live', liveExtrapolatedFromSec: null });
+    // past the last measured row the vehicle continues on the modeled orbit instead of returning to the pad
+    const p = providerFromSpec(hub.graph.get(`launch-${ID}`)!.provider!) as CompositeProvider;
+    expect(p.segmentAt(NET + 1200_000)!.phase).toBe('on orbit (modeled)');
+    expect(stateToGeodetic(p.stateAt(NET + 3600_000)!, NET + 3600_000, 'EARTH').alt).toBeGreaterThan(100);
   });
 
   it('live data starting after liftoff gets a ramped lead-in with no gap or jump', async () => {

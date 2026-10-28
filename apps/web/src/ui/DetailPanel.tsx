@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { emptyHint } from '../lib/browser-ui';
 import { kindLabel, launchOf } from '../lib/entity';
+import { usePanels } from '../state/panels';
 import { useStore } from '../state/store';
 import { LaunchTab } from './detail/LaunchTab';
 import { NewsTab } from './detail/NewsTab';
@@ -12,7 +14,12 @@ export function DetailPanel() {
   const selectedId = useStore((s) => s.selectedId);
   const rec = useStore((s) => (s.selectedId ? s.entities.get(s.selectedId) : undefined));
   const launches = useStore((s) => s.launches);
-  const select = useStore((s) => s.select);
+  const selectObject = useStore((s) => s.selectObject);
+  const frame = useStore((s) => s.frame);
+  const frameLocked = useStore((s) => s.frameLocked);
+  const setFrame = useStore((s) => s.setFrame);
+  const setFrameLocked = useStore((s) => s.setFrameLocked);
+  const dsnShown = usePanels((s) => s.visible.dsn);
   const [tab, setTab] = useState<TabId>('telemetry');
 
   const launch = useMemo(() => launchOf(rec, launches), [rec, launches]);
@@ -35,22 +42,35 @@ export function DetailPanel() {
     return (
       <aside className="panel right">
         <div className="panel-head"><span>DETAIL</span></div>
-        <div className="empty big">Select an object on the globe, in the entity list, the launch board or the DSN panel.</div>
+        <div className="empty big">{emptyHint(dsnShown)}</div>
       </aside>
     );
   }
-
   return (
     <aside className="panel right">
       <div className="panel-head">
         <span className="detail-name" title={rec.name}>{rec.name}</span>
-        <button className="btn icon" onClick={() => select(null)} aria-label="Clear selection" title="Clear selection">&times;</button>
+        <button className="btn icon" onClick={() => selectObject(null)} aria-label="Clear selection" title="Clear selection">&times;</button>
       </div>
       <div className="detail-sub">
         <span className="chip">{kindLabel(rec.kind)}</span>
         {rec.group && <span className="chip alt">{rec.group}</span>}
         <span className="mono dim">{rec.id}</span>
       </div>
+      {/* LOCK FRAME: this object becomes the frame of reference and stays it while other objects are selected */}
+      {frameLocked && frame === rec.id ? (
+        <button
+          className="btn frame-action on" onClick={() => setFrameLocked(false)}
+          title={`The frame of reference is locked on ${rec.name}: selecting other objects does not change it. Unlock to let selecting a body take it over again; the frame stays on this object until you select another body.`}>
+          UNLOCK FRAME
+        </button>
+      ) : (
+        <button
+          className="btn frame-action" onClick={() => setFrame(rec.id, true)}
+          title={`Make ${rec.name} the frame of reference and lock it: orbit lines, trails, paths and range / speed readouts of every object you select next are relative to it. Selecting other objects does not change the frame.`}>
+          LOCK FRAME TO THIS OBJECT
+        </button>
+      )}
       <div className="tabs" role="tablist">
         {tabs.map(([id, label]) => (
           <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'tab on' : 'tab'} onClick={() => setTab(id)}>{label}</button>

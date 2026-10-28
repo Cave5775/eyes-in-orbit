@@ -1,5 +1,4 @@
 import { EARTH } from '@eio/core';
-import type { DistanceScale } from './deepspace';
 
 /** Pure camera maths (no three.js): altitude-scaled zoom, fit distance, local surface frames. Units km. */
 
@@ -10,21 +9,17 @@ const F = EARTH.flattening;
 
 /** Closest the camera may get to the ellipsoid: clears the Earth mesh facet sag (~0.12 km) with a wide margin. */
 export const MIN_ALT_KM = 3;
-export const MAX_DIST_KM = 3e7;
-/** Farthest the camera may be from its target when probes are drawn at their real distances (Voyager 1 is ~2.5e10 km out). */
-export const MAX_DIST_TRUE_KM = 1e11;
-
-/** Zoom-out limit for a distance scale: the compressed shell fits well inside 3e7 km, true scale needs ~1e11 km. */
-export const maxDistKm = (scale: DistanceScale): number => (scale === 'true' ? MAX_DIST_TRUE_KM : MAX_DIST_KM);
+/** Farthest the camera may be from its target. Everything is drawn at its real distance (Voyager 1 is ~2.5e10 km out). */
+export const MAX_DIST_KM = 1e11;
 
 /** Camera-to-target distance at which a fly-to settles for a target at geocentric radius `rKm`. */
 export function settleDistance(rKm: number): number {
   return rKm < 20000 ? 3200 : rKm < 2e6 ? rKm * 0.6 : rKm * 0.45;
 }
 
-/** Camera distance that frames a sphere of `radius`, never beyond the zoom limit of the distance scale. */
-export function fitDistanceClamped(radius: number, fovDeg: number, aspect: number, margin: number, minDist: number, scale: DistanceScale): number {
-  return Math.min(maxDistKm(scale), Math.max(minDist, fitDistance(radius, fovDeg, aspect, margin)));
+/** Camera distance that frames a sphere of `radius`, never beyond the zoom limit. */
+export function fitDistanceClamped(radius: number, fovDeg: number, aspect: number, margin: number, minDist: number): number {
+  return Math.min(MAX_DIST_KM, Math.max(minDist, fitDistance(radius, fovDeg, aspect, margin)));
 }
 /** Smallest camera-to-target distance when the target is not the Earth's centre (a followed object). */
 export const MIN_TARGET_DIST_KM = 0.2;
@@ -49,14 +44,6 @@ export function surfaceRadius(p: V3): number {
 /** Height of `p` above the ellipsoid, km (negative below). */
 export const altitudeOf = (p: V3): number => len(p) - surfaceRadius(p);
 
-/** The point on the ellipsoid under (radially below) `p`; `p` itself at the origin. */
-export function groundPoint(p: V3, liftKm = 0): V3 {
-  const n = len(p);
-  if (n === 0) return [0, 0, 0];
-  const k = (surfaceRadius(p) + liftKm) / n;
-  return [p[0] * k, p[1] * k, p[2] * k];
-}
-
 /**
  * Wheel/pinch zoom that scales with height above the surface instead of with distance to the target.
  * Near the ground a notch moves the camera metres; at GEO it moves thousands of km. `factor` < 1 zooms in
@@ -79,9 +66,17 @@ export function zoomDistance(
   return Math.min(opts.maxDist ?? MAX_DIST_KM, Math.max(opts.minDist, next));
 }
 
-/** Smallest elevation (rad above the local horizon) that keeps a camera at `dist` from the ground target above `minAltKm`. */
-export function minElevation(distKm: number, minAltKm = MIN_ALT_KM): number {
-  return distKm <= minAltKm ? Math.PI / 2 : Math.asin(Math.min(1, minAltKm / distKm));
+/**
+ * Smallest elevation (rad above the local horizon) that keeps a camera at `dist` from the target above `minAltKm`.
+ * `targetAltKm` is the target's own height: a ground target (0) needs a camera above the horizon, a high object may be
+ * viewed from below its own height (negative result), down to the point where the camera would reach `minAltKm`.
+ * The flat estimate is conservative: the Earth's curvature only raises the camera.
+ */
+export function minElevation(distKm: number, minAltKm = MIN_ALT_KM, targetAltKm = 0): number {
+  const need = minAltKm - Math.max(0, targetAltKm);
+  if (distKm <= 0) return Math.PI / 2;
+  if (need > 0 && distKm <= need) return Math.PI / 2;
+  return Math.asin(Math.max(-1, Math.min(1, need / distKm)));
 }
 
 /** Camera distance at which a sphere of `radius` fills the view with `margin` spare (>= 1) for both FOV axes. */
@@ -147,6 +142,84 @@ export function basisFromUp(up: V3): { e: V3; n: V3; u: V3 } {
   return { e, n: cross(u, e), u };
 }
 
+/** A horizontal frame carried along the ground: east/north/up unit vectors plus how far it is turned from north-up. */
+export interface SurfaceFrame {
+  e: V3;
+  n: V3;
+  u: V3;
+  /** signed angle (rad, counter-clockwise seen from above) of `e` from the true east: 0 is the plain north-up frame */
+  psi: number;
+}
+
+/** A jump of the local vertical bigger than this (rad) in one update is a new place, not a movement: the frame restarts north-up. */
+export const FRAME_RESET_STEP = 0.8;
+/** Colatitudes (rad from the pole) between which the turn away from north-up starts to be undone again; nearer the pole it is kept. */
+export const POLE_ZONE_NEAR = (10 * Math.PI) / 180;
+export const POLE_ZONE_FAR = (20 * Math.PI) / 180;
+/**
+ * Most the turn from north-up is undone, per radian of ground travelled, outside the polar zone (a camera standing still never
+ * drifts). Driving east at colatitude c, north-up turns by cot(c) per radian relative to a carried frame, 2.75 at the edge of
+ * the zone (20 degrees), so the rate has to reach that for the north-up view of ordinary orbits to stay exact; 10% over.
+ */
+export const HEADING_RELAX = 1.1 / Math.tan(POLE_ZONE_FAR);
+
+const wrapPi = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
+
+/**
+ * Next horizontal frame of the surface view for the new local vertical `upIn`, continuous through the poles.
+ * The north-up frame (`basisFromUp`) turns by the whole longitude change when the point passes near a pole and is undefined on
+ * it, which spun the camera. Here the previous east axis is parallel-transported (projected onto the new tangent plane, the
+ * smallest possible turn), so the heading never jumps. Away from the poles the accumulated turn from north-up is wound back
+ * at a rate proportional to the distance travelled (at most `HEADING_RELAX` per radian), so the view returns to north-up and
+ * ordinary movement stays exactly north-up. Nearer a pole than `POLE_ZONE_NEAR` the frame is purely carried, which turns it
+ * by 0 per radian of travel; in between the two blend.
+ * `prev` null starts north-up.
+ */
+export function advanceSurfaceFrame(prev: SurfaceFrame | null, upIn: V3): SurfaceFrame {
+  const u = unit(upIn);
+  const north = basisFromUp(u);
+  const fresh = (): SurfaceFrame => ({ e: north.e, n: north.n, u, psi: 0 });
+  if (!Number.isFinite(u[0] + u[1] + u[2])) return prev ?? fresh();
+  if (!prev) return fresh();
+  const step = Math.acos(Math.max(-1, Math.min(1, dot(prev.u, u))));
+  if (!(step < FRAME_RESET_STEP)) return fresh();
+  const k = dot(prev.e, u);
+  let e: V3 = [prev.e[0] - k * u[0], prev.e[1] - k * u[1], prev.e[2] - k * u[2]];
+  const el = len(e);
+  if (!(el > 1e-6)) return fresh();
+  e = [e[0] / el, e[1] / el, e[2] / el];
+  // turn from north-up, nearest to the previous one (the north-up axes themselves are unreliable near a pole)
+  let psi = prev.psi + wrapPi(Math.atan2(dot(e, north.n), dot(e, north.e)) - prev.psi);
+  psi = wrapPi(psi);
+  const colat = Math.acos(Math.min(1, Math.abs(u[2])));
+  const t = Math.max(0, Math.min(1, (colat - POLE_ZONE_NEAR) / (POLE_ZONE_FAR - POLE_ZONE_NEAR)));
+  const lim = HEADING_RELAX * t * step;
+  const undo = Math.max(-lim, Math.min(lim, psi));
+  if (undo !== 0) {
+    const c = Math.cos(-undo), s = Math.sin(-undo);
+    const w = cross(u, e);
+    e = [e[0] * c + w[0] * s, e[1] * c + w[1] * s, e[2] * c + w[2] * s];
+    psi -= undo;
+  }
+  return { e, n: cross(u, e), u, psi };
+}
+
+/**
+ * Move `p` over the sphere of its own radius by the tangent vector `move` (km, the part along p is ignored) along the great circle,
+ * so a pan crosses the poles like any other place. Zero movement returns `p`.
+ */
+export function moveOnSphere(p: V3, move: V3): V3 {
+  const r = len(p);
+  if (r <= 0) return p;
+  const d: V3 = [p[0] / r, p[1] / r, p[2] / r];
+  const k = dot(move, d);
+  const t: V3 = [move[0] - k * d[0], move[1] - k * d[1], move[2] - k * d[2]];
+  const tl = len(t);
+  if (!(tl > 0)) return p;
+  const th = tl / r, c = Math.cos(th), s = Math.sin(th) / tl;
+  return [r * (d[0] * c + t[0] * s), r * (d[1] * c + t[1] * s), r * (d[2] * c + t[2] * s)];
+}
+
 /** East/north/up for geodetic latitude and (east) longitude in radians, in the frame the longitude refers to. */
 export function localBasis(lat: number, lon: number): { e: V3; n: V3; u: V3 } {
   const sl = Math.sin(lat), cl = Math.cos(lat), so = Math.sin(lon), co = Math.cos(lon);
@@ -184,6 +257,82 @@ export function slerpDir(a: V3, b: V3, k: number): V3 {
   const sa = Math.sin(ang);
   const w0 = Math.sin((1 - k) * ang) / sa, w1 = Math.sin(k * ang) / sa;
   return [ua[0] * w0 + ub[0] * w1, ua[1] * w0 + ub[1] * w1, ua[2] * w0 + ub[2] * w1];
+}
+
+/** Elevation (rad above the local horizontal) of the camera at `p` as seen from `target`; the local vertical is the ellipsoid normal at `target`. */
+export function elevationAbout(p: V3, target: V3): number {
+  const o: V3 = [p[0] - target[0], p[1] - target[1], p[2] - target[2]];
+  const d = len(o);
+  return d > 0 ? Math.asin(Math.max(-1, Math.min(1, dot(o, ellipsoidUp(target)) / d))) : 0;
+}
+
+/**
+ * `p` turned about `target` (distance kept, azimuth kept) up to elevation `minEl` when it is lower, else unchanged. Raising the
+ * elevation at a fixed distance only moves the camera away from the Earth's centre, so this never lowers its altitude.
+ */
+export function liftToElevation(p: V3, target: V3, minEl: number): V3 {
+  if (elevationAbout(p, target) >= minEl) return p;
+  const o: V3 = [p[0] - target[0], p[1] - target[1], p[2] - target[2]];
+  const d = len(o);
+  const { n, u } = basisFromUp(ellipsoidUp(target));
+  const k = dot(o, u);
+  let h: V3 = [o[0] - k * u[0], o[1] - k * u[1], o[2] - k * u[2]];
+  if (len(h) < 1e-9 * d) h = n; // straight below: any horizontal direction (north, matching an unset azimuth)
+  h = unit(h);
+  const ce = Math.cos(minEl) * d, se = Math.sin(minEl) * d;
+  return [target[0] + ce * h[0] + se * u[0], target[1] + ce * h[1] + se * u[1], target[2] + ce * h[2] + se * u[2]];
+}
+
+/** An aim point deeper than this (km) below the ground is not on the surface: the elevation floor of `blendPosition` does not apply to it. */
+const ABOUT_MIN_ALT_KM = 10;
+
+/**
+ * Camera position part-way (`k` 0..1) through a mode transition from `from` to `to` (geocentric, km). The camera goes round the
+ * Earth along the great circle between the two positions while its height above the ground changes by a constant factor per step
+ * (log-linear, never below `minAltKm`), so it is never lower than the lower end and never inside the planet. Blending the offset
+ * from the (moving) target instead dragged the camera through the ground, or below the object's horizon, whenever the target
+ * went from the Earth's centre to an object near the surface.
+ * With `about` (the point the camera aims at for the whole transition, when it is an object or a ground point rather than the
+ * Earth's centre) the camera also stays above the lower of its two end elevations as seen from there, so it never dips below
+ * the horizon it starts or ends at. The aim is constant, so the elevation floor is measured about one fixed point; an aim at or
+ * near the Earth's centre, or deep inside the planet, has no horizon and only the great-circle path applies.
+ * Exactly `from` at 0 and `to` at 1.
+ */
+export function blendPosition(from: V3, to: V3, k: number, minAltKm = MIN_ALT_KM, about?: V3): V3 {
+  if (k <= 0) return from;
+  if (k >= 1) return to;
+  if (len(from) < 1 || len(to) < 1) return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k, from[2] + (to[2] - from[2]) * k];
+  const d = slerpDir(from, to, k);
+  const a0 = Math.max(minAltKm, altitudeOf(from)), a1 = Math.max(minAltKm, altitudeOf(to));
+  const r = surfaceRadius(d) + Math.exp(Math.log(a0) + (Math.log(a1) - Math.log(a0)) * k);
+  const p: V3 = [d[0] * r, d[1] * r, d[2] * r];
+  if (!about || len(about) < 1000 || altitudeOf(about) < -ABOUT_MIN_ALT_KM) return p;
+  return liftToElevation(p, about, Math.min(elevationAbout(from, about), elevationAbout(to, about)));
+}
+
+/** Surface view of an object: closest and farthest the fit may put the camera from it, km. */
+export const SURFACE_FIT_MIN_KM = 20;
+export const SURFACE_FIT_MAX_KM = 60000;
+
+/**
+ * Camera distance for the surface view of an object `heightKm` above the ground. The camera is centred on the object
+ * itself; the distance frames a sphere as tall as the object's height, so the ground point below it still fits in a
+ * view tilted down at the usual elevation (at ISS altitude about 1,400 km; far enough out the ground leaves the frame,
+ * which is accepted). Objects on the ground get the minimum distance, very high ones stop at the zoom-out limit.
+ */
+export function surfaceFitDistance(heightKm: number, fovDeg: number, aspect: number, margin = 1.25): number {
+  return Math.min(SURFACE_FIT_MAX_KM, Math.max(SURFACE_FIT_MIN_KM, fitDistance(Math.max(0, heightKm), fovDeg, aspect, margin)));
+}
+
+/**
+ * Ground movement (km east, km north) of the surface view's target for a drag of (`dx`, `dy`) pixels, as if grabbing the
+ * ground: dragging right moves the target to the left (west when looking north), dragging down moves it forward (north).
+ * `kmPerPx` is the size of a pixel at the target's depth; the forward component is stretched by the view's foreshortening.
+ */
+export function groundPanDelta(az: number, el: number, dx: number, dy: number, kmPerPx: number): { east: number; north: number } {
+  const ca = Math.cos(az), sa = Math.sin(az);
+  const right = kmPerPx * dx, forward = (kmPerPx * dy) / Math.max(Math.sin(el), 0.2);
+  return { east: sa * right - ca * forward, north: -ca * right - sa * forward };
 }
 
 /** Camera azimuth/elevation that views a subject at `c` from outside, with the Earth behind it; null when `c` is near the centre (keep the current angles). */

@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatCountdown, sampleAscentRows, type AscentEvent, type AscentSeries, type Launch } from '@eio/core';
 import { api } from '../../api/client';
 import {
-  METRICS, chartDomain, chartSeries, fmtAxisT, fmtTPlus, layoutLabels, linePath, linear, niceTicks, phaseNow, readingAt,
+  METRICS, chartDomain, chartSeries, fmtAxisT, fmtTPlus, labelY, layoutLabels, linePath, linear, niceTicks, phaseNow, plotTimeAt, postAscentLabel, readingAt,
   timeTicks, timelineEvents, timelinePhases, valueDomain, visibleRows, type ChartSeries, type Metric, type Reading, type SeriesId,
 } from '../../lib/ascent-chart';
 import { fmtDeg, fmtKm, fmtNum, fmtSpeedKmS, fmtUtc } from '../../lib/format';
+import { liveMission } from '../../lib/launch';
+import { jumpTitle } from '../../lib/launch-seek';
+import { jumpToFlightTime } from '../../state/seek';
 import { useStore } from '../../state/store';
 import { useSimNow } from '../hooks';
 import './AscentTelemetry.css';
@@ -39,6 +42,8 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
   const liftoffMs = series?.liftoffMs ?? Date.parse(launch.net);
   const tSec = (now - liftoffMs) / 1000;
   const tMax = useMemo(() => (series ? chartDomain(series).tMax : 0), [series]);
+  /** seek the simulation clock to T+`t` of this flight, at the current rate (clamped to the charted range) */
+  const jump = useCallback((t: number) => jumpToFlightTime(liftoffMs, Math.max(0, Math.min(t, tMax))), [liftoffMs, tMax]);
 
   // poll while the vehicle is flying so rows posted by a script show up even without a push
   const flying = !!series && tSec >= -30 && tSec <= tMax + 60;
@@ -66,7 +71,8 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
   const phase = phaseNow(series, tSec);
   const reading = readingAt(series, Math.max(0, tSec));
   const inFlight = tSec >= 0 && tSec <= tMax;
-  const phaseLabel = tSec < 0 ? 'PRE-LAUNCH' : phase?.label ?? (tSec > tMax ? 'ASCENT COMPLETE' : 'IN FLIGHT');
+  const onOrbit = liveMission(launch, now).phase === 'ON_ORBIT';
+  const phaseLabel = tSec < 0 ? 'PRE-LAUNCH' : phase?.label ?? (tSec > tMax ? postAscentLabel(series, tSec, onOrbit) : 'IN FLIGHT');
   const m = series.modeled;
 
   return (
@@ -90,12 +96,12 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
 
       {METRICS.map((mt) => (
         <Chart key={mt.key} metric={mt.key} title={mt.title} unit={mt.unit} series={chartSeries(series, mt.key)} events={events} tMax={tMax}
-          cursorT={inFlight ? tSec : null} reading={inFlight ? reading : null} hoverT={hoverT} onHover={setHoverT} liveRows={series.live?.rows.length ?? 0} />
+          cursorT={inFlight ? tSec : null} reading={inFlight ? reading : null} hoverT={hoverT} onHover={setHoverT} onJump={jump} liveRows={series.live?.rows.length ?? 0} />
       ))}
 
-      <Timeline series={series} events={events} tMax={tMax} tSec={tSec} hoverT={hoverT} onHover={setHoverT} />
+      <Timeline series={series} events={events} tMax={tMax} tSec={tSec} onOrbit={onOrbit} hoverT={hoverT} onHover={setHoverT} onJump={jump} />
 
-      <EventTable events={events} liftoffMs={liftoffMs} tSec={tSec} />
+      <EventTable events={events} liftoffMs={liftoffMs} tSec={tSec} onJump={jump} />
 
       <p className="at-note dim">
         {series.source === 'live'
@@ -159,12 +165,14 @@ interface ChartProps {
   reading: Reading | null;
   hoverT: number | null;
   onHover: (t: number | null) => void;
+  /** click: jump the simulation clock to T+ t */
+  onJump: (t: number) => void;
   liveRows: number;
 }
 
 const CH = { h: 104, top: 8, bottom: 18 };
 
-function Chart({ metric, title, unit, series, events, tMax, cursorT, reading, hoverT, onHover, liveRows }: ChartProps) {
+function Chart({ metric, title, unit, series, events, tMax, cursorT, reading, hoverT, onHover, onJump, liveRows }: ChartProps) {
   const [, top] = valueDomain(series, tMax);
   const x = linear(0, tMax, X0, X1);
   const y = linear(0, top, CH.h - CH.bottom, CH.top);
@@ -184,13 +192,14 @@ function Chart({ metric, title, unit, series, events, tMax, cursorT, reading, ho
   return (
     <figure className="at-chart">
       <figcaption><span>{title}</span><span className="dim"> {unit}</span></figcaption>
-      <svg viewBox={`0 0 ${W} ${CH.h}`} role="img" aria-label={`${title} against time since liftoff${series.length ? '' : ', no data'}`}
-        onPointerMove={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          const px = ((e.clientX - r.left) / r.width) * W;
-          onHover(px >= X0 && px <= X1 ? ((px - X0) / (X1 - X0)) * tMax : null);
-        }}
-        onPointerLeave={() => onHover(null)}>
+      <svg className="at-jumpable" viewBox={`0 0 ${W} ${CH.h}`} role="img" aria-label={`${title} against time since liftoff${series.length ? '' : ', no data'}`}
+        onPointerMove={(e) => onHover(plotTimeAt(svgX(e), X0, X1, tMax))}
+        onPointerLeave={() => onHover(null)}
+        onClick={(e) => {
+          const t = plotTimeAt(svgX(e), X0, X1, tMax);
+          if (t !== null) onJump(t);
+        }}>
+        <title>{hoverT !== null ? jumpTitle(hoverT) : 'click to jump to a time'}</title>
         {yTicks.map((v) => (
           <g key={v}>
             <line className="at-grid" x1={X0} x2={X1} y1={y(v)} y2={y(v)} />
@@ -223,8 +232,9 @@ function Chart({ metric, title, unit, series, events, tMax, cursorT, reading, ho
 
 const TL = { h: 112, labelRows: 3, rowH: 10, bandY: 38, bandH: 14, boosterY: 74 };
 
-function Timeline({ series, events, tMax, tSec, hoverT, onHover }: {
-  series: AscentSeries; events: AscentEvent[]; tMax: number; tSec: number; hoverT: number | null; onHover: (t: number | null) => void;
+function Timeline({ series, events, tMax, tSec, onOrbit, hoverT, onHover, onJump }: {
+  series: AscentSeries; events: AscentEvent[]; tMax: number; tSec: number; onOrbit: boolean; hoverT: number | null; onHover: (t: number | null) => void;
+  onJump: (t: number) => void;
 }) {
   const x = linear(0, tMax, X0, X1);
   const phases = timelinePhases(series);
@@ -236,14 +246,15 @@ function Timeline({ series, events, tMax, tSec, hoverT, onHover }: {
 
   return (
     <figure className="at-chart at-timeline">
-      <figcaption><span>EVENTS</span><span className="dim"> T+ · {current ? current.label : tSec < 0 ? 'pre-launch' : 'ascent complete'}</span></figcaption>
-      <svg viewBox={`0 0 ${W} ${TL.h}`} role="img" aria-label="Ascent event timeline"
-        onPointerMove={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          const px = ((e.clientX - r.left) / r.width) * W;
-          onHover(px >= X0 && px <= X1 ? ((px - X0) / (X1 - X0)) * tMax : null);
-        }}
-        onPointerLeave={() => onHover(null)}>
+      <figcaption><span>EVENTS</span><span className="dim"> T+ · {current ? current.label : tSec < 0 ? 'pre-launch' : postAscentLabel(series, tSec, onOrbit).toLowerCase()}</span></figcaption>
+      <svg className="at-jumpable" viewBox={`0 0 ${W} ${TL.h}`} role="img" aria-label="Ascent event timeline"
+        onPointerMove={(e) => onHover(plotTimeAt(svgX(e), X0, X1, tMax))}
+        onPointerLeave={() => onHover(null)}
+        onClick={(e) => {
+          const t = plotTimeAt(svgX(e), X0, X1, tMax);
+          if (t !== null) onJump(t);
+        }}>
+        <title>{hoverT !== null ? jumpTitle(hoverT) : 'click to jump to a time'}</title>
         <text className="at-axis" x={X0 - 4} y={TL.bandY + 10} textAnchor="end">VEH</text>
         {phases.map((p) => {
           const x0 = x(p.fromSec), x1 = x(Math.min(p.toSec, tMax));
@@ -257,10 +268,10 @@ function Timeline({ series, events, tMax, tSec, hoverT, onHover }: {
         })}
         {vehicle.map((e, i) => {
           const l = vLabels[i];
-          const ly = TL.bandY - 4 - l.row * TL.rowH;
+          const ly = labelY(l.row, TL.labelRows, TL.bandY, TL.rowH);
           return (
-            <g key={e.name} className={tSec >= e.tSec ? 'at-ev past' : 'at-ev'}>
-              <title>{`${e.label} ${fmtTPlus(e.tSec)}${e.reported ? ' (reported)' : ' (modeled)'}`}</title>
+            <g key={e.name} className={tSec >= e.tSec ? 'at-ev past' : 'at-ev'} onClick={(ev) => { ev.stopPropagation(); onJump(e.tSec); }}>
+              <title>{`${e.label} ${fmtTPlus(e.tSec)}${e.reported ? ' (reported)' : ' (modeled)'} - ${jumpTitle(e.tSec)}`}</title>
               <line x1={l.x} x2={l.x} y1={ly + 2} y2={TL.bandY + TL.bandH} />
               <text x={l.x + (l.anchor === 'end' ? 2 : -2)} y={ly} textAnchor={l.anchor}>{e.label}</text>
             </g>
@@ -273,8 +284,8 @@ function Timeline({ series, events, tMax, tSec, hoverT, onHover }: {
             {booster.map((e, i) => {
               const l = bLabels[i];
               return (
-                <g key={e.name} className={tSec >= e.tSec ? 'at-ev past' : 'at-ev'}>
-                  <title>{`${e.label} ${fmtTPlus(e.tSec)}${e.reported ? ' (reported)' : ' (modeled)'}`}</title>
+                <g key={e.name} className={tSec >= e.tSec ? 'at-ev past' : 'at-ev'} onClick={(ev) => { ev.stopPropagation(); onJump(e.tSec); }}>
+                  <title>{`${e.label} ${fmtTPlus(e.tSec)}${e.reported ? ' (reported)' : ' (modeled)'} - ${jumpTitle(e.tSec)}`}</title>
                   <circle cx={l.x} cy={TL.boosterY} r={3} />
                   <text x={l.x + (l.anchor === 'end' ? 3 : -3)} y={TL.boosterY + 12 + l.row * TL.rowH} textAnchor={l.anchor}>{e.label}</text>
                 </g>
@@ -290,7 +301,13 @@ function Timeline({ series, events, tMax, tSec, hoverT, onHover }: {
   );
 }
 
-function EventTable({ events, liftoffMs, tSec }: { events: AscentEvent[]; liftoffMs: number; tSec: number }) {
+/** Pointer x in the charts' viewBox units. */
+function svgX(e: { clientX: number; currentTarget: Element }): number {
+  const r = e.currentTarget.getBoundingClientRect();
+  return ((e.clientX - r.left) / r.width) * W;
+}
+
+function EventTable({ events, liftoffMs, tSec, onJump }: { events: AscentEvent[]; liftoffMs: number; tSec: number; onJump: (t: number) => void }) {
   if (!events.length) return null;
   return (
     <table className="at-events">
@@ -298,9 +315,9 @@ function EventTable({ events, liftoffMs, tSec }: { events: AscentEvent[]; liftof
       <thead><tr><th scope="col">Event</th><th scope="col">T+</th><th scope="col">UTC</th><th scope="col">Basis</th></tr></thead>
       <tbody>
         {events.map((e) => (
-          <tr key={e.name} className={tSec >= e.tSec ? 'past' : undefined}>
+          <tr key={e.name} className={tSec >= e.tSec ? 'jumpable past' : 'jumpable'} title={jumpTitle(e.tSec)} onClick={() => onJump(e.tSec)}>
             <th scope="row">{e.label}{e.track === 'booster' ? ' (booster)' : ''}</th>
-            <td className="mono">{fmtTPlus(e.tSec)}</td>
+            <td className="mono"><button type="button" className="at-jump" aria-label={`${jumpTitle(e.tSec)} (${e.label})`}>{fmtTPlus(e.tSec)}</button></td>
             <td className="mono">{fmtUtc(liftoffMs + e.tSec * 1000).slice(11)}</td>
             <td className="dim">{e.reported ? 'reported' : 'modeled'}</td>
           </tr>

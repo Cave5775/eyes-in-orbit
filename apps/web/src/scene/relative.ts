@@ -34,6 +34,11 @@ export class RelPositions {
   fixed: boolean;
   /** points to upload (<= capacity) */
   count: number;
+  /**
+   * World translation added to every inertial point on upload, km (ignored when `fixed`). A path or orbit line built
+   * around a moving frame centre is shifted with the centre between rebuilds. Zero by default.
+   */
+  shift: readonly [number, number, number] = [0, 0, 0];
 
   constructor(capacityOrWorld: number | Float64Array, fixed = false) {
     this.world = typeof capacityOrWorld === 'number' ? new Float64Array(capacityOrWorld * 3) : capacityOrWorld;
@@ -50,7 +55,10 @@ export class RelPositions {
 
   /** Refill the GPU attribute relative to the frame's origin. */
   upload(f: RenderFrame, count = this.count): void {
-    toCameraRelative(this.world, this.attr.array as Float32Array, count, f.originV3, f.spin, this.fixed);
+    const s = this.shift;
+    // world + shift - origin = world - (origin - shift)
+    const origin: V3 = this.fixed || (s[0] === 0 && s[1] === 0 && s[2] === 0) ? f.originV3 : [f.origin.x - s[0], f.origin.y - s[1], f.origin.z - s[2]];
+    toCameraRelative(this.world, this.attr.array as Float32Array, count, origin, f.spin, this.fixed);
     this.attr.needsUpdate = true;
   }
 
@@ -58,6 +66,6 @@ export class RelPositions {
   worldOf(i: number, spin: Spin, out: THREE.Vector3): THREE.Vector3 {
     const w = this.world, x = w[i * 3], y = w[i * 3 + 1];
     if (this.fixed) return out.set(spin.cos * x - spin.sin * y, spin.sin * x + spin.cos * y, w[i * 3 + 2]);
-    return out.set(x, y, w[i * 3 + 2]);
+    return out.set(x + this.shift[0], y + this.shift[1], w[i * 3 + 2] + this.shift[2]);
   }
 }

@@ -1,4 +1,7 @@
-import { deriveMissionState, type Launch, type LiveAscent, type StreamLink } from '@eio/core';
+import {
+  ascentEntityEvents, boosterLandingPoint, deriveMissionState, missionTimingFor, modeledBoosterSegments, orbitSegmentsOf, type Launch, type LiveAscent,
+  type StreamLink,
+} from '@eio/core';
 import type { Connector } from '../connector';
 import type { Hub, NewEntity } from '../hub';
 import { planAscent } from '../telemetry';
@@ -57,7 +60,8 @@ export function normalizeLaunch(raw: Json, nowMs = Date.now()): Launch {
   const status = raw.status ?? {};
   const orbit = raw.mission?.orbit;
   const lat = num(raw.pad?.latitude), lon = num(raw.pad?.longitude);
-  const state = deriveMissionState({ statusId: status.id, netMs: Date.parse(raw.net), nowMs });
+  const vehicle = raw.rocket?.configuration?.full_name ?? raw.rocket?.configuration?.name;
+  const state = deriveMissionState({ statusId: status.id, netMs: Date.parse(raw.net), nowMs, ...missionTimingFor({ vehicle, name: raw.name }) });
   return {
     id: raw.id,
     name: raw.name,
@@ -66,7 +70,7 @@ export function normalizeLaunch(raw: Json, nowMs = Date.now()): Launch {
     windowStart: raw.window_start ?? undefined,
     windowEnd: raw.window_end ?? undefined,
     provider: raw.launch_service_provider?.name,
-    vehicle: raw.rocket?.configuration?.full_name ?? raw.rocket?.configuration?.name,
+    vehicle,
     mission: raw.mission ? {
       name: raw.mission.name, type: raw.mission.type ?? undefined, description: raw.mission.description ?? undefined,
       orbit: orbit?.abbrev ?? orbit?.name ?? undefined,
@@ -130,17 +134,94 @@ export function launchEntity(launch: Launch, trajectory?: Trajectory, live?: Liv
   };
 }
 
+/**
+ * `launch-<id>-booster`: the first stage as its own entity (pad, ascent to stage separation, then the modeled return and
+ * landing). Only for recovered Falcon 9 boosters with a modeled ascent; a trajectory file replaces the vehicle path and
+ * with it the separation state the return is built from, so there is no booster entity then.
+ */
+export function boosterEntity(launch: Launch, trajectory?: Trajectory, live?: LiveAscent): NewEntity | null {
+  const plan = planAscent(launch, trajectory, live);
+  const m = plan.modeled;
+  const netMs = Date.parse(launch.net);
+  if (!launch.pad || !m?.booster || plan.source === 'file' || !Number.isFinite(netMs)) return null;
+  const pad = { latDeg: launch.pad.latitude, lonDeg: launch.pad.longitude };
+  const segments = modeledBoosterSegments(netMs, pad, m);
+  const land = boosterLandingPoint(pad, m);
+  if (!segments || !land) return null;
+  return {
+    id: `${launch.entityId}-booster`,
+    name: `${launch.name} (booster)`,
+    kind: 'stage',
+    bodyId: 'EARTH',
+    parentId: launch.entityId,
+    aliases: {},
+    group: 'launches',
+    provider: { type: 'composite', segments },
+    events: ascentEntityEvents(m.events.filter((e) => e.track === 'booster'), netMs),
+    render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 120, label: true, model: 'rocket-stage' },
+    attrs: {
+      provider: launch.provider ?? null,
+      launch: launch.name,
+      recovery: m.recovery,
+      landingSite: launch.landing?.location ?? null,
+      landingDownrangeKm: Math.round(m.booster.landingDownrangeKm),
+      landingLatDeg: Math.round(land.latDeg * 1e4) / 1e4,
+      landingLonDeg: Math.round(land.lonDeg * 1e4) / 1e4,
+      trajectorySource: 'modeled',
+      trajectoryNote: 'MODELED booster return path through the event times, not measured',
+    },
+  };
+}
+
+/**
+ * `launch-<id>-payload`: the object the launch put in orbit, as a satellite that follows the same modeled two-body orbit as the
+ * launch vehicle after the end of the modeled ascent (`on orbit (modeled)`, about 12 h, no J2). A PLACEHOLDER until the payload
+ * appears in a TLE feed, so it is only worth having for the launches LL2 still lists as previous (the 10 newest). Only for
+ * launches that are flying or flown and not failed (`phase` ACTIVE_ASCENT, ORBIT_INSERTION or ON_ORBIT) whose ascent reaches
+ * orbit; it has no position before the end of the modeled ascent and none after the 12 hours.
+ */
+export function payloadEntity(launch: Launch, trajectory?: Trajectory, live?: LiveAscent): NewEntity | null {
+  if (!launch.pad || !['ACTIVE_ASCENT', 'ORBIT_INSERTION', 'ON_ORBIT'].includes(launch.phase)) return null;
+  const plan = planAscent(launch, trajectory, live);
+  // the orbit continuation of the vehicle path, without its pad tail: the payload does not return to the pad
+  const segments = orbitSegmentsOf(plan.segments);
+  if (!segments) return null;
+  return {
+    id: `${launch.entityId}-payload`,
+    name: `${launch.mission?.name ?? launch.name} (payload)`,
+    kind: 'satellite',
+    bodyId: 'EARTH',
+    parentId: launch.entityId,
+    aliases: {},
+    group: 'launches',
+    provider: { type: 'composite', segments },
+    render: { colorKey: 'satellite', label: true, orbitLine: true },
+    attrs: {
+      provider: launch.provider ?? null,
+      launch: launch.name,
+      mission: launch.mission?.name ?? null,
+      orbit: launch.mission?.orbit ?? null,
+      ascentInclinationDeg: plan.modeled?.inclinationDeg ?? null,
+      trajectorySource: 'modeled',
+      trajectoryNote: 'MODELED two-body orbit (no J2, no drag) from the end of the modeled ascent, about 12 h, until a TLE exists',
+    },
+  };
+}
+
 /** Re-derive every launch's phase from the FSM and refresh the `launch-*` entities. */
 export function syncLaunchEntities(hub: Hub, nowMs = Date.now()): void {
   let phaseChanged = false;
   const launches = hub.launches.map((l) => {
-    const state = deriveMissionState({ statusId: l.status.id, netMs: Date.parse(l.net), nowMs });
+    const state = deriveMissionState({ statusId: l.status.id, netMs: Date.parse(l.net), nowMs, ...missionTimingFor(l) });
     if (state.phase === l.phase && state.hold === l.hold) return l;
     phaseChanged = true;
     return { ...l, phase: state.phase, hold: state.hold };
   });
   if (phaseChanged) hub.setLaunches(launches);
-  hub.upsert(...(phaseChanged ? launches : hub.launches).map((l) => launchEntity(l, matchTrajectory(hub.trajectories, l), hub.liveTelemetry.get(l.id))));
+  hub.upsert(...(phaseChanged ? launches : hub.launches).flatMap((l) => {
+    const trajectory = matchTrajectory(hub.trajectories, l), live = hub.liveTelemetry.get(l.id);
+    return [launchEntity(l, trajectory, live), boosterEntity(l, trajectory, live), payloadEntity(l, trajectory, live)].filter((e): e is NewEntity => e !== null);
+  }));
 }
 
 let phaseTimer: NodeJS.Timeout | undefined;

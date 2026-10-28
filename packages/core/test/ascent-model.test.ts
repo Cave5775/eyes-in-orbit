@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CompositeProvider, DEG, EARTH, defaultInclination, groundAzimuthDeg, inclinationForAzimuthDeg, inertialAzimuthDeg,
+  CompositeProvider, DEG, EARTH, convert, norm, defaultInclination, groundAzimuthDeg, inclinationForAzimuthDeg, inertialAzimuthDeg,
   modelFalcon9Ascent, modeledAscentForLaunch, modeledAscentSegments, pchip, providerFromSpec, sampleAscentRows,
-  secoSpeedKmS, stateToGeodetic, ascentEntityEvents, ascentPhaseAt, defaultBranch,
-  type Launch,
+  secoSpeedKmS, stateToGeodetic, ascentEntityEvents, ascentPhaseAt, defaultBranch, modelAscent, vehicleProfileFor, VEHICLES,
+  type Launch, type ProviderSpec,
 } from '../src';
 
 const VSFB = { padLatDeg: 34.632, padLonDeg: -120.611 };
@@ -192,7 +192,7 @@ describe('modeled composite provider', () => {
     const m = vsfb();
     const net = Date.parse('2026-10-22T22:51:18Z');
     const segs = modeledAscentSegments(net, { latDeg: VSFB.padLatDeg, lonDeg: VSFB.padLonDeg }, m);
-    expect(segs.map((s) => s.phase)).toEqual(['pad', 'stage 1 ascent', 'staging', 'stage 2 burn', 'orbit (held)', 'pad (launch complete)']);
+    expect(segs.map((s) => s.phase)).toEqual(['pad', 'stage 1 ascent', 'staging', 'stage 2 burn', 'orbit (held)', 'on orbit (modeled)', 'pad (launch complete)']);
     const p = providerFromSpec({ type: 'composite', segments: segs }) as CompositeProvider;
     expect(p.segmentAt(net - 1000)!.phase).toBe('pad');
     expect(p.segmentAt(net + 60_000)!.phase).toBe('stage 1 ascent');
@@ -200,9 +200,9 @@ describe('modeled composite provider', () => {
 
     // every instant from -10 s to the end of the hold has a state, with no gaps at segment joins
     for (let t = -10; t <= 1110; t += 0.5) expect(p.stateAt(net + t * 1000), `t=${t}`).not.toBeNull();
-    expect(p.segmentAt(net + 1200_000)!.phase).toBe('pad (launch complete)');
+    expect(p.segmentAt(net + 1200_000)!.phase).toBe('on orbit (modeled)');
 
-    const g = (t: number) => stateToGeodetic(p.stateAt(net + t * 1000)!, net + t * 1000, 'EARTH');
+    const g =(t: number) => stateToGeodetic(p.stateAt(net + t * 1000)!, net + t * 1000, 'EARTH');
     expect(g(-5).lat / DEG).toBeCloseTo(VSFB.padLatDeg, 4);
     const meco = sampleAscentRows(m.rows, 150)!;
     expect(g(150).alt).toBeCloseTo(meco.altKm, 1);
@@ -213,6 +213,79 @@ describe('modeled composite provider', () => {
     const dLat = (end.lat / DEG - VSFB.padLatDeg) * DEG;
     const dLon = (end.lon / DEG - VSFB.padLonDeg) * DEG * Math.cos(VSFB.padLatDeg * DEG);
     expect(Math.hypot(dLat, dLon) * EARTH.radiusKm).toBeGreaterThan(sampleAscentRows(m.rows, 510)!.downrangeKm * 0.9);
+  });
+});
+
+describe('after SECO (Held Orbit)', () => {
+  const net = Date.parse('2026-10-22T22:51:18Z');
+  const pad = { latDeg: VSFB.padLatDeg, lonDeg: VSFB.padLonDeg };
+  const composite = (m = vsfb(), opts?: Parameters<typeof modeledAscentSegments>[3]) =>
+    providerFromSpec({ type: 'composite', segments: modeledAscentSegments(net, pad, m, opts) }) as CompositeProvider;
+  const fixedAt = (p: CompositeProvider, tMs: number) => convert(p.stateAt(tMs)!, 'EARTH:fixed', tMs).r;
+  const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  it('does not teleport back to the pad when the held phase ends', () => {
+    const p = composite();
+    // one second of orbital motion is about 8 km; the pad is thousands of km away
+    const jump = dist(fixedAt(p, net + 1110_000), fixedAt(p, net + 1111_000));
+    expect(jump).toBeLessThan(12);
+    expect(stateToGeodetic(p.stateAt(net + 1111_000)!, net + 1111_000, 'EARTH').alt).toBeGreaterThan(100);
+  });
+
+  it('continues on a keplerian orbit with matching position and velocity at the last ascent row', () => {
+    const m = vsfb();
+    const p = composite(m);
+    const t = net + 1110_000;
+    expect(p.segmentAt(t + 5000)!.phase).toBe('on orbit (modeled)');
+    expect(p.segmentAt(t + 5000)!.spec.type).toBe('keplerian');
+    expect(dist(fixedAt(p, t - 1), fixedAt(p, t + 1))).toBeLessThan(0.1);
+
+    const before = convert(p.stateAt(t - 1)!, 'EARTH:inertial', t - 1);
+    const after = convert(p.stateAt(t + 1)!, 'EARTH:inertial', t + 1);
+    // the sampled hold has a finite-difference velocity; the orbit is built from the plane and the SECO speed
+    expect(norm(after.v!)).toBeCloseTo(norm(before.v!), 0);
+    const cosAngle = (before.v![0] * after.v![0] + before.v![1] * after.v![1] + before.v![2] * after.v![2]) / (norm(before.v!) * norm(after.v!));
+    expect(Math.acos(Math.min(1, cosAngle)) / DEG).toBeLessThan(5);
+
+    const seg = p.segmentAt(t + 5000)!.spec as Extract<ProviderSpec, { type: 'keplerian' }>;
+    expect(seg.bodyId).toBe('EARTH');
+    expect(seg.elements.i / DEG).toBeGreaterThan(m.inclinationDeg - 3);
+    expect(seg.elements.i / DEG).toBeLessThan(m.inclinationDeg + 3);
+    const perigee = seg.elements.a * (1 - seg.elements.e) - EARTH.radiusKm;
+    expect(perigee).toBeGreaterThan(100);
+    expect(seg.elements.a * (1 + seg.elements.e) - EARTH.radiusKm).toBeLessThan(450);
+  });
+
+  it('stays in orbit for about 12 hours, then returns the launch entity to the pad marker', () => {
+    const p = composite();
+    const t = net + 1110_000;
+    for (const dh of [1, 5, 11]) {
+      const s = p.stateAt(t + dh * 3600_000)!;
+      expect(s, `+${dh} h`).not.toBeNull();
+      expect(stateToGeodetic(s, t + dh * 3600_000, 'EARTH').alt).toBeGreaterThan(100);
+    }
+    expect(p.segmentAt(t + 13 * 3600_000)!.phase).toBe('pad (launch complete)');
+    // the payload variant has no pad tail: it ends with the orbit
+    const payload = composite(vsfb(), { padAfterOrbit: false });
+    expect(payload.stateAt(t + 11 * 3600_000)).not.toBeNull();
+    expect(payload.stateAt(t + 13 * 3600_000)).toBeNull();
+  });
+
+  it('keeps the pad tail when the flight did not reach orbit', () => {
+    const p = composite(vsfb(), { orbit: false });
+    const segs = modeledAscentSegments(net, pad, vsfb(), { orbit: false });
+    expect(segs.map((s) => s.phase).slice(-2)).toEqual(['orbit (held)', 'pad (launch complete)']);
+    expect(p.segmentAt(net + 1200_000)!.phase).toBe('pad (launch complete)');
+  });
+
+  it('has a state at every instant across segment joins, including fractional milliseconds', () => {
+    const p = composite();
+    const joins = [0, 150, 153, 158, 510, 1110].map((s) => net + s * 1000);
+    for (const j of joins) {
+      for (const d of [-1, -0.75, -0.5, -0.25, -0.0001, 0, 0.0001, 0.25, 0.5, 0.75, 1]) {
+        expect(p.stateAt(j + d), `join ${(j - net) / 1000} s ${d}`).not.toBeNull();
+      }
+    }
   });
 });
 
@@ -243,5 +316,59 @@ describe('launch mapping', () => {
   it('reads the booster recovery plan', () => {
     expect(modeledAscentForLaunch(launch({ landing: { attempt: true, location: 'LZ-4', type: 'RTLS' } }))!.recovery).toBe('rtls');
     expect(modeledAscentForLaunch(launch({ landing: { attempt: false } }))!.recovery).toBe('none');
+  });
+});
+
+describe('vehicle profiles', () => {
+  const MAHIA = { name: 'Rocket Lab LC-1A', latitude: -39.2615, longitude: 177.8648 };
+  const launch = (over: Partial<Launch> = {}): Launch => ({
+    id: 'e1', name: 'Electron | Rideshare', status: { id: 1, name: 'Go', abbrev: 'Go' }, net: '2026-11-01T01:00:00Z',
+    vehicle: 'Electron', mission: { name: 'Rideshare', orbit: 'Sun-Synchronous Orbit' },
+    pad: MAHIA, streams: [], phase: 'SCHEDULED', hold: false, entityId: 'launch-e1', ...over,
+  });
+
+  it('selects a profile from the LL2 vehicle and launch name', () => {
+    expect(vehicleProfileFor({ vehicle: 'Falcon 9 Block 5', name: 'Falcon 9 Block 5 | Crew-14' })).toBe(VEHICLES.falcon9);
+    expect(vehicleProfileFor({ vehicle: 'Electron', name: 'Electron | Rideshare' })).toBe(VEHICLES.electron);
+    expect(vehicleProfileFor({ vehicle: undefined, name: 'Electron | The Owl Spreads Its Wings' })).toBe(VEHICLES.electron);
+    // look-alikes and vehicles with no profile are left at the pad
+    expect(vehicleProfileFor({ vehicle: 'Falcon Heavy', name: 'Falcon Heavy | USSF-52' })).toBeNull();
+    expect(vehicleProfileFor({ vehicle: 'Neutron', name: 'Neutron | Maiden Flight' })).toBeNull();
+    expect(vehicleProfileFor({ vehicle: 'Ariane 64', name: 'Ariane 6 | CSO-4' })).toBeNull();
+  });
+
+  it('models an Electron rideshare to a sun-synchronous orbit: expended first stage, its own timeline', () => {
+    const m = modeledAscentForLaunch(launch())!;
+    expect(m.vehicle).toBe('Electron');
+    expect(m.recovery).toBe('none');
+    expect(m.booster).toBeNull();
+    expect(m.events.some((e) => e.track === 'booster')).toBe(false);
+    expect(m.inclinationDeg).toBeCloseTo(97.4, 1);
+    expect(m.inclinationSource).toBe('orbit');
+    expect(m.timeline).toMatchObject({ mecoSec: 150, secoSec: 535, secoAltKm: 190, apogeeKm: 520 });
+    expect(m.events.find((e) => e.name === 'MECO')!.tSec).toBe(150);
+    expect(m.events.find((e) => e.name === 'SECO')!.tSec).toBe(535);
+    expect(m.assumptions[0]).toMatch(/Electron/);
+    expect(m.assumptions[0]).toMatch(/unverified/);
+    // altitude and speed never go backwards through the burn, and SECO is at the profile's altitude
+    const burn = m.rows.filter((r) => r.tSec <= 535);
+    for (let i = 1; i < burn.length; i++) {
+      expect(burn[i].altKm).toBeGreaterThanOrEqual(burn[i - 1].altKm - 0.5);
+    }
+    expect(sampleAscentRows(m.rows, 535)!.altKm).toBeCloseTo(190, 0);
+    expect(sampleAscentRows(m.rows, 535)!.speedKmS).toBeGreaterThan(6.5);
+    expect(sampleAscentRows(m.rows, 535)!.speedKmS).toBeLessThan(8);
+  });
+
+  it('ignores an LL2 landing plan for a vehicle whose booster is not modeled', () => {
+    expect(modeledAscentForLaunch(launch({ landing: { attempt: true, location: 'OCISLY', type: 'ASDS' } }))!.recovery).toBe('none');
+  });
+
+  it('keeps Falcon 9 output identical through the profile path', () => {
+    const a = modelFalcon9Ascent({ ...CAPE, inclinationDeg: 51.6, recovery: 'rtls' });
+    const b = modelAscent(VEHICLES.falcon9, { ...CAPE, inclinationDeg: 51.6, recovery: 'rtls' });
+    expect(b).toBe(a); // same memo entry
+    expect(a.vehicle).toBe('Falcon 9');
+    expect(a.assumptions[0]).toMatch(/Falcon 9/);
   });
 });

@@ -1,5 +1,6 @@
 import type {
-  Article, AscentSeries, ConnectorHealth, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch, TelemetryPoint,
+  Article, AscentSeries, ConnectorHealth, CredentialInfo, CredentialKey, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch,
+  TelemetryPoint,
 } from '@eio/core';
 import type { SearchHit } from '../lib/filters';
 
@@ -14,4 +15,8 @@ export interface Api {
   health(): Promise<{ serverTime: number; entityCount: number; connectors: ConnectorHealth[] }>;
   /** Modeled and measured ascent series of a launch (`GET /api/telemetry/:launchId`); null when unknown. */
   ascent(launchId: string): Promise<AscentSeries | null>;
+  /** API keys and logins the local server can use (`GET /api/credentials`); secrets are reported as set / not set only. */
+  credentials(): Promise<CredentialInfo[]>;
+  /** `PUT /api/credentials`: a string sets a value, `null` removes the UI value. Resolves with the new state. */
+  saveCredentials(values: Partial<Record<CredentialKey, string | null>>): Promise<CredentialInfo[]>;
 }

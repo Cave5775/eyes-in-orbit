@@ -1,23 +1,33 @@
 import * as THREE from 'three';
 import {
-  DEG, EARTH, fixedToGeodetic, geodeticToFixed, gmstRad, sunDirectionEci,
+  DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci,
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, groundPoint, maxDistKm, settleDistance, viewAnglesFor, type V3 } from '../lib/camera';
+import { bodyLineIds, bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
+import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
+import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
+import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
-import { NO_FILTERS, filtersActive, matchesFilters, sceneVisibility, type Filters, type Visibility } from '../lib/filters';
-import { ELLIPSOID_K, makeOccluder, occlusionC2 } from '../lib/occlusion';
-import { SHELL_THRESHOLD_KM, type DistanceScale } from '../lib/deepspace';
-import { displayPosition } from '../lib/paths';
+import { NO_CTX, NO_QUERY, classify, isDrawn, queryActive, type Class, type Ctx, type Query } from '../lib/query';
+import { ELLIPSOID_K, makeOccluder, occlusionC2, sphereView } from '../lib/occlusion';
+import { liftNearSurface } from '../lib/paths';
+import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
+import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM, discGroups, hiddenByDisc, type DiscGroup } from '../lib/disc-hide';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
+import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
 import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial } from './materials';
 import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
+import type { DetailView } from '../lib/earth-detail';
+import { CelestialLayer } from './celestial';
+import { EarthDetail, type DetailStats } from './earth-detail';
 import { EntityOverlay } from './overlays';
 import { PathOverlay, type PathStatus } from './PathOverlay';
+import { nearestOnPath, type PathHit } from '../lib/path-pick';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
 import { ModelLayer, type ModelFrame } from './models/ModelLayer';
@@ -27,6 +37,8 @@ import { IssArrayTracker, arraySources, issJoints, type ArraySources, type IssJo
 THREE.ColorManagement.enabled = false;
 
 const RE = EARTH.radiusKm;
+/** a launch vehicle, stage or capsule is "in flight" (exempt from the small-disc hiding) once it is this high above the Earth's surface, km; on the pad it hides like the rest */
+const IN_FLIGHT_KM = 10;
 const PICK_RADIUS_PX = 11;
 const HINT_LIMIT = 6;
 /** FIT never frames a smaller sphere than this: the camera cannot come closer than MIN_ALT_KM to the ground anyway, km. */
@@ -46,12 +58,50 @@ export interface PathLabel {
 export interface SceneCallbacks {
   onPick(id: string): void;
   onHover(h: { id: string; x: number; y: number } | null): void;
+  /**
+   * A click found more than one object within the cluster radius (lib/pick.ts): ids highest in the hierarchy first, then
+   * newest (the first is what a plain click would have selected), `total` counts all of them (the list is capped), x/y are
+   * the cursor in CSS px inside the scene container. Several drawn bodies under the cursor (an Earth and a Moon dot) list
+   * here too. Zoomed out, objects over a small distant body are not drawn nor pickable, so such a click finds the body alone
+   * and calls onPick. onPick is not called for a click that opens the list.
+   */
+  onPickMany?(ids: string[], total: number, x: number, y: number): void;
+  /**
+   * The cursor is on the selected launch's drawn trajectory (a planned flight with real sample times) and nothing above it
+   * in the pick order is: `tMs` is the sim time of the nearest point of the line, `x`/`y` the cursor and `sx`/`sy` that point,
+   * CSS px inside the scene container. Called while it holds (the cursor moves), once with null when it ends.
+   */
+  onPathHover?(h: { id: string; tMs: number; x: number; y: number; sx: number; sy: number } | null): void;
+  /** A click landed on that trajectory (and on no object, popup or body above it): the caller seeks the clock to `tMs`. */
+  onPathSeek?(h: { id: string; tMs: number }): void;
   /** Screen positions of the selected path's phase boundaries (called each frame while there are any, once more to clear). */
   onPathLabels?(labels: PathLabel[]): void;
+  /**
+   * The object labels to show this frame (lib/labels.ts): the first `n` entries of `labels`, top-left box corners in CSS px.
+   * The array is reused between calls, so consume it synchronously. Called every frame while labels are on, and once with n = 0 when they go off.
+   */
+  onLabels?(labels: readonly PlannedLabel[], n: number): void;
   /** The scene changed follow mode by itself (FIT leaves the followed object). */
   onFollowChange?(follow: boolean): void;
   onSurfaceChange?(on: boolean): void;
 }
+
+/** What the page tells the scene about the query and the selection (see `SceneController.setView`). */
+export interface SceneViewState {
+  query: Query;
+  /** the ids the query's text matches (null without text) */
+  text: ReadonlySet<string> | null;
+  selectedId: string | null;
+  /** the objects related to the selection: never hidden, filtered out nor scoped out */
+  related: Iterable<string>;
+  highlight: boolean;
+}
+
+/** How a point is drawn: not at all, dimmed or enlarged by HIGHLIGHT, or as usual. */
+type Look = 'show' | 'hide' | 'dim' | 'boost';
+
+/** The hide terms of a query as one string: the orbit lines and footprints only depend on these. */
+const hideKey = (q: Query): string => q.terms.filter((t) => t.effect === 'hide').map((t) => `${t.neg ? '-' : ''}${t.key}:${t.value}`).join(' ');
 
 export interface SceneStats {
   fps: number;
@@ -60,23 +110,30 @@ export interface SceneStats {
   altKm: number;
   satCount: number;
   dynCount: number;
-  earth: 'texture' | 'procedural';
-  shellSelected: boolean;
+  /** streamed close-up imagery over the base map: the tile level and how many of its tiles have arrived (null: not active) */
+  detail: DetailStats | null;
+  detailEnabled: boolean;
   /** surface-aligned camera mode */
   surface: boolean;
-  /** selected path: window relative to now (ms, negative = past) and whether it is drawn on the compressed shell */
-  path: { pastMs: number; futureMs: number; compressed: boolean } | null;
+  /** selected path: window relative to now (ms, negative = past) */
+  path: { pastMs: number; futureMs: number } | null;
   /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
   scope: { mode: ScopeMode; rendered: number; total: number };
-  distanceScale: DistanceScale;
+  /** frame of reference (docs/frames.md): its short label (`Moon`, an entity's name), whether it is the Earth, and the lock */
+  frame: { label: string; isDefault: boolean; locked: boolean };
   /** ids of entities whose 3D model is drawn this frame (camera within the model's LOD distance) */
   models: string[];
   /** ISS array pose in use while the ISS model is drawn: the source of each part and the joint angles (rad) */
   arrays: { sources: ArraySources; joints: IssJoints | null } | null;
 }
 
-/** Where the surface-aligned camera is anchored. */
-type SurfaceSource = { kind: 'entity'; id: string } | { kind: 'latlon'; lat: number; lon: number };
+/** What the surface-aligned camera is centred on: an entity, or a fixed point over the ground (`alt` km above the ellipsoid, 0 on it). */
+type SurfaceSource = { kind: 'entity'; id: string } | { kind: 'latlon'; lat: number; lon: number; alt?: number };
+
+/** Elevation of the surface camera on entry and after a fit, radians above the local horizon. */
+const SURFACE_EL = 0.35;
+/** Camera distance of the surface view of a ground point (a focused pad, the point under the view), km. */
+const SURFACE_POINT_DIST_KM = 300;
 
 interface PointSet {
   geo: THREE.BufferGeometry;
@@ -86,17 +143,18 @@ interface PointSet {
   color: THREE.BufferAttribute;
   size: THREE.BufferAttribute;
   glyph: THREE.BufferAttribute;
-  /** 0/1 per point: scope policy (out of scope points are not drawn nor pickable) */
+  /** 0/1/2 per point: scope policy (0: out of scope, not drawn nor pickable); 2 = in scope and exempt from the small-disc hiding (lib/disc-hide.ts) */
   show: THREE.BufferAttribute;
 }
 
-function makePointSet(n: number, material: THREE.Material, world?: Float64Array, fixed = false): PointSet {
+/** `exempt`: the whole set is drawn whatever lies under it (the highlight set): aShow starts at 2 (`SHOW_EXEMPT`). */
+function makePointSet(n: number, material: THREE.Material, world?: Float64Array, fixed = false, exempt = false): PointSet {
   const geo = new THREE.BufferGeometry();
   const pos = new RelPositions(world ?? n, fixed);
   const color = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
   const size = new THREE.BufferAttribute(new Float32Array(n), 1);
   const glyph = new THREE.BufferAttribute(new Float32Array(n), 1);
-  const show = new THREE.BufferAttribute(new Float32Array(n).fill(1), 1);
+  const show = new THREE.BufferAttribute(new Float32Array(n).fill(exempt ? SHOW_EXEMPT : 1), 1);
   size.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute('position', pos.attr);
   geo.setAttribute('aColor', color);
@@ -126,13 +184,26 @@ export class SceneController {
   private frameInfo = new RenderFrame();
   /** Earth occlusion test for camera-relative points, rebuilt every frame */
   private occ: (x: number, y: number, z: number) => boolean = () => false;
+  /** cones of the small, far bodies that hide the non-exempt points over them (lib/disc-hide.ts), rebuilt every frame in `prepareRender` */
+  private discCones: DiscGroup[] = discGroups([], 45, 1);
   private rig: OrbitRig;
   private palette: Palette;
   private sun = new THREE.Vector3(1, 0, 0);
   private earthGroup = new THREE.Group();
   private atmo: THREE.Mesh;
+  private celestial: CelestialLayer;
+  /** ids of the body entities (`body-moon`): these are drawn by the CelestialLayer, not as points */
+  private bodyIds = new Set<string>();
+  /** body entities whose orbit line is drawn now (selected / frame centre and their children, see lib/body-scene.ts) and their key */
+  private bodyLines: string[] = [];
+  private bodyLineKey = '';
+  /** frame of reference (an entity id): paths, trails and orbit lines are sampled relative to this centre (set by `setFrame`, independent of the camera) */
+  private frameCentre: Centre = EARTH_CENTRE;
+  private frameLocked = false;
   private earthMat: THREE.ShaderMaterial;
-  private earthMode: 'texture' | 'procedural' = 'procedural';
+  private detail = new EarthDetail();
+  private lastDetailAt = 0;
+  private detailDir = new THREE.Vector3();
   private stars: THREE.Points;
   private pointMat: THREE.ShaderMaterial;
   private sats: PointSet;
@@ -150,25 +221,53 @@ export class SceneController {
   private fullOverlays = new Set<string>();
   private pathOverlay: PathOverlay | null = null;
   private pathOverlayId: string | null = null;
-  private pathStatus: PathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
+  /** the trajectory under the cursor (hover highlight, cursor, tooltip); null when none */
+  private pathHover: (PathHit & { id: string }) | null = null;
+  private pathStatus: PathStatus = { active: false, frame: 'inertial', plan: null };
   private hadPathLabels = false;
+  // object labels (lib/labels.ts)
+  private labelsOn = true;
+  private hadLabels = false;
+  private labelsDirty = true;
+  private lastLabelScanAt = -Infinity;
+  private readonly labelPlan = new LabelPlanner();
+  private readonly labelM = new THREE.Matrix4();
+  /** entities that ask for a label (`render.label`) and are not bodies; rebuilt after the catalogue changes */
+  private labelFeatured: Set<string> | null = null;
+  /** candidates found by the throttled scan: a point of the sat cloud or the dynamic set, projected again every frame */
+  private labelCands: { sat: boolean; i: number; id: string; text: string; feat: boolean }[] = [];
+  private labelCandN = 0;
+  private labelKeys = new Float32Array(0);
+  private labelIdx = new Int32Array(0);
+  private readonly labelPick = new Int32Array(LABEL_SCAN_KEEP);
+  private readonly labelCounts = new Int32Array(BUCKETS);
+  /** per-frame inputs of `labelBody` (set by `updateLabels`) */
+  private labelW = 0;
+  private labelH = 0;
+  /** the selected object has a position this frame (`updateHighlights`) */
+  private selOk = false;
   private surfaceOn = false;
   private surfaceSrc: SurfaceSource | null = null;
+  /** the user's remembered choice: false after they switched the surface view off, which stops it coming on by itself */
+  private surfaceAuto = loadSurfacePref();
   private globeDist = 24000;
   private focusLatLon: { lat: number; lon: number } | null = null;
   /** Earth-fixed point the free (unfollowed) camera target is pinned to after a FIT of ground-level objects */
   private groundLock: [number, number, number] | null = null;
   private launches: Launch[] = [];
-  private filters: Filters = NO_FILTERS;
-  /** how objects beyond the deep-space threshold are placed: log-compressed shell (default) or at their real distance */
-  private distScale: DistanceScale = 'compressed';
+  /** what the search field says (lib/query.ts) and the entities it never hides: the selection and what is related to it */
+  private query: Query = NO_QUERY;
+  private ctx: Ctx = NO_CTX;
+  /** HIGHLIGHT: what the query (and the selection) does not pick is dimmed instead of hidden */
+  private highlight = false;
   // scope policy (see lib/scope.ts)
   private scopeMode: ScopeMode = 'auto';
-  /** the selection's related objects (parent, children, pad, linked probes ...): never scoped out */
-  private related: ReadonlySet<string> = new Set();
   /** 1 where an active filter lets the object through: never scoped out */
   private satKeep = new Uint8Array(0);
   private dynKeep = new Uint8Array(0);
+  /** 1 = a launch vehicle, stage or capsule: drawn with aShow = 2 while in flight, never hidden over a small body's disc (set in `applyAppearance`, `refreshScope` checks the altitude) */
+  private satExempt = new Uint8Array(0);
+  private dynExempt = new Uint8Array(0);
   private scopeDirty = true;
   private lastScopeAt = -Infinity;
   private scopeCounts = { rendered: 0, total: 0 };
@@ -181,10 +280,12 @@ export class SceneController {
   private issTracker = new IssArrayTracker();
   private issSources: ArraySources = { sarj: 'STATIC', bga: 'STATIC', attitude: false };
   private issJointsNow: IssJoints | null = null;
-  /** entity the camera follows, if any (a followed model may be approached closer than a plain point) */
+  /** the focus entity the camera follows while `follow` (any entity, a body too; a followed model may be approached closer than a plain point) */
   private followId: string | null = null;
   private selectedId: string | null = null;
   private hoverId: string | null = null;
+  /** object the choice popup has highlighted: drawn with the hover ring, and hover from the mouse is suspended meanwhile */
+  private previewId: string | null = null;
   private issFix: IssFix | undefined;
   /** world position of the followed thing at sim time `t` */
   private followFn: ((out: THREE.Vector3, t: number) => boolean) | null = null;
@@ -196,8 +297,6 @@ export class SceneController {
   private mouse: { x: number; y: number } | null = null;
   private down: { x: number; y: number; t: number } | null = null;
   private lastPickAt = 0;
-  private shellSelected = false;
-  private lastCompressed = false;
   private fps = 60;
   private lastFrame = performance.now();
   private disposed = false;
@@ -210,7 +309,7 @@ export class SceneController {
     this.palette = readPalette();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     // logarithmic depth: float depth precision is uniform in log(distance), so ground markers, trajectories and the Earth
-    // keep their order from a 3 km altitude hover out to the deep-space shell without a per-frame near/far dance
+    // keep their order from a 3 km altitude hover out to deep space without a per-frame near/far dance
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', logarithmicDepthBuffer: true });
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.renderer.setPixelRatio(dpr);
@@ -220,6 +319,7 @@ export class SceneController {
 
     this.camera.up.set(0, 0, 1);
     this.rig = new OrbitRig(this.camera, this.renderer.domElement);
+    this.rig.onGroundPan = (east, north, frame) => this.panSurface(east, north, frame);
     const sun0 = sunDirectionEci(clock.now());
     this.rig.az = Math.atan2(sun0[1], sun0[0]) + 0.5;
     this.rig.el = 0.35;
@@ -257,6 +357,9 @@ export class SceneController {
     const eg = new THREE.SphereGeometry(RE, 512, 256);
     eg.rotateX(Math.PI / 2);
     this.earthMat = createEarthMaterial(this.sun, null);
+    this.detail.texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    this.earthMat.uniforms.uDetail.value = this.detail.texture;
+    this.earthMat.uniforms.uDetailBox.value = this.detail.box;
     const earth = new THREE.Mesh(eg, this.earthMat);
     earth.scale.z = 1 - EARTH.flattening;
     this.earthGroup.add(earth, this.buildGraticule());
@@ -266,11 +369,15 @@ export class SceneController {
     this.atmo = new THREE.Mesh(new THREE.SphereGeometry(RE * 1.02, 96, 64), createAtmosphereMaterial(this.sun));
     this.atmo.renderOrder = 1;
     this.scene.add(this.atmo);
+    this.celestial = new CelestialLayer(this.scene, this.sun, {
+      maxTextureSize: () => this.renderer.capabilities.maxTextureSize,
+      maxAnisotropy: () => this.renderer.capabilities.getMaxAnisotropy(),
+    });
 
     this.sats = makePointSet(0, this.pointMat);
     this.dyn = makePointSet(0, this.pointMat);
     this.pads = makePointSet(0, this.pointMat, undefined, true);
-    this.hi = makePointSet(4, this.pointMat);
+    this.hi = makePointSet(4, this.pointMat, undefined, false, true);
     for (const set of [this.sats, this.dyn, this.pads, this.hi]) this.scene.add(set.points);
     this.sats.points.renderOrder = this.dyn.points.renderOrder = 5;
     this.pads.points.renderOrder = 4;
@@ -298,11 +405,26 @@ export class SceneController {
     const upserts: { id: string; omm: Omm }[] = [];
     const gone: string[] = [];
     let dynChanged = false;
+    let bodiesChanged = false;
     for (const rec of map.values()) {
       const prev = this.recs.get(rec.id);
       if (prev === rec) continue;
       this.recs.set(rec.id, rec);
-      if (rec.provider?.type === 'sgp4') {
+      if (prev && isBodyEntity(prev) && !isBodyEntity(rec)) {
+        this.bodyIds.delete(rec.id);
+        bodiesChanged = true;
+      }
+      if (isBodyEntity(rec)) {
+        // a celestial body: drawn by the CelestialLayer, never a point; in the graph so worldPos, the frame and the orbit line work
+        this.bodyIds.add(rec.id);
+        if (prev && !isBodyEntity(prev)) {
+          if (isSgp4(prev)) gone.push(rec.id);
+          dynChanged = true;
+        }
+        this.satSet.delete(rec.id);
+        graph.upsert(rec);
+        bodiesChanged = true;
+      } else if (rec.provider?.type === 'sgp4') {
         upserts.push({ id: rec.id, omm: rec.provider.omm });
         this.satSet.add(rec.id);
         if (prev && !isSgp4(prev)) dynChanged = true;
@@ -319,8 +441,11 @@ export class SceneController {
       this.recs.delete(id);
       graph.remove(id);
       if (this.satSet.delete(id)) gone.push(id);
+      else if (this.bodyIds.delete(id)) bodiesChanged = true;
       else dynChanged = true;
     }
+    this.pickMetaCache = null; // ranks and creation times for picking, rebuilt on the next click
+    if (bodiesChanged) this.celestial.setBodies([...this.recs.values()].filter(isBodyEntity));
     this.propagator.remove(gone);
     this.propagator.upsert(upserts);
     // entities with a registered 3D model need an exact main-thread state even when SGP4 (the worker only fills the cloud)
@@ -331,46 +456,69 @@ export class SceneController {
     this.applyAppearance();
   }
 
-  setFilters(f: Filters): void {
-    this.filters = f;
-    this.applyAppearance();
-  }
-
   /**
-   * `compressed` (default): objects beyond 2,000,000 km sit on a log-compressed shell. `true`: probes are drawn at their
-   * real geocentric positions (up to ~2.5e10 km), their paths at true scale too, and the camera may zoom out to 1e11 km.
-   * Markers keep their screen size; the floating origin and the logarithmic depth buffer carry the range.
+   * THE view setter: the query, the ids its text matches, the selection with the objects related to it (parent, children, pad,
+   * linked probes ...: never hidden, filtered out nor scoped out) and HIGHLIGHT arrive together, so the points are painted once.
+   * Orbit lines and footprints are refreshed when the selection or the hide terms change.
    */
-  setDistanceScale(scale: DistanceScale): void {
-    if (scale === this.distScale) return;
-    this.distScale = scale;
-    this.rig.maxDist = maxDistKm(scale);
+  setView(v: SceneViewState): void {
+    const focus = new Set(v.related);
+    if (v.selectedId) focus.add(v.selectedId);
+    const old = this.ctx;
+    const sameFocus = focus.size === old.focus.size && [...focus].every((id) => old.focus.has(id));
+    const selChanged = v.selectedId !== this.selectedId;
+    if (!selChanged && sameFocus && v.query === this.query && v.text === (old.text ?? null) && v.highlight === this.highlight) return;
+    const hideChanged = v.query !== this.query && hideKey(v.query) !== hideKey(this.query);
+    this.query = v.query;
+    this.highlight = v.highlight;
+    this.ctx = { focus, text: v.text };
+    this.selectedId = v.selectedId;
+    if (selChanged || hideChanged) this.refreshHints(); // a hidden group keeps no orbit line or footprint
+    this.applyAppearance();
     this.scopeDirty = true;
-    // whatever the camera was framing out there has moved: follow it with a fresh view, or fall back to the Earth
-    if (this.follow && this.followFn?.(this.anchor, clock.now())) {
-      if (this.anchor.length() > SHELL_THRESHOLD_KM * 0.5) this.rig.flyTo(viewFor(this.anchor));
-    } else if (!this.follow && this.freeTarget.length() > SHELL_THRESHOLD_KM * 0.5) {
-      this.freeTarget.set(0, 0, 0);
-      this.groundLock = null;
-      this.rig.pan.set(0, 0, 0);
-      this.rig.flyTo({ dist: 24000, az: this.rig.az, el: this.rig.el * 0.6 });
+    if (selChanged) {
+      this.updatePadAppearance();
+      // the surface camera was centred on the deselected object: nothing left to look at, back to the globe (a view already
+      // let go of its object, by panning, has a point of its own and stays)
+      if (!v.selectedId && this.surfaceOn && this.surfaceSrc?.kind === 'entity') this.setSurfaceMode(false);
     }
-    this.rig.dist = Math.min(this.rig.dist, this.rig.maxDist);
   }
 
-  get distanceScale(): DistanceScale {
-    return this.distScale;
+  /** Turn the streamed close-up imagery on or off (off: the base map only, no tile requests). */
+  setDetailEnabled(on: boolean): void {
+    this.detail.enabled = on;
+    this.lastDetailAt = 0;
+  }
+
+  /** A few times a second: tell the detail layer where the camera is looking and how close. */
+  private updateDetail(wall: number): void {
+    if (wall - this.lastDetailAt < 250) return;
+    this.lastDetailAt = wall;
+    this.detail.update(this.detailView());
+    this.earthMat.uniforms.uDetailOn.value = this.detail.on;
+  }
+
+  /** The surface point under the view centre (ray against the Earth sphere), its distance and the screen scale; null looking at space. */
+  private detailView(): DetailView | null {
+    const dir = this.camera.getWorldDirection(this.detailDir);
+    const c = this.camera.position;
+    const b = c.dot(dir);
+    const disc = b * b - (c.lengthSq() - RE * RE);
+    if (disc <= 0) return null;
+    const t = -b - Math.sqrt(disc);
+    if (t <= 0) return null;
+    const g = -gmstRad(clock.now());
+    const x = c.x + dir.x * t, y = c.y + dir.y * t, z = c.z + dir.z * t;
+    const geo = fixedToGeodetic([x * Math.cos(g) - y * Math.sin(g), x * Math.sin(g) + y * Math.cos(g), z], EARTH);
+    return {
+      latDeg: geo.lat / DEG, lonDeg: geo.lon / DEG, groundDistKm: t, fovDeg: this.camera.fov,
+      viewportPx: this.renderer.domElement.height, aspect: this.camera.aspect,
+    };
   }
 
   /** Scope policy: `auto` draws only what is relevant to the camera focus, `all` draws everything the filters allow. */
   setScopeMode(mode: ScopeMode): void {
     this.scopeMode = mode;
-    this.scopeDirty = true;
-  }
-
-  /** Ids that scope never removes besides the selection: its related objects. */
-  setRelated(ids: Iterable<string>): void {
-    this.related = new Set(ids);
     this.scopeDirty = true;
   }
 
@@ -401,13 +549,20 @@ export class SceneController {
     this.issTracker.push(arrays, Date.now());
   }
 
-  setSelected(id: string | null): void {
-    this.selectedId = id;
-    this.refreshHints();
-    this.applyAppearance();
-    this.updatePadAppearance();
-    // the surface camera tracked the deselected object's sub-point: stay where it is, on the rotating ground
-    if (!id && this.surfaceOn && this.surfaceSrc?.kind === 'entity') this.freezeSurfaceSource();
+  /**
+   * Frame of reference (state `frame` / `frameLocked`): orbit lines, trails and paths are sampled relative to `centre`.
+   * Independent of the camera; `focus({centre})` moves the camera. The overlays rebuild when the centre changes.
+   */
+  setFrame(centre: Centre, locked = false): void {
+    this.frameCentre = centre;
+    this.frameLocked = locked;
+    this.ensureCentreInGraph();
+  }
+
+  /** The centre entity needs a live provider in the graph to be looked up (the selection and hints are put there too). */
+  private ensureCentreInGraph(): void {
+    const rec = this.recs.get(this.frameCentre);
+    if (rec && graph.get(rec.id) !== rec) graph.upsert(rec);
   }
 
   setFollow(follow: boolean): void {
@@ -418,21 +573,30 @@ export class SceneController {
     this.follow = follow;
     if (this.surfaceOn) {
       if (!follow && this.surfaceSrc?.kind === 'entity') this.freezeSurfaceSource();
-      else if (follow && this.selectedId && this.recs.has(this.selectedId)) this.surfaceSrc = { kind: 'entity', id: this.selectedId };
+      else if (follow && this.selectedId && this.recs.has(this.selectedId) && !this.bodyIds.has(this.selectedId)) this.surfaceSrc = { kind: 'entity', id: this.selectedId };
     }
   }
 
+  /** The entity the camera is following now (the focus), if any. */
+  private followedRec(): EntityRecord | undefined {
+    return this.follow && this.followId ? this.recs.get(this.followId) : undefined;
+  }
+
+  /** Registry id of the body the camera is following (a followed body entity), else undefined. Derived, so it can never be stale. */
+  private followedBody(): string | undefined {
+    const rec = this.followedRec();
+    return rec && bodyOf(rec);
+  }
+
+  /**
+   * One-shot camera request from the store (`selectObject`, `resetView`, `focusLaunch`): an entity (a body is one like any
+   * other) is followed, a ground point is followed, neither is the home view (free camera over the Earth).
+   */
   focus(req: FocusRequest): void {
     this.groundLock = null;
     if (req.id) {
       const rec = this.recs.get(req.id);
-      if (!rec) return;
-      graph.upsert(rec);
-      const id = req.id;
-      this.followId = id;
-      this.focusLatLon = null;
-      this.followFn = (out, t) => this.worldPos(id, t, out);
-      if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
+      if (rec) this.focusEntity(rec, req);
     } else if (req.lat !== undefined && req.lon !== undefined) {
       const lat = req.lat * DEG, lon = req.lon * DEG;
       this.followId = null;
@@ -442,6 +606,9 @@ export class SceneController {
         return true;
       };
       if (this.surfaceOn) this.surfaceSrc = { kind: 'latlon', lat, lon };
+      this.follow = true;
+      if (!this.surfaceOn && this.followFn(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+      this.applyAutoSurface(req);
     } else {
       if (this.surfaceOn) this.setSurfaceMode(false);
       this.followFn = null;
@@ -450,14 +617,31 @@ export class SceneController {
       this.freeTarget.set(0, 0, 0);
       this.follow = false;
       this.rig.flyTo({ dist: Math.max(20000, Math.min(this.rig.dist, 60000)), az: this.rig.az, el: this.rig.el * 0.6 });
-      return;
     }
+  }
+
+  /**
+   * Centre the view on an entity and follow it (they move). A body: leave the surface view, pivot on it at the distance that
+   * frames the whole body, and everything is seen relative to it. Any other entity: the usual fly-to and, near the Earth, the
+   * surface orientation (`applyAutoSurface`, skipped for the internal refocuses that pass no request).
+   */
+  private focusEntity(rec: EntityRecord, req?: FocusRequest): void {
+    const id = rec.id;
+    if (graph.get(id) !== rec) graph.upsert(rec);
+    this.followId = id;
+    this.focusLatLon = null;
+    this.followFn = (out, t) => this.worldPos(id, t, out);
     this.follow = true;
-    if (this.surfaceOn) {
-      this.rig.flyTo({ dist: this.rig.dist, az: this.rig.az, el: this.rig.el });
+    const body = bodyOf(rec);
+    if (body !== undefined) {
+      if (this.surfaceOn) this.setSurfaceMode(false);
+      const sun = sunDirectionEci(clock.now());
+      this.rig.flyTo({ dist: refViewDistKm(body), az: Math.atan2(sun[1], sun[0]) + 0.5, el: 0.35 });
       return;
     }
-    if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+    if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
+    else if (this.followFn(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+    if (req) this.applyAutoSurface(req);
   }
 
   // ------------------------------------------------------------------ camera modes and fit
@@ -466,30 +650,44 @@ export class SceneController {
     return this.surfaceOn;
   }
 
+  /** The user's S / SURFACE: switch the view, and remember the choice so the surface view neither comes back nor stays away by itself. */
   toggleSurface(): void {
-    this.setSurfaceMode(!this.surfaceOn);
+    const on = !this.surfaceOn;
+    this.setSurfaceMode(on);
+    if (this.surfaceOn === on) {
+      this.surfaceAuto = on;
+      saveSurfacePref(on);
+    }
   }
 
   /**
-   * Surface-aligned camera: orbits a ground point (the sub-point of the selected object, a launch pad being focused,
-   * or the point under the view centre) with the local vertical up and north-up, so the horizon is level and the
-   * Earth blocks the stars below it. Leaving flies back to the globe view of the same place.
+   * The surface view is Earth-only: not while the camera follows a body other than the Earth (the focus entity, read from
+   * `followId`, so it is never a stale body), nor while the frame of reference is such a body (any other entity as the frame
+   * is fine). The one place to adapt for other bodies.
+   */
+  private surfaceAvailable(): boolean {
+    const followed = this.followedRec();
+    if (followed && isBodyEntity(followed) && !isEarthCentre(followed.id)) return false;
+    return isEarthCentre(this.frameCentre) || !this.bodyIds.has(this.frameCentre);
+  }
+
+  /**
+   * Surface-aligned camera: centred on the selected object, a launch pad being focused or the point under the view
+   * centre, with the local vertical up and north-up, so the horizon is level and the Earth blocks the stars below it.
+   * Leaving flies back to the globe view of the same place.
    */
   setSurfaceMode(on: boolean): void {
     if (on === this.surfaceOn) return;
     if (on) {
+      if (!this.surfaceAvailable()) return;
       const src = this.pickSurfaceSource();
       if (!src) return;
       this.globeDist = this.rig.dist;
       this.surfaceSrc = src;
-      let dist = 300;
-      if (src.kind === 'entity' && this.worldPos(src.id, clock.now(), this.tmp)) {
-        // an object high above its sub-point (ISS) needs a camera far enough back (and high enough) to see it and the ground
-        dist = Math.min(60000, Math.max(300, (this.tmp.length() - RE) * 3.6));
-      }
+      const dist = this.surfaceDist(src);
       this.rig.switchMode('surface');
       this.rig.az = NORTH_UP_AZ;
-      this.rig.el = 0.35;
+      this.rig.el = SURFACE_EL;
       this.rig.dist = dist;
       this.surfaceOn = true;
     } else {
@@ -515,6 +713,8 @@ export class SceneController {
    * Returns false when none of the ids has a position.
    */
   fitEntities(ids: string[], opts: { points?: { latDeg: number; lonDeg: number }[]; includePath?: boolean } = {}): boolean {
+    // surface view of one object: refit inside the surface view instead of leaving it for the globe
+    if (this.surfaceOn && ids.length === 1 && !opts.points?.length && this.fitSurface(ids[0])) return true;
     // an entity with a 3D model and nothing else to frame: show the model (following it), not a 3,200 km view of a dot
     if (ids.length === 1 && !opts.points?.length && this.viewModel(ids[0])) return true;
     const pts: number[] = [];
@@ -561,12 +761,13 @@ export class SceneController {
     return true;
   }
 
-  /** FIT VISIBLE: everything the current filters leave on screen. */
+  /** FIT VISIBLE: everything the query leaves on screen (the selection and its related objects always stay). */
   fitVisible(): boolean {
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const rec of this.recs.values()) {
-      if (!matchesFilters(rec, this.filters)) continue;
+      if (this.bodyIds.has(rec.id)) continue; // the bodies are scenery here: the Sun on its shell would make FIT VISIBLE a deep-space view
+      if (!isDrawn(classify(rec, this.query, this.ctx))) continue;
       if (this.fitPos(rec.id, v)) pts.push(v.x, v.y, v.z);
     }
     return this.frameSphere(pts);
@@ -581,7 +782,7 @@ export class SceneController {
     this.tmp.set(c[0], c[1], c[2]);
     // a single point (nothing to fit) gets the same view as selecting it, not an absurdly close one
     const view = mayBeSinglePoint && r < 0.5 ? viewFor(this.tmp) : null;
-    const dist = view?.dist ?? fitDistanceClamped(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN, MIN_TARGET_DIST_KM, this.distScale);
+    const dist = view?.dist ?? fitDistanceClamped(radius, this.camera.fov, this.camera.aspect, FIT_MARGIN, MIN_TARGET_DIST_KM);
     const look = view ?? fitAngles(c, radius);
     this.follow = false;
     this.freeTarget.set(c[0], c[1], c[2]);
@@ -611,42 +812,124 @@ export class SceneController {
     out.set(f[0] * Math.cos(g) - f[1] * Math.sin(g), f[0] * Math.sin(g) + f[1] * Math.cos(g), f[2]);
   }
 
-  /** Where a fresh surface view anchors: the selected object's sub-point, the focused pad, else the point under the view centre. */
+  /** Where a fresh surface view centres: the followed object, the focused pad, else the ground point under the view centre. */
   private pickSurfaceSource(): SurfaceSource | null {
-    if (this.follow && this.selectedId && this.worldPos(this.selectedId, clock.now(), this.tmp)) return { kind: 'entity', id: this.selectedId };
+    const id = this.follow ? this.followId ?? (this.focusLatLon ? null : this.selectedId) : null;
+    // a followed body (the Earth) is no object to stand on: the ground point under the view centre is used instead
+    if (id && !this.bodyIds.has(id) && this.worldPos(id, clock.now(), this.tmp)) return { kind: 'entity', id };
     if (this.follow && this.focusLatLon) return { kind: 'latlon', ...this.focusLatLon };
     const dir = this.camera.getWorldDirection(new THREE.Vector3());
     const c = this.camera.position;
     const b = c.dot(dir);
     const disc = b * b - (c.lengthSq() - RE * RE);
     const p = disc > 0 && -b - Math.sqrt(disc) > 0 ? c.clone().addScaledVector(dir, -b - Math.sqrt(disc)) : c.clone();
-    return this.latLonOfWorld(p);
+    return this.latLonOfWorld(p, false);
   }
 
-  private latLonOfWorld(p: THREE.Vector3): SurfaceSource | null {
+  /** Geodetic latitude/longitude of a world point as a surface source; `keepAlt` keeps its height, else the source is on the ground. */
+  private latLonOfWorld(p: THREE.Vector3, keepAlt: boolean): SurfaceSource | null {
     if (p.lengthSq() < 1) return null;
     const g = -gmstRad(clock.now());
     const fx = p.x * Math.cos(g) - p.y * Math.sin(g), fy = p.x * Math.sin(g) + p.y * Math.cos(g);
     const geo = fixedToGeodetic([fx, fy, p.z], EARTH);
-    return { kind: 'latlon', lat: geo.lat, lon: geo.lon };
+    return { kind: 'latlon', lat: geo.lat, lon: geo.lon, alt: keepAlt ? Math.max(0, geo.alt) : 0 };
   }
 
+  /** Pin an entity source to where the object is now, at its current height, so the view stays put over the rotating ground. */
   private freezeSurfaceSource(): void {
-    const ground = this.surfaceTarget(this.tmp, clock.now());
-    this.surfaceSrc = (ground && this.latLonOfWorld(this.tmp)) || this.surfaceSrc;
+    const src = this.surfaceSrc;
+    if (src?.kind !== 'entity' || !this.worldPos(src.id, clock.now(), this.tmp)) return;
+    const ll = this.latLonOfWorld(this.tmp, true);
+    if (ll) this.surfaceSrc = ll;
   }
 
-  /** World position of the surface camera's ground target at sim time `t`, or null when its source has no position. */
+  /** Height of an entity above the ellipsoid now, km, or null when it has no position. */
+  private entityAltKm(id: string): number | null {
+    return this.worldPos(id, clock.now(), this.tmp) ? altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z]) : null;
+  }
+
+  /** Surface camera distance that frames an object together with the ground below it, or null when it has no position. */
+  private surfaceFitDist(id: string): number | null {
+    const alt = this.entityAltKm(id);
+    return alt === null ? null : surfaceFitDistance(alt, this.camera.fov, this.camera.aspect);
+  }
+
+  /** Camera distance on entering the surface view of `src`: the object's fit, or a regional view of a ground point. */
+  private surfaceDist(src: SurfaceSource | null): number {
+    return (src?.kind === 'entity' ? this.surfaceFitDist(src.id) : null) ?? SURFACE_POINT_DIST_KM;
+  }
+
+  /**
+   * End of focus(): decide whether the camera should be in the surface orientation for what was just focused. Entering
+   * (or staying) is the default for anything near the Earth (`shouldAutoSurface`); a deep-space object, or a non-Earth
+   * frame, takes the camera back to the globe view; a user who switched the surface view off keeps the globe view.
+   * Internal refocuses (`nonce` 0: FIT in the surface view, MODEL) frame their own view and are left alone.
+   */
+  private applyAutoSurface(req: FocusRequest): void {
+    if (req.nonce === 0) return;
+    const id = req.id;
+    const rec = id ? this.recs.get(id) ?? null : null;
+    const alt = id ? this.entityAltKm(id) : 0;
+    const want = shouldAutoSurface(rec, alt, { pref: this.surfaceAuto, earthCentred: this.surfaceAvailable() });
+    if (!this.surfaceOn) {
+      if (want) this.setSurfaceMode(true);
+    } else if (want) {
+      // another object (or pad): same view direction, refit distance for it
+      this.rig.flyTo({ dist: this.surfaceDist(this.surfaceSrc), az: this.rig.az, el: this.rig.el });
+    } else {
+      this.setSurfaceMode(false);
+      if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+    }
+  }
+
+  /**
+   * FIT of one entity while in surface view: stay in the view, follow the entity and refit so the object and the ground below
+   * it are on screen. False when the entity has no position (the caller falls back to the globe fit).
+   */
+  private fitSurface(id: string): boolean {
+    const rec = this.recs.get(id);
+    if (!rec?.provider) return false;
+    if (!graph.get(id)) graph.upsert(rec);
+    const dist = this.surfaceFitDist(id);
+    if (dist === null) return false;
+    this.focus({ id, nonce: 0 });
+    this.cb.onFollowChange?.(true);
+    this.rig.flyTo({ dist, az: this.rig.az, el: SURFACE_EL });
+    return true;
+  }
+
+  /**
+   * A pan drag in surface view: slide the target along the ground. A followed object is let go first and the target stays
+   * where the object was, at its height, over the rotating ground; the drag then moves it along the sphere at that height.
+   */
+  private panSurface(eastKm: number, northKm: number, frame: SurfaceFrame): void {
+    if (!this.surfaceOn) return;
+    if (this.follow) {
+      this.setFollow(false);
+      this.cb.onFollowChange?.(false);
+    }
+    this.freezeSurfaceSource();
+    const src = this.surfaceSrc;
+    if (src?.kind !== 'latlon') return;
+    // slide the target over the sphere along the camera frame's own axes: a great-circle move crosses the poles, where
+    // stepping latitude/longitude cannot (and where the longitude change per km blows up)
+    if (!this.surfaceTarget(this.tmp, clock.now())) return;
+    const move: V3 = [
+      frame.e[0] * eastKm + frame.n[0] * northKm,
+      frame.e[1] * eastKm + frame.n[1] * northKm,
+      frame.e[2] * eastKm + frame.n[2] * northKm,
+    ];
+    const p = moveOnSphere([this.tmp.x, this.tmp.y, this.tmp.z], move);
+    const ll = this.latLonOfWorld(this.tmp.set(p[0], p[1], p[2]), false);
+    if (ll?.kind === 'latlon') this.surfaceSrc = { kind: 'latlon', lat: ll.lat, lon: ll.lon, alt: src.alt };
+  }
+
+  /** World position of the surface camera's target at sim time `t`: the object itself, or a point over the ground. Null when its source has no position. */
   private surfaceTarget(out: THREE.Vector3, t: number): boolean {
     const src = this.surfaceSrc;
     if (!src) return false;
-    if (src.kind === 'entity') {
-      if (!this.worldPos(src.id, t, out)) return false;
-      const g = groundPoint([out.x, out.y, out.z]);
-      out.set(g[0], g[1], g[2]);
-      return true;
-    }
-    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: 0 }, EARTH), out, t);
+    if (src.kind === 'entity') return this.worldPos(src.id, t, out);
+    this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: src.alt ?? 0 }, EARTH), out, t);
     return true;
   }
 
@@ -659,12 +942,12 @@ export class SceneController {
       altKm: this.rig.altitudeKm,
       satCount: this.propagator.ids.length,
       dynCount: this.dynIds.length,
-      earth: this.earthMode,
-      shellSelected: this.shellSelected,
+      detail: this.detail.stats,
+      detailEnabled: this.detail.enabled,
       surface: this.surfaceOn,
-      path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now, compressed: this.pathStatus.compressed } : null,
+      path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now } : null,
       scope: { mode: this.scopeMode, ...this.scopeCounts },
-      distanceScale: this.distScale,
+      frame: { label: centreLabel(this.frameCentre, (id) => this.recs.get(id)), isDefault: isEarthCentre(this.frameCentre), locked: this.frameLocked },
       models: this.models.activeIds,
       arrays: this.models.activeIds.some((id) => this.models.defOf(id)?.key === 'iss') ? { sources: this.issSources, joints: this.issJointsNow } : null,
     };
@@ -678,6 +961,8 @@ export class SceneController {
     this.rig.destroy();
     this.propagator.dispose();
     this.models.dispose();
+    this.celestial.dispose();
+    this.detail.dispose();
     this.overlays.forEach((o) => o.dispose());
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
@@ -705,19 +990,41 @@ export class SceneController {
     return lines;
   }
 
+  /**
+   * Earth map: the single high-resolution file (`npm run assets`, 8192 px) when it exists, else the procedural shading
+   * stays (there is no lower-resolution fallback; close views use the streamed DETAIL tiles). A map wider than the GPU's
+   * maximum texture size is scaled down to that size rather than dropped, so a small GPU still gets the best map it can
+   * hold. A missing file shows up as a failed load (the dev server answers with its HTML page).
+   */
   private loadEarthTexture(): void {
+    const max = this.renderer.capabilities.maxTextureSize;
+    const apply = (tex: THREE.Texture) => {
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+      this.earthMat.uniforms.uTex.value?.dispose?.();
+      this.earthMat.uniforms.uTex.value = tex;
+      this.earthMat.uniforms.uHasTex.value = 1;
+    };
     new THREE.TextureLoader().load(
-      '/textures/earth.jpg',
+      '/textures/earth-hires.jpg',
       (tex) => {
-        if (this.disposed) return;
-        tex.colorSpace = THREE.NoColorSpace;
-        tex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
-        this.earthMat.uniforms.uTex.value = tex;
-        this.earthMat.uniforms.uHasTex.value = 1;
-        this.earthMode = 'texture';
+        if (this.disposed) return tex.dispose();
+        const img = tex.image as HTMLImageElement;
+        if (img.width <= max) {
+          console.info(`[earth] using earth-hires.jpg (${img.width} x ${img.height})`);
+          return apply(tex);
+        }
+        // too wide for this GPU: scale down to the limit (keeping the aspect ratio) instead of dropping the map
+        const canvas = document.createElement('canvas');
+        canvas.width = max;
+        canvas.height = Math.max(1, Math.round((max * img.height) / img.width));
+        canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
+        tex.dispose();
+        console.info(`[earth] using earth-hires.jpg scaled from ${img.width} to ${max} px (GPU texture limit)`);
+        apply(new THREE.CanvasTexture(canvas));
       },
       undefined,
-      () => undefined, // missing/invalid texture: procedural shading stays
+      () => console.info('[earth] earth-hires.jpg is missing: procedural Earth (run npm run assets, then reload the page)'),
     );
   }
 
@@ -736,7 +1043,7 @@ export class SceneController {
 
   private rebuildDyn(): void {
     const ids: string[] = [];
-    for (const rec of this.recs.values()) if (!isSgp4(rec) && rec.provider) ids.push(rec.id);
+    for (const rec of this.recs.values()) if (!isSgp4(rec) && rec.provider && !this.bodyIds.has(rec.id)) ids.push(rec.id);
     this.dynIds = ids;
     this.dynIndex = new Map(ids.map((id, i) => [id, i]));
     this.scene.remove(this.dyn.points);
@@ -747,41 +1054,59 @@ export class SceneController {
     this.dynBaseSize = new Float32Array(ids.length);
   }
 
-  /** Colours, sizes and glyphs from entity metadata, filters and selection. */
+  /**
+   * How the query and HIGHLIGHT draw an entity: not at all (a hide term; left out by an only / text term unless HIGHLIGHT is
+   * on), dimmed (HIGHLIGHT: the query or the selection does not pick it), enlarged (HIGHLIGHT: picked) or as usual.
+   */
+  private lookOf(rec: EntityRecord, c: Class = classify(rec, this.query, this.ctx)): Look {
+    if (c === 'hide') return 'hide';
+    if (c === 'out') return this.highlight ? 'dim' : 'hide';
+    if (this.highlight && (queryActive(this.query) || this.selectedId !== null)) return c === 'show' || this.ctx.focus.has(rec.id) ? 'boost' : 'dim';
+    return 'show';
+  }
+
+  /** Colours, sizes and glyphs from entity metadata, the query, HIGHLIGHT and the selection. */
   private applyAppearance(): void {
     const { colors } = this.palette;
-    // 'dim' (launch highlight mode) keeps the point but darkens and shrinks it; with a launch selected its members are enlarged
-    const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, vis: Visibility) => {
-      const key: ColorKey = rec ? colorKeyOf(rec) : 'satellite';
+    // 'dim' (HIGHLIGHT) keeps the point but darkens and shrinks it; 'boost' enlarges what HIGHLIGHT picks
+    const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, look: Look) => {
+      const key: ColorKey = rec ? colorKeyOf(rec) : 'satellites';
       const c = colors[key];
-      const k = vis === 'dim' ? 0.3 : 1;
+      const k = look === 'dim' ? 0.3 : 1;
       set.color.setXYZ(i, c.r * k, c.g * k, c.b * k);
       set.glyph.setX(i, rec?.render?.glyph ? GLYPH_ID[rec.render.glyph] : 0);
       // a 3D model drawn for the entity replaces its sprite
       const replaced = !!rec && this.models.spriteHidden.has(rec.id);
-      set.size.setX(i, vis === 'hide' || replaced ? 0 : POINT_SIZE[key] * (vis === 'dim' ? 0.7 : this.filters.launch ? 1.8 : 1));
+      set.size.setX(i, look === 'hide' || replaced ? 0 : POINT_SIZE[key] * (look === 'dim' ? 0.7 : look === 'boost' ? 1.8 : 1));
     };
-    const vis = (rec: EntityRecord | undefined, hidden = false): Visibility => (!rec || hidden ? 'hide' : sceneVisibility(rec, this.filters));
-    // with a filter on, the objects it lets through ('show') are exempt from the scope policy
-    const filtering = filtersActive(this.filters);
+    // with an only / text term, the objects it lets through ('show') are exempt from the scope policy
+    const active = queryActive(this.query);
+    const exemptRec = (rec: EntityRecord | undefined) => !!rec && colorKeyOf(rec) === 'launch-vehicles';
     this.satKeep = new Uint8Array(this.propagator.ids.length);
+    this.satExempt = new Uint8Array(this.propagator.ids.length);
     this.propagator.ids.forEach((id, i) => {
       const rec = this.recs.get(id);
-      const v = vis(rec, id === this.selectedId);
-      paint(this.sats, i, rec, v);
-      if (filtering && v === 'show') this.satKeep[i] = 1;
+      const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
+      // the selected point is drawn from the highlight set (updateHighlights), not the cloud
+      paint(this.sats, i, rec, !rec || id === this.selectedId ? 'hide' : this.lookOf(rec, c));
+      if (active && c === 'show') this.satKeep[i] = 1;
+      if (exemptRec(rec)) this.satExempt[i] = 1;
     });
     this.sats.color.needsUpdate = this.sats.size.needsUpdate = this.sats.glyph.needsUpdate = true;
     this.dynKeep = new Uint8Array(this.dynIds.length);
+    this.dynExempt = new Uint8Array(this.dynIds.length);
     this.dynIds.forEach((id, i) => {
       const rec = this.recs.get(id);
-      const v = vis(rec);
-      paint(this.dyn, i, rec, v);
+      const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
+      paint(this.dyn, i, rec, rec ? this.lookOf(rec, c) : 'hide');
       this.dynBaseSize[i] = this.dyn.size.getX(i);
-      if (filtering && v === 'show') this.dynKeep[i] = 1;
+      if (active && c === 'show') this.dynKeep[i] = 1;
+      if (exemptRec(rec)) this.dynExempt[i] = 1;
     });
     this.dyn.color.needsUpdate = this.dyn.size.needsUpdate = this.dyn.glyph.needsUpdate = true;
     this.scopeDirty = true;
+    this.labelsDirty = true;
+    this.labelFeatured = null;
   }
 
   private updatePadAppearance(): void {
@@ -790,7 +1115,7 @@ export class SceneController {
     this.launches.forEach((l, i) => {
       const isSel = l.entityId === sel;
       const soon = Date.parse(l.net) - now < 24 * 3600_000 && Date.parse(l.net) - now > -3600_000;
-      const c = isSel ? this.palette.colors.vehicle : soon ? this.palette.accent : this.palette.colors.ground;
+      const c = isSel ? this.palette.colors['launch-vehicles'] : soon ? this.palette.accent : this.palette.colors.ground;
       this.pads.color.setXYZ(i, c.r, c.g, c.b);
       this.pads.size.setX(i, isSel ? 24 : soon ? 17 : 12);
     });
@@ -802,12 +1127,16 @@ export class SceneController {
     const want = new Map<string, boolean>();
     let hinted = 0;
     for (const rec of this.recs.values()) {
-      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT) {
+      // body entities have their own rule (selected / followed / frame centre), below
+      if ((rec.render?.orbitLine || rec.render?.footprint) && hinted < HINT_LIMIT && !this.bodyIds.has(rec.id) && classify(rec, this.query, this.ctx) !== 'hide') {
         want.set(rec.id, false);
         hinted++;
         graph.upsert(rec);
       }
     }
+    this.bodyLines = this.currentBodyLines();
+    this.bodyLineKey = this.bodyLines.join(',');
+    for (const id of this.bodyLines) want.set(id, false);
     const sel = this.selectedId ? this.recs.get(this.selectedId) : undefined;
     if (sel) {
       graph.upsert(sel);
@@ -827,26 +1156,42 @@ export class SceneController {
     this.fullOverlays = new Set([...want].filter(([, full]) => full).map(([id]) => id));
 
     // trajectory path for a selected entity that has no SGP4 orbit of its own
-    const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' ? sel.id : null;
+    const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' && !this.bodyIds.has(sel.id) ? sel.id : null;
     if (pathId !== this.pathOverlayId) {
       this.pathOverlay?.dispose();
       this.pathOverlay = null;
       this.pathOverlayId = pathId;
-      this.pathStatus = { active: false, compressed: false, frame: 'inertial', plan: null };
+      this.setPathHover(null);
+      this.pathStatus = { active: false, frame: 'inertial', plan: null };
       if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
     }
   }
 
+  /** Body entities that get an orbit line now (lib/body-scene.ts `bodyLineIds`). */
+  private currentBodyLines(): string[] {
+    if (this.bodyIds.size === 0) return [];
+    return bodyLineIds(this.recs.values(), { selectedId: this.selectedId, frame: this.frameCentre });
+  }
+
   // ------------------------------------------------------------------ geometry queries
 
-  /** World (ECI, display-compressed) position of an entity at sim time `t`, float64. */
+  /**
+   * World (ECI) position of an entity at sim time `t`, float64. A body entity is where its mesh is (`refDisplay`), so
+   * focus, follow, frame and orbit lines agree.
+   */
   private worldPos(id: string, t: number, out: THREE.Vector3): boolean {
+    const rec = this.recs.get(id);
+    const body = rec && bodyOf(rec);
+    if (body !== undefined) {
+      const d = refDisplay(body, t);
+      out.set(d.r[0], d.r[1], d.r[2]);
+      return true;
+    }
     const s = graph.stateIn(id, t, 'EARTH:inertial');
     if (!s) return false;
-    // deep-space shell compression, else a few-metre nudge for ground contact (shared with the path overlay)
-    const { r, compressed } = displayPosition(s.r, this.distScale);
+    // a few-metre nudge for ground contact (shared with the path overlay)
+    const r = liftNearSurface(s.r);
     out.set(r[0], r[1], r[2]);
-    this.lastCompressed = compressed;
     return true;
   }
 
@@ -859,6 +1204,7 @@ export class SceneController {
       out.set(w[si * 3], w[si * 3 + 1], w[si * 3 + 2]);
       return true;
     }
+    if (this.bodyIds.has(id)) return this.worldPos(id, clock.now(), out); // a drawn body (hover ring)
     const di = this.dynIndex.get(id);
     if (di === undefined || this.dyn.size.getX(di) === 0) return false;
     const w = this.dyn.pos.world;
@@ -871,47 +1217,65 @@ export class SceneController {
     return this.occ(x, y, z);
   }
 
-  /** Screen-space nearest visible point within a small radius; occluded-by-Earth and out-of-scope points are skipped. */
-  private pick(px: number, py: number): string | null {
+  /**
+   * Every visible object near a screen point, highest in the hierarchy first, then newest (lib/pick.ts does the scan).
+   * Points hidden behind the Earth (or the Moon and Sun, through `occ`), filtered out or out of scope are skipped, and so are
+   * the non-exempt ones over a small, far body's disc (`discCones`, the point shader's own test): the click then finds the
+   * body. A plain click uses the first entry, so it agrees with the popup's list; hover takes the nearest object (`nearestFirst`).
+   */
+  private pickMetaCache: ReturnType<typeof pickMeta> | null = null; // rank and creation time by id, rebuilt after a catalog change
+  private pickAll(
+    px: number, py: number, max: number, wantTotal = false, nearestFirst = false,
+  ): { ids: string[]; total: number } {
+    const meta = (this.pickMetaCache ??= pickMeta(this.recs.values()));
     const w = this.container.clientWidth, h = this.container.clientHeight;
     const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
-    const hits: { d2: number; id: string; x: number; y: number; z: number }[] = [];
-    const scan = (set: PointSet, ids: string[], bias: number) => {
-      const pos = set.pos.attr.array as Float32Array, size = set.size.array as Float32Array, show = set.show.array as Float32Array;
-      const world = set.pos.world;
-      for (let i = 0; i < ids.length; i++) {
-        if (size[i] === 0 || show[i] === 0) continue;
-        if (world[i * 3] === 0 && world[i * 3 + 1] === 0 && world[i * 3 + 2] === 0) continue;
-        const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
-        const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
-        if (cw <= 0) continue;
-        const sx = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / cw * 0.5 + 0.5) * w;
-        const sy = (1 - ((m[1] * x + m[5] * y + m[9] * z + m[13]) / cw * 0.5 + 0.5)) * h;
-        const dx = sx - px, dy = sy - py;
-        const r = Math.max(PICK_RADIUS_PX * 0.55, size[i] * 0.5 + 4);
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= r * r) hits.push({ d2: d2 - bias, id: ids[i], x, y, z });
-      }
-    };
-    scan(this.sats, this.propagator.ids, 0);
-    scan(this.dyn, this.dynIds, 60);
-    hits.sort((a, b) => a.d2 - b.d2);
-    for (const hit of hits.slice(0, 8)) {
-      if (!this.occludedRel(hit.x, hit.y, hit.z)) return hit.id;
-    }
+    const source = (set: PointSet, ids: readonly string[], bias: number): PickSource => ({
+      ids, rel: set.pos.attr.array as Float32Array, world: set.pos.world, size: set.size.array as Float32Array, show: set.show.array as Float32Array, bias,
+    });
+    const extras: PickExtra[] = [];
     // a drawn 3D model is pickable as a whole (its sprite is hidden)
     const model = this.models.pick(px, py, m, w, h, PICK_RADIUS_PX);
-    if (model) return model;
+    if (model) extras.push({ id: model, d2: 0 });
     // the selected entity is drawn from the highlight set, not the sat cloud
     if (this.selectedId && this.hi.size.getX(1) > 0) {
       const a = this.hi.pos.attr;
       const p = new THREE.Vector3(a.getX(1), a.getY(1), a.getZ(1));
-      const hidden = this.occludedRel(p.x, p.y, p.z);
+      const rel: [number, number, number] = [p.x, p.y, p.z];
       p.project(this.rcam);
       const dx = (p.x * 0.5 + 0.5) * w - px, dy = (1 - (p.y * 0.5 + 0.5)) * h - py;
-      if (!hidden && p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) return this.selectedId;
+      if (p.z < 1 && dx * dx + dy * dy <= PICK_RADIUS_PX * PICK_RADIUS_PX) extras.push({ id: this.selectedId, d2: dx * dx + dy * dy, rel });
     }
-    return null;
+    // the drawn bodies (Earth, Moon, Sun, Mars) are listed only where no object is (lib/pick.ts `resolvePick`): the Earth's
+    // disc must not turn a click on a satellite drawn over it into a choice popup when zoomed in
+    const bodies = () => bodyPickExtras(this.celestial.bodies(), { origin: this.frameInfo.originV3, m, w, h, px, py, fovDeg: this.camera.fov });
+    const cones = this.discCones;
+    const r = gatherWithBodies(
+      [source(this.sats, this.propagator.ids, 0), source(this.dyn, this.dynIds, 60)], extras, bodies, m, w, h, px, py,
+      {
+        max, wantTotal, nearestFirst, ranks: meta.ranks, created: meta.created, occluded: (x, y, z) => this.occludedRel(x, y, z),
+        discHidden: (x, y, z) => hiddenByDisc(x, y, z, cones),
+      },
+    );
+    return { ids: r.items.map((i) => i.id), total: r.total };
+  }
+
+  /** What hover lands on: the nearest visible object, or the body whose disc the hidden objects are over. */
+  private pick(px: number, py: number): string | null {
+    return this.pickAll(px, py, 1, false, true).ids[0] ?? null;
+  }
+
+  /**
+   * The choice popup's highlight (null: popup closed). The object gets the hover ring, the mouse hover is suspended while
+   * a highlight is set (the popup is a sibling of the canvas, so the pointer leaving the canvas must not clear it).
+   */
+  setPreview(id: string | null): void {
+    if (id === this.previewId) return;
+    this.previewId = id;
+    this.hoverId = id;
+    this.scopeDirty = true; // the hovered object is exempt from scope thinning
+    this.renderer.domElement.style.cursor = '';
+    this.cb.onHover(null);
   }
 
   // ------------------------------------------------------------------ interaction
@@ -923,7 +1287,10 @@ export class SceneController {
     };
     const onMove = (e: PointerEvent) => {
       this.mouse = e.buttons ? null : rel(e);
-      if (e.buttons) this.setHover(null);
+      if (e.buttons) {
+        this.setHover(null);
+        this.setPathHover(null);
+      }
     };
     const onDown = (e: PointerEvent) => {
       this.down = { ...rel(e), t: performance.now() };
@@ -934,12 +1301,29 @@ export class SceneController {
       if (!d || e.button !== 0) return;
       const p = rel(e);
       if (Math.hypot(p.x - d.x, p.y - d.y) > 4 || performance.now() - d.t > 600) return;
-      const id = this.pick(p.x, p.y);
-      if (id) this.cb.onPick(id);
+      // one candidate selects it (a body too: objects over a small far body are hidden, so that click lands on the body); several open the choice popup
+      const { ids, total } = this.pickAll(p.x, p.y, POPUP_MAX, true);
+      // the trajectory is the lowest priority: below every object and the popup. Over a body alone (zoomed in, the Earth's
+      // disc covers the view) it still wins, or a path over the globe could not be clicked
+      if (ids.every((id) => this.bodyIds.has(id))) {
+        const hit = this.pathHitAt(p.x, p.y);
+        if (hit && this.cb.onPathSeek) {
+          this.setHover(null);
+          this.setPathHover(null);
+          this.cb.onPathSeek({ id: hit.id, tMs: hit.tMs });
+          return;
+        }
+      }
+      if (ids.length === 1 || (ids.length > 1 && !this.cb.onPickMany)) this.cb.onPick(ids[0]);
+      else if (ids.length > 1) {
+        this.setHover(null);
+        this.cb.onPickMany?.(ids, total, p.x, p.y);
+      }
     };
     const onLeave = () => {
       this.mouse = null;
       this.setHover(null);
+      this.setPathHover(null);
     };
     dom.addEventListener('pointermove', onMove);
     dom.addEventListener('pointerdown', onDown);
@@ -953,7 +1337,35 @@ export class SceneController {
     });
   }
 
+  /**
+   * The selected launch path under a screen point, or null: nearest point of the drawn polyline within PATH_HIT_PX
+   * (lib/path-pick.ts, in screen space, so it is right in any frame and view), not hidden behind a body.
+   */
+  private pathHitAt(px: number, py: number): (PathHit & { id: string }) | null {
+    const po = this.pathOverlay, id = this.pathOverlayId;
+    if (!po || !id || !this.pathStatus.active || !this.cb.onPathSeek) return null;
+    const s = po.pickSamples();
+    if (!s) return null;
+    const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
+    const hit = nearestOnPath({
+      rel: s.rel, times: s.times, count: s.count, m, w: this.container.clientWidth, h: this.container.clientHeight, px, py,
+      occluded: (x, y, z) => this.occludedRel(x, y, z),
+    });
+    return hit && { ...hit, id };
+  }
+
+  /** Hover state of the trajectory: highlight, pointer cursor and the callback (tooltip); called with null to clear. */
+  private setPathHover(hit: (PathHit & { id: string }) | null, x = 0, y = 0): void {
+    const was = this.pathHover;
+    this.pathHover = hit;
+    this.pathOverlay?.setHighlight(!!hit);
+    if (hit || was) this.renderer.domElement.style.cursor = hit || this.hoverId ? 'pointer' : '';
+    if (hit) this.cb.onPathHover?.({ id: hit.id, tMs: hit.tMs, x, y, sx: hit.sx, sy: hit.sy });
+    else if (was) this.cb.onPathHover?.(null);
+  }
+
   private setHover(id: string | null, x = 0, y = 0): void {
+    if (this.previewId) return; // the popup's highlight owns the hover ring
     this.hoverId = id;
     this.renderer.domElement.style.cursor = id ? 'pointer' : '';
     this.cb.onHover(id ? { id, x, y } : null);
@@ -1003,31 +1415,43 @@ export class SceneController {
 
     // camera
     let anchored: boolean;
+    let focusBody: string | undefined;
     if (this.surfaceOn) {
       anchored = this.surfaceTarget(this.anchor, t);
       if (!anchored) this.setSurfaceMode(false); // the anchored object lost its position: back to the globe
-      this.rig.minDist = MIN_ALT_KM;
+      // an object may be approached as in the globe view (the camera itself still stops MIN_ALT_KM above the ground)
+      const src = this.surfaceSrc;
+      this.rig.minDist = src?.kind === 'entity' ? this.models.defOf(src.id)?.minViewKm ?? MIN_TARGET_DIST_KM : MIN_ALT_KM;
     } else {
       anchored = this.follow && this.followFn ? this.followFn(this.anchor, t) : false;
       if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget, t);
       // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
       const modelMin = anchored ? this.models.defOf(this.followId)?.minViewKm : undefined;
-      this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
+      focusBody = anchored ? this.followedBody() : undefined;
+      const bodyMin = focusBody ? refMinDistKm(focusBody) : undefined;
+      this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? bodyMin ?? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
     }
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
+    this.updateDetail(wall);
 
-    this.prepareRender(gmst);
+    this.prepareRender(gmst, t);
     this.updateModels(t);
     this.refreshScope(wall);
 
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
       this.lastPickAt = wall;
       const id = this.pick(this.mouse.x, this.mouse.y);
-      if (id || this.hoverId) this.setHover(id, this.mouse.x, this.mouse.y);
+      // the trajectory under the cursor wins over a body (the Earth's disc covers the view) but never over an object
+      const onPath = !this.previewId && (!id || this.bodyIds.has(id)) ? this.pathHitAt(this.mouse.x, this.mouse.y) : null;
+      if (onPath) {
+        if (this.hoverId) this.setHover(null);
+      } else if (id || this.hoverId) this.setHover(id, this.mouse.x, this.mouse.y);
+      this.setPathHover(onPath, this.mouse.x, this.mouse.y);
     }
 
     this.renderer.render(this.scene, this.rcam);
     this.updatePathLabels();
+    this.updateLabels(wall);
   }
 
   /**
@@ -1035,7 +1459,7 @@ export class SceneController {
    * camera sits at the origin with the logical camera's orientation; the Earth and atmosphere objects are moved to minus
    * the camera position (their own vertices are static and only a few hundred metres of float32 noise at the surface).
    */
-  private prepareRender(gmst: number): void {
+  private prepareRender(gmst: number, t: number): void {
     const cam = this.camera;
     const f = this.frameInfo;
     f.set(cam.position, gmst);
@@ -1052,12 +1476,34 @@ export class SceneController {
 
     this.earthGroup.position.copy(f.origin).negate();
     this.atmo.position.copy(f.origin).negate();
+    this.celestial.update(t, f.origin);
 
     const u = this.pointMat.uniforms;
     u.uOriginS.value.set(f.origin.x, f.origin.y, f.origin.z * ELLIPSOID_K);
     u.uC2.value = occlusionC2(f.originV3);
     u.uOccK.value = ELLIPSOID_K;
-    this.occ = makeOccluder(f.originV3);
+    // the displayed Moon and Sun hide what is behind them like the Earth does (shader uniforms, same maths as `this.occ`)
+    // (the shader has uniforms for exactly two: [Moon, Sun]; every other drawn body, Mars, hides CPU-side points only)
+    const shaderBodies = this.celestial.shaderSpheres();
+    const sph = [u.uSph0.value, u.uSph1.value];
+    for (let i = 0; i < 2; i++) {
+      const sv = sphereView(f.originV3, shaderBodies[i]);
+      sph[i].set(sv.x, sv.y, sv.z, sv.r);
+      u.uSphC2.value.setComponent(i, sv.c2);
+    }
+    this.occ = makeOccluder(f.originV3, undefined, this.celestial.occluders());
+
+    // small, far bodies hide the non-exempt points over their disc: one cone per drawn body (a uniform update, no buffer upload)
+    const o = f.originV3;
+    this.discCones = discGroups(
+      this.celestial.bodies().map((b) => ({ rel: [b.c[0] - o[0], b.c[1] - o[1], b.c[2] - o[2]] as V3, radiusKm: b.radiusKm, k: b.k, reachKm: isEarthCentre(b.entityId) ? EARTH_SYSTEM_REACH_KM : 0, depthKm: isEarthCentre(b.entityId) ? EARTH_SYSTEM_DEPTH_KM : 0 })),
+      this.camera.fov, this.container.clientHeight,
+    );
+    this.discCones.forEach((g, i) => {
+      u.uGroup.value[i].set(g.x, g.y, g.z, g.sinR);
+      u.uGroupD.value[i] = g.dist;
+      u.uGroupE.value[i].set(g.shell, g.back);
+    });
 
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);
@@ -1089,15 +1535,15 @@ export class SceneController {
       resolve: (id, t) => {
         const s = graph.stateIn(id, t, 'EARTH:inertial');
         if (!s) return null;
-        const { r, compressed } = displayPosition(s.r, this.distScale);
-        return compressed ? null : { r, v: s.v };
+        return { r: liftNearSurface(s.r), v: s.v };
       },
       visibility: (id) => {
         const r = rec(id);
-        return r ? sceneVisibility(r, this.filters) : 'hide';
+        const look = r ? this.lookOf(r) : 'hide';
+        return look === 'boost' ? 'show' : look;
       },
       inScope: (id) => {
-        if (this.scopeMode === 'all' || id === this.selectedId || this.related.has(id)) return true;
+        if (this.scopeMode === 'all' || this.ctx.focus.has(id)) return true;
         const si = this.satIndex.get(id);
         if (si !== undefined) return this.sats.show.getX(si) > 0.5;
         const di = this.dynIndex.get(id);
@@ -1144,14 +1590,18 @@ export class SceneController {
     const mode = this.scopeMode;
     const focus = this.rig.target;
     const radius = scopeRadius(this.rig.dist);
-    const sel = this.selectedId, hov = this.hoverId;
+    const sel = this.selectedId, hov = this.hoverId, fol = this.followId;
     const f = this.frameInfo;
-    const occluded = makeOccluder(f.originV3);
+    const occluded = this.occ; // built by prepareRender this frame: the Earth, the Moon and the Sun
     const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
     let total = 0, rendered = 0;
     const tmp = this.tmp2;
 
-    const scan = (set: PointSet, ids: readonly string[], bulk: boolean, keepFlags: Uint8Array | null) => {
+    // `exemptFlags`: 1 = launch vehicle, stage or capsule. The selected, hovered and followed point, the ones a filter lets
+    // through and the flagged ones in flight get aShow = 2, which the point shader and pickAll never hide over a small body's
+    // disc; every other point (related, labelled, pads, ground stations) is scoped in by `keep` but hides over a small disc
+    // like the cloud
+    const scan = (set: PointSet, ids: readonly string[], bulk: boolean, keepFlags: Uint8Array | null, exemptFlags: Uint8Array | null) => {
       const show = set.show.array as Float32Array, size = set.size.array as Float32Array;
       const rel = set.pos.attr.array as Float32Array;
       let changed = false;
@@ -1160,9 +1610,12 @@ export class SceneController {
         if (w.x === 0 && w.y === 0 && w.z === 0) continue; // no position (failed propagation, provider without a state)
         total++;
         const id = ids[i];
-        const keep = id === sel || id === hov || this.related.has(id) || (keepFlags !== null && keepFlags[i] === 1);
+        const keep = id === hov || this.ctx.focus.has(id) || (keepFlags !== null && keepFlags[i] === 1);
         const d = Math.hypot(w.x - focus.x, w.y - focus.y, w.z - focus.z);
-        const v = inScope({ d, key: i, bulk, keep }, radius, mode) ? 1 : 0;
+        // an object the user filtered for is never hidden over a small disc, or a zoomed-out filter would show nothing
+        const kept = keepFlags !== null && keepFlags[i] === 1;
+        const exempt = id === sel || id === hov || id === fol || kept || (exemptFlags !== null && exemptFlags[i] === 1 && Math.hypot(w.x, w.y, w.z) > RE + IN_FLIGHT_KM);
+        const v = inScope({ d, key: i, bulk, keep }, radius, mode) ? (exempt ? SHOW_EXEMPT : 1) : 0;
         if (show[i] !== v) {
           show[i] = v;
           changed = true;
@@ -1170,19 +1623,19 @@ export class SceneController {
         if (v === 0 || size[i] <= 0) continue;
         const x = rel[i * 3], y = rel[i * 3 + 1], z = rel[i * 3 + 2];
         if (!inView(m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[3] * x + m[7] * y + m[11] * z + m[15])) continue;
-        if (!occluded(x, y, z)) rendered++;
+        if (!occluded(x, y, z) && (v === SHOW_EXEMPT || !hiddenByDisc(x, y, z, this.discCones))) rendered++;
       }
       if (changed) set.show.needsUpdate = true;
     };
-    scan(this.sats, this.propagator.ids, true, this.satKeep);
-    scan(this.dyn, this.dynIds, false, this.dynKeep);
-    scan(this.pads, this.launches.map((l) => l.entityId), false, null);
+    scan(this.sats, this.propagator.ids, true, this.satKeep, this.satExempt);
+    scan(this.dyn, this.dynIds, false, this.dynKeep, this.dynExempt);
+    scan(this.pads, this.launches.map((l) => l.entityId), false, null, null);
     this.scopeCounts = { rendered, total };
 
     // light overlays (orbit line, footprint) of entities that are scoped out are not drawn either
     this.overlayInScope.clear();
     for (const id of this.overlays.keys()) {
-      const keep = id === sel || this.related.has(id);
+      const keep = this.ctx.focus.has(id) || this.bodyIds.has(id); // a body line is already limited to what is looked at
       let d = 0;
       if (!keep && this.pointPos(id, tmp)) d = Math.hypot(tmp.x - focus.x, tmp.y - focus.y, tmp.z - focus.z);
       this.overlayInScope.set(id, inScope({ d, key: 0, bulk: false, keep }, radius, mode));
@@ -1211,17 +1664,17 @@ export class SceneController {
     };
     const sel = this.selectedId ? this.recs.get(this.selectedId) : undefined;
     const ok = !!sel && this.worldPos(sel.id, t, tmp);
-    this.shellSelected = ok && this.lastCompressed;
+    this.selOk = ok;
     const c = sel ? this.palette.colors[colorKeyOf(sel)] : this.palette.accent;
     // a drawn 3D model replaces the sprite; a model larger than the ring is its own selection cue
     const replaced = !!sel && this.models.spriteHidden.has(sel.id);
     const ringOff = !!sel && this.models.ringHidden.has(sel.id);
     set(0, ok && !ringOff, 26, this.palette.accent, GLYPH_ID.ring);
     // sat-cloud points of the selected sat are hidden, so redraw it here at its exact position
-    set(1, ok && !!sel && isSgp4(sel) && !replaced, POINT_SIZE[sel ? colorKeyOf(sel) : 'satellite'] + 3, c, GLYPH_ID.dot);
+    set(1, ok && !!sel && isSgp4(sel) && !replaced, POINT_SIZE[sel ? colorKeyOf(sel) : 'satellites'] + 3, c, GLYPH_ID.dot);
 
     const hov = this.hoverId && this.hoverId !== this.selectedId ? this.pointPos(this.hoverId, tmp) : false;
-    set(2, hov, 18, this.palette.colors.station, GLYPH_ID.ring);
+    set(2, hov, 18, this.palette.colors.stations, GLYPH_ID.ring);
 
     let fixOk = false;
     const fix = this.issFix;
@@ -1236,14 +1689,18 @@ export class SceneController {
   }
 
   private updateOverlays(t: number, wall: number): void {
+    const centre = this.frameCentre;
+    this.ensureCentreInGraph(); // the record may have been replaced by a refresh
+    // the body lines depend on the selection and the frame: re-evaluate every frame (4 records)
+    if (this.bodyIds.size && this.currentBodyLines().join(',') !== this.bodyLineKey) this.refreshHints();
     for (const [id, o] of this.overlays) {
       const rec = this.recs.get(id);
       if (!rec) continue;
       if (this.overlayInScope.get(id) === false) o.hide();
-      else o.update(graph, rec, t, wall, this.fullOverlays.has(id));
+      else o.update(graph, rec, t, wall, this.fullOverlays.has(id), centre);
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
-    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, this.distScale);
+    if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, centre);
   }
 
   /** Project the selected path's phase boundaries to the screen for the label layer. */
@@ -1265,4 +1722,174 @@ export class SceneController {
     if (labels.length || this.hadPathLabels) cb(labels);
     this.hadPathLabels = labels.length > 0;
   }
+
+  // ------------------------------------------------------------------ object labels (lib/labels.ts decides, scene/LabelLayer.ts draws)
+
+  /** Names next to objects (the LABELS toggle). Off: nothing is projected and nothing is drawn. */
+  setLabelsEnabled(on: boolean): void {
+    this.labelsOn = on;
+    this.labelsDirty = true;
+  }
+
+  /** Ids with `render.label: true` that are not bodies (bodies have their own pass, `labelBody`). */
+  private featuredIds(): Set<string> {
+    let set = this.labelFeatured;
+    if (!set) {
+      set = this.labelFeatured = new Set();
+      for (const rec of this.recs.values()) if (rec.render?.label === true && !this.bodyIds.has(rec.id)) set.add(rec.id);
+    }
+    return set;
+  }
+
+  /** Clip-space key of point `i` of `set` for the label scan: distance from the screen centre in NDC, or -1 when it is not drawn. */
+  private labelKey(set: PointSet, i: number, m: ArrayLike<number>): number {
+    if ((set.size.array as Float32Array)[i] <= 0 || (set.show.array as Float32Array)[i] < 0.5) return -1; // filtered out, scoped out, replaced by a model
+    const wd = set.pos.world;
+    if (wd[i * 3] === 0 && wd[i * 3 + 1] === 0 && wd[i * 3 + 2] === 0) return -1; // no position
+    const rel = set.pos.attr.array as Float32Array;
+    const x = rel[i * 3], y = rel[i * 3 + 1], z = rel[i * 3 + 2];
+    const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    if (!inView(cx, cy, cw) || this.occ(x, y, z) || this.discHiddenPoint(set, i, x, y, z)) return -1;
+    return Math.hypot(cx / cw, cy / cw);
+  }
+
+  /** Is point `i` of `set` not drawn because it is over a small, far body (the shader's `aShow` test)? Its label goes with it. */
+  private discHiddenPoint(set: PointSet, i: number, x: number, y: number, z: number): boolean {
+    return (set.show.array as Float32Array)[i] < SHOW_EXEMPT_MIN && hiddenByDisc(x, y, z, this.discCones);
+  }
+
+  private addLabelCand(sat: boolean, i: number, id: string, feat: boolean): void {
+    let c = this.labelCands[this.labelCandN];
+    if (!c) c = this.labelCands[this.labelCandN] = { sat, i, id, text: '', feat };
+    c.sat = sat;
+    c.i = i;
+    c.id = id;
+    c.feat = feat;
+    c.text = labelText(this.recs.get(id)?.name ?? id);
+    this.labelCandN++;
+  }
+
+  /**
+   * Which point objects may carry a label, ~7 times a second (positions are re-projected every frame by `updateLabels`).
+   * With a filter active: the objects it lets through that are drawn, in view and not hidden behind a body; entities with
+   * `render.label` always qualify, the others (satellites) are thinned to the `LABEL_SCAN_KEEP` nearest the screen centre
+   * per point set. Without a filter: only the `render.label` entities.
+   */
+  private scanLabelCands(wall: number, m: ArrayLike<number>): void {
+    if (!this.labelsDirty && wall - this.lastLabelScanAt < 150) return;
+    this.labelsDirty = false;
+    this.lastLabelScanAt = wall;
+    this.labelCandN = 0;
+    const feat = this.featuredIds();
+    const sel = this.selectedId;
+    if (!queryActive(this.query)) {
+      for (const id of feat) {
+        if (id === sel) continue;
+        const si = this.satIndex.get(id);
+        if (si !== undefined) {
+          if (this.labelKey(this.sats, si, m) >= 0) this.addLabelCand(true, si, id, true);
+          continue;
+        }
+        const di = this.dynIndex.get(id);
+        if (di !== undefined && this.labelKey(this.dyn, di, m) >= 0) this.addLabelCand(false, di, id, true);
+      }
+      return;
+    }
+    const scan = (sat: boolean, set: PointSet, ids: readonly string[], keep: Uint8Array) => {
+      const n = Math.min(ids.length, keep.length);
+      if (this.labelKeys.length < n) {
+        this.labelKeys = new Float32Array(n);
+        this.labelIdx = new Int32Array(n);
+      }
+      let found = 0;
+      for (let i = 0; i < n; i++) {
+        if (keep[i] !== 1 || ids[i] === sel) continue;
+        const key = this.labelKey(set, i, m);
+        if (key < 0) continue;
+        if (feat.has(ids[i])) this.addLabelCand(sat, i, ids[i], true);
+        else {
+          this.labelKeys[found] = key;
+          this.labelIdx[found++] = i;
+        }
+      }
+      const k = selectNearest(this.labelKeys, found, LABEL_SCAN_KEEP, 2, this.labelPick, this.labelCounts);
+      for (let j = 0; j < k; j++) {
+        const i = this.labelIdx[this.labelPick[j]];
+        this.addLabelCand(sat, i, ids[i], false);
+      }
+    };
+    scan(true, this.sats, this.propagator.ids, this.satKeep);
+    scan(false, this.dyn, this.dynIds, this.dynKeep);
+  }
+
+  /** Every frame: project the labelled objects, let the planner choose and place them, hand the result to the DOM layer. */
+  private updateLabels(wall: number): void {
+    const cb = this.cb.onLabels;
+    if (!cb) return;
+    const plan = this.labelPlan;
+    const w = this.container.clientWidth, h = this.container.clientHeight;
+    if (!this.labelsOn || w < 1 || h < 1) {
+      if (this.hadLabels) cb(plan.out, 0);
+      this.hadLabels = false;
+      return;
+    }
+    const m = this.labelM.multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
+    this.scanLabelCands(wall, m);
+    plan.begin();
+    this.labelW = w;
+    this.labelH = h;
+
+    // bodies: their own pass (not points); the name fades as the disc grows
+    this.celestial.eachBody(this.labelBody);
+
+    const sel = this.selectedId, hov = this.hoverId;
+    // the selection (drawn from the highlight set whatever it is); a selected body is a body label
+    if (sel && this.selOk && !this.bodyIds.has(sel)) {
+      const a = this.hi.pos.attr;
+      this.projectLabel(a.getX(0), a.getY(0), a.getZ(0), sel, labelText(this.recs.get(sel)?.name ?? sel), 'selected', 14);
+    }
+    for (let n = 0; n < this.labelCandN; n++) {
+      const c = this.labelCands[n];
+      const set = c.sat ? this.sats : this.dyn;
+      if ((c.sat ? this.propagator.ids[c.i] : this.dynIds[c.i]) !== c.id) continue; // the catalogue changed since the scan
+      if ((set.size.array as Float32Array)[c.i] <= 0) continue;
+      const rel = set.pos.attr.array as Float32Array;
+      if (c.id !== hov && this.discHiddenPoint(set, c.i, rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2])) continue; // its icon is not drawn over a small body's disc
+      this.projectLabel(rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2], c.id, c.text, c.id === hov ? 'hover' : c.feat ? 'featured' : 'satellite', 9);
+    }
+    const n = plan.plan(w, h);
+    cb(plan.out, n);
+    this.hadLabels = n > 0;
+  }
+
+  /** Add a label for the camera-relative point (x, y, z) unless it is out of view or behind a body. */
+  private projectLabel(x: number, y: number, z: number, id: string, text: string, cls: LabelClass, dx: number): void {
+    const m = this.labelM.elements;
+    const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    if (!inView(cx, cy, cw) || this.occ(x, y, z)) return;
+    this.labelPlan.add(id, text, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, dx);
+  }
+
+  /** One body for the label pass (a bound arrow function: no closure per frame). Only bodies whose entity says `render.label`. */
+  private readonly labelBody = (entityId: string, c: readonly [number, number, number], radiusKm: number, k: number): void => {
+    const rec = this.recs.get(entityId);
+    if (rec?.render?.label !== true) return;
+    const o = this.frameInfo.origin;
+    const x = c[0] - o.x, y = c[1] - o.y, z = c[2] - o.z; // camera-relative, float64
+    const dist = Math.hypot(x, y, z), r = radiusKm * k;
+    const rpx = apparentRadiusPx(dist, r, this.camera.fov, this.labelH);
+    const opacity = bodyLabelOpacity(rpx);
+    if (opacity <= 0 || dist <= r * 1.02) return;
+    // the centre is inside the body's own occluder sphere: test a point just in front of its near surface instead
+    const s = 1 - (r * 1.02) / dist;
+    if (this.occ(x * s, y * s, z * s)) return;
+    const m = this.labelM.elements;
+    const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    if (!inView(cx, cy, cw)) return;
+    const cls: LabelClass = entityId === this.selectedId ? 'selected' : entityId === this.hoverId ? 'hover' : 'body';
+    this.labelPlan.add(entityId, rec.name, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, Math.min(rpx, 120) + 7, opacity);
+  };
 }

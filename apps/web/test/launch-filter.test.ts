@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { EntityRecord } from '@eio/core';
-import {
-  NO_FILTERS, buildLaunchGroups, filtersActive, launchIdOf, matchesFilters, sceneVisibility, searchLaunchGroups, type Filters,
-} from '../src/lib/filters';
+import { buildLaunchGroups, launchIdOf, launchMembers, searchLaunchGroups } from '../src/lib/launch-group';
+import { NO_QUERY, classify, isDrawn, termFromWord, type Query } from '../src/lib/query';
 import { mockSatellites } from '../src/mock/generators';
-import { runtime } from '../src/state/runtime';
-import { useStore } from '../src/state/store';
 
 const rec = (id: string, name: string, kind: string, group: string, aliases: Record<string, string>): EntityRecord => ({
   id, name, kind, group, aliases, bodyId: 'EARTH', updatedAt: 0,
@@ -21,44 +18,38 @@ const SATS: EntityRecord[] = [
   rec('sat-nocospar', 'NO COSPAR', 'satellite', 'active', { norad: '2' }),
   rec('sat-bad', 'BAD COSPAR', 'satellite', 'active', { norad: '3', cospar: 'garbage' }),
 ];
-const withLaunch = (launch: string | null, launchMode: 'only' | 'highlight' = 'only'): Filters => ({ ...NO_FILTERS, launch, launchMode });
+const launch = (words: string): Query => ({ terms: words.split(' ').map((w) => termFromWord(w)!) });
+const members = (query: Query) => SATS.filter((r) => isDrawn(classify(r, query))).map((r) => r.id);
 
-describe('launch filter semantics', () => {
+describe('launch: tags', () => {
   it('reads the launch id from the cospar alias', () => {
     expect(launchIdOf(SATS[1])).toBe('1993-036');
     expect(launchIdOf(SATS[6])).toBeUndefined();
     expect(launchIdOf(SATS[7])).toBeUndefined();
   });
 
-  it('list matching keeps only members in either mode', () => {
-    for (const mode of ['only', 'highlight'] as const) {
-      const ids = SATS.filter((r) => matchesFilters(r, withLaunch('1993-036', mode))).map((r) => r.id);
-      expect(ids).toEqual(['sat-22675', 'sat-33791', 'sat-33792']);
-    }
-    expect(SATS.every((r) => matchesFilters(r, withLaunch(null)))).toBe(true);
-    expect(filtersActive(withLaunch('1993-036'))).toBe(true);
-    expect(filtersActive(withLaunch(null))).toBe(false);
-    // filters written before the launch fields existed still work
-    expect(matchesFilters(SATS[0], { kinds: new Set(), groups: new Set() })).toBe(true);
+  it('launch:YYYY-NNN keeps the members, launch:YYYY every launch of the year', () => {
+    expect(members(launch('launch:1993-036'))).toEqual(['sat-22675', 'sat-33791', 'sat-33792']);
+    expect(members(launch('launch:2019'))).toEqual(['sat-44713', 'sat-44714']);
+    expect(members(launch('launch:1993 launch:2019'))).toEqual(['sat-22675', 'sat-33791', 'sat-33792', 'sat-44713', 'sat-44714']);
+    expect(members(launch('launch:1993-03'))).toEqual([]); // not a prefix of the digits
+    expect(members(NO_QUERY)).toHaveLength(SATS.length);
   });
 
-  it('show-only hides non-members, highlight dims them', () => {
-    const member = SATS[1];
-    const other = SATS[3];
-    expect(sceneVisibility(member, withLaunch('1993-036', 'only'))).toBe('show');
-    expect(sceneVisibility(other, withLaunch('1993-036', 'only'))).toBe('hide');
-    expect(sceneVisibility(other, withLaunch('1993-036', 'highlight'))).toBe('dim');
-    expect(sceneVisibility(member, withLaunch('1993-036', 'highlight'))).toBe('show');
-    expect(sceneVisibility(SATS[6], withLaunch('1993-036', 'highlight'))).toBe('dim'); // no cospar is never a member
-    expect(sceneVisibility(other, NO_FILTERS)).toBe('show');
+  it('an object without a valid cospar is never a member, and -launch: keeps it', () => {
+    expect(members(launch('launch:2001-001'))).toEqual(['sat-lone']);
+    expect(members(launch('-launch:1993-036 -launch:2019-074'))).toEqual(['sat-lone', 'sat-nocospar', 'sat-bad']);
   });
 
-  it('kind and group filters still hide in highlight mode and combine with the launch', () => {
-    const f: Filters = { kinds: new Set(['satellite']), groups: new Set(), launch: '1993-036', launchMode: 'highlight' };
-    expect(sceneVisibility(SATS[1], f)).toBe('hide'); // member but wrong kind
-    expect(sceneVisibility(SATS[3], f)).toBe('dim');
-    expect(matchesFilters(SATS[1], { ...f, kinds: new Set(['debris']) })).toBe(true);
-    expect(matchesFilters(SATS[3], { ...f, kinds: new Set(['debris']) })).toBe(false);
+  it('combines with the other tags', () => {
+    expect(members(launch('launch:1993-036 kind:satellite'))).toEqual([]);
+    expect(members(launch('launch:1993-036 kind:debris'))).toEqual(['sat-22675', 'sat-33791', 'sat-33792']);
+    expect(members(launch('launch:1993-036 -group:cosmos-2251-debris'))).toEqual([]);
+  });
+
+  it('a hidden launch leaves the scene and the list', () => {
+    const hide: Query = { terms: [{ key: 'launch', value: '1993-036', effect: 'hide' }] };
+    expect(members(hide)).toEqual(['sat-44713', 'sat-44714', 'sat-lone', 'sat-nocospar', 'sat-bad']);
   });
 });
 
@@ -71,6 +62,14 @@ describe('launch groups', () => {
     ]);
     expect(groups[0].ids).toEqual(['sat-22675', 'sat-33791', 'sat-33792']);
     expect(buildLaunchGroups(SATS, 1).map((g) => g.id)).toContain('2001-001');
+  });
+
+  it('finds the members a launch: tag fits the camera to', () => {
+    const groups = buildLaunchGroups(SATS);
+    expect(launchMembers(groups, '1993-036')).toEqual(['sat-22675', 'sat-33791', 'sat-33792']);
+    expect(launchMembers(groups, '2019')).toEqual(['sat-44713', 'sat-44714']);
+    expect(launchMembers(groups, '19')).toEqual([]);
+    expect(launchMembers(groups, '2001-001')).toEqual([]); // a single object is no group
   });
 
   it('searches groups by label, word and launch id', () => {
@@ -96,28 +95,5 @@ describe('launch groups', () => {
     expect(groups.some((g) => g.label.startsWith('STARLINK'))).toBe(true);
     expect(sats.filter((s) => launchIdOf(s) === '1993-036').every((s) => s.kind === 'debris')).toBe(true);
     expect(groups.every((g) => g.count >= 2)).toBe(true);
-  });
-});
-
-describe('launch filter store actions', () => {
-  it('sets the group, requests a camera fit, switches mode and clears', () => {
-    const fits: string[][] = [];
-    runtime.onFitRequest = (ids) => void fits.push(ids);
-    useStore.getState().setLaunchFilter('1993-036', ['a', 'b']);
-    expect(useStore.getState().filters.launch).toBe('1993-036');
-    expect(fits).toEqual([['a', 'b']]);
-    useStore.getState().setLaunchMode('highlight');
-    expect(useStore.getState().filters).toMatchObject({ launch: '1993-036', launchMode: 'highlight' });
-    expect(fits).toHaveLength(1); // changing the mode does not refit
-    useStore.getState().setLaunchFilter(null);
-    expect(useStore.getState().filters.launch).toBeNull();
-    expect(fits).toHaveLength(1);
-    useStore.getState().setLaunchFilter('x');
-    useStore.getState().clearFilters();
-    expect(useStore.getState().filters.launch).toBeNull();
-    expect(useStore.getState().filters.launchMode).toBe('highlight'); // mode is a preference and survives CLEAR
-    runtime.onFitRequest = undefined;
-    expect(() => useStore.getState().setLaunchFilter('1993-036', ['a'])).not.toThrow(); // no scene hook installed
-    useStore.getState().clearFilters();
   });
 });

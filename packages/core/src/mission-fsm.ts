@@ -18,9 +18,9 @@ export interface MissionInput {
   /** scheduled launch time (NET), ms */
   netMs: number;
   nowMs: number;
-  /** how long after liftoff powered ascent lasts, default ~9 min */
+  /** how long after liftoff powered ascent lasts, default 510 s (the Falcon 9 SECO of `ascent-model.ts`; `missionTimingFor` has the vehicle's own) */
   ascentSec?: number;
-  /** how long after ascent the insertion phase lasts, default ~10 min */
+  /** how long after ascent the insertion phase lasts, default 600 s (the modeled hold after SECO, so the phase ends with the modeled ascent at T+1110 s) */
   insertionSec?: number;
   /** T-minus window in which the phase is COUNTDOWN, default 30 min */
   countdownSec?: number;
@@ -37,10 +37,12 @@ export interface MissionState {
 
 /**
  * SCHEDULED -> COUNTDOWN -> ACTIVE_ASCENT -> ORBIT_INSERTION -> ON_ORBIT
- * Terminal status codes from LL2 win; otherwise time relative to NET drives the phase.
+ * Terminal status codes from LL2 win; otherwise time relative to NET drives the phase. A launch past NET whose status
+ * is not a pre-launch one (Go, or an id this table does not know) is inferred from time alone, so it ends in ON_ORBIT
+ * once the insertion window is over rather than falling back to SCHEDULED.
  */
 export function deriveMissionState(i: MissionInput): MissionState {
-  const ascent = (i.ascentSec ?? 540) * 1000;
+  const ascent = (i.ascentSec ?? 510) * 1000;
   const insertion = (i.insertionSec ?? 600) * 1000;
   const countdown = (i.countdownSec ?? 1800) * 1000;
   const tMinusMs = i.netMs - i.nowMs;
@@ -57,9 +59,10 @@ export function deriveMissionState(i: MissionInput): MissionState {
       return { phase: inFlightPhase(sinceLiftoff, ascent, insertion), hold: false, tMinusMs, inferred: true };
   }
 
-  // Pre-launch statuses (Go / TBD / TBC / Hold). A launch that has passed NET but is not
-  // yet marked In Flight is treated as liftoff having just occurred only for a short grace period.
-  if (sinceLiftoff > 0 && !hold && i.statusId === LL2_STATUS.GO && sinceLiftoff < ascent + insertion) {
+  // A launch that has passed NET but is not yet marked In Flight (LL2 lags behind the webcast) is treated as flying,
+  // unless the provider still says TBD / TBC / Hold. Past the insertion window that is ON_ORBIT (see inFlightPhase).
+  const notYetFlying = i.statusId === LL2_STATUS.TBD || i.statusId === LL2_STATUS.TBC || hold;
+  if (sinceLiftoff > 0 && !notYetFlying) {
     return { phase: inFlightPhase(sinceLiftoff, ascent, insertion), hold: false, tMinusMs, inferred: true };
   }
   const inCountdown = tMinusMs <= countdown && tMinusMs > -60_000;

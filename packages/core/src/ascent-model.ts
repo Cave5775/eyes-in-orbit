@@ -1,8 +1,11 @@
-import { DEG } from './math';
+import { DEG, Vec3, add, cross, dot, norm, scale, sub, unit } from './math';
 import { EARTH } from './bodies';
-import { profileToFixedSamples, reconstructDownrange } from './ascent';
+import { convert } from './frames';
+import { elementsFromState } from './kepler';
+import { destinationPoint, profileToFixedSamples, reconstructDownrange } from './ascent';
+import { FALCON9_BOOSTER, modelBoosterReturn, type BoosterPhysics, type BoosterTrack } from './booster';
 import type { Launch } from './feeds';
-import type { CompositeSegment, EntityEvent, Sample } from './types';
+import type { CompositeSegment, EntityEvent, KeplerElements, Sample } from './types';
 
 /**
  * MODELED / NOMINAL Falcon 9 low-Earth-orbit ascent.
@@ -12,7 +15,11 @@ import type { CompositeSegment, EntityEvent, Sample } from './types';
  * show for a Starlink-class mission (altitude and Earth-relative speed against T+). Real flights
  * differ by tens of seconds and a few percent; use the telemetry ingest endpoint for measured data.
  *
- * Assumptions (all "typical", from public webcasts and launch reports, not from any one flight):
+ * Other vehicles reuse the same shape through a `VehicleProfile` (see `VEHICLES`): only the timeline and the per-vehicle
+ * notes differ, so a profile for a vehicle whose ascent looks very different (multi-booster, long core burn) would be
+ * misleading and is not provided.
+ *
+ * Assumptions for Falcon 9 (all "typical", from public webcasts and launch reports, not from any one flight):
  *  - Max-Q at about T+1:10 (altitude ~12 km, speed ~0.42 km/s).
  *  - MECO at about T+2:30 (altitude ~68 km, speed ~2.3 km/s, Earth-relative), stage separation
  *    3 s later, second-stage ignition (SES) 8 s after MECO, fairing separation at about T+3:30.
@@ -24,7 +31,9 @@ import type { CompositeSegment, EntityEvent, Sample } from './types';
  *  - Booster recovery on a droneship (entry burn ~T+6:20, landing burn ~T+7:55, touchdown ~T+8:20)
  *    or back at the launch site (boostback ~T+2:45, entry ~T+6:05, touchdown ~T+7:45).
  *  - After SECO the state is held (constant altitude and speed) for 10 minutes; the real orbit
- *    rises towards apogee, this is only a placeholder until the payload appears in CelesTrak.
+ *    rises towards apogee. From the end of that hold (T+1110 s for Falcon 9) the vehicle and payload follow a two-body
+ *    orbit through that state for about 12 hours (`on orbit (modeled)`; no J2, no drag, no maneuvers), a placeholder
+ *    until the payload appears in CelesTrak. Flights that did not reach orbit return to the pad marker instead.
  *  - Downrange is integrated from speed and altitude rate (`reconstructDownrange`, reference doc
  *    section 2) along one constant ground azimuth, so the ground track is a great circle.
  */
@@ -108,7 +117,8 @@ export interface Falcon9AscentOptions {
 export interface ModeledAscent {
   kind: 'modeled';
   label: string;
-  vehicle: 'Falcon 9';
+  /** display name of the vehicle profile used, e.g. `Falcon 9` */
+  vehicle: string;
   inclinationDeg: number;
   inclinationSource: InclinationSource;
   branch: LaunchBranch;
@@ -121,6 +131,8 @@ export interface ModeledAscent {
   rows: AscentRow[];
   events: AscentEvent[];
   phases: AscentPhaseSpan[];
+  /** modeled return path of the first stage (null when it is expended); its events lie on this track */
+  booster: BoosterTrack | null;
   assumptions: string[];
 }
 
@@ -282,24 +294,87 @@ export function secoSpeedKmS(t: Pick<Falcon9Timeline, 'secoAltKm' | 'apogeeKm'>,
   return Math.hypot(vx, vi * Math.cos(az));
 }
 
+// ---------------------------------------------------------------- vehicle profiles
+
+/**
+ * What differs between vehicles in this model: the name that selects it, the nominal timeline and whether the first
+ * stage can come back (the booster path is only modeled for Falcon 9 so far). The ascent shape itself is shared.
+ */
+export interface VehicleProfile {
+  id: string;
+  /** shown as `ModeledAscent.vehicle` */
+  name: string;
+  /** tested against `<LL2 vehicle> <launch name>` */
+  match: RegExp;
+  exclude?: RegExp;
+  /** the LL2 landing plan decides between droneship, RTLS and expended; otherwise the first stage is expended */
+  recoverable: boolean;
+  /** mass, drag area and entry-burn thrust of the first stage; needed for the booster return when `recoverable` */
+  booster?: BoosterPhysics;
+  /** nominal timeline; `orbit` is `starlink` only for Falcon 9 Starlink missions */
+  timeline(orbit: 'starlink' | 'generic'): Falcon9Timeline;
+  /** first entry of `ModeledAscent.assumptions` */
+  assumption: string;
+}
+
+export const VEHICLES = {
+  falcon9: {
+    id: 'falcon-9', name: 'Falcon 9', match: /falcon\s*9/i, exclude: /heavy/i, recoverable: true, booster: FALCON9_BOOSTER,
+    timeline: (orbit) => defaultTimeline(orbit),
+    assumption: 'Typical Falcon 9 / Starlink webcast figures, not a specific flight.',
+  },
+  electron: {
+    id: 'electron', name: 'Electron', match: /\belectron\b/i, recoverable: false,
+    // Rough public figures (Rocket Lab webcast timelines): first-stage burn about 2.5 minutes, a 6 minute second-stage burn.
+    timeline: () => ({
+      maxQSec: 65, mecoSec: 150, mecoAltKm: 78, mecoSpeedKmS: 2.5, sepDelaySec: 3, sesDelaySec: 6, fairingSec: 185,
+      secoSec: 535, secoAltKm: 190, apogeeKm: 520, coastSec: 600,
+    }),
+    assumption: 'Approximate Electron figures from public webcast timelines (rough and unverified: expect errors of tens of seconds), not a specific flight. The kick stage burns are not modeled.',
+  },
+} as const satisfies Record<string, VehicleProfile>;
+
+const VEHICLE_LIST: readonly VehicleProfile[] = [VEHICLES.falcon9, VEHICLES.electron];
+
+/** The profile that models this launch's vehicle, or null when there is none (such launches stay at the pad). */
+export function vehicleProfileFor(launch: Pick<Launch, 'vehicle' | 'name'>): VehicleProfile | null {
+  const text = `${launch.vehicle ?? ''} ${launch.name}`;
+  return VEHICLE_LIST.find((v) => v.match.test(text) && !v.exclude?.test(text)) ?? null;
+}
+
+/**
+ * Ascent and insertion durations of the launch's vehicle profile, for `deriveMissionState` (spread into its input):
+ * ACTIVE_ASCENT lasts until SECO and ORBIT_INSERTION through the modeled hold, so the phase ends together with the
+ * modeled ascent (T+1110 s for Falcon 9). Empty for vehicles without a profile (the FSM defaults are Falcon 9's).
+ */
+export function missionTimingFor(launch: Pick<Launch, 'vehicle' | 'name'>): { ascentSec?: number; insertionSec?: number } {
+  const tl = vehicleProfileFor(launch)?.timeline('generic');
+  return tl ? { ascentSec: tl.secoSec, insertionSec: tl.coastSec } : {};
+}
+
 const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
 const memo = new Map<string, ModeledAscent>();
 
 /** Build the nominal Falcon 9 LEO ascent. Results are memoised by options (the model is pure). */
 export function modelFalcon9Ascent(opts: Falcon9AscentOptions): ModeledAscent {
-  const key = JSON.stringify(opts);
+  return modelAscent(VEHICLES.falcon9, opts);
+}
+
+/** Build the nominal LEO ascent of `vehicle`. Results are memoised by vehicle and options (the model is pure). */
+export function modelAscent(vehicle: VehicleProfile, opts: Falcon9AscentOptions): ModeledAscent {
+  const key = `${vehicle.id}:${JSON.stringify(opts)}`;
   const hit = memo.get(key);
   if (hit) return hit;
 
   const profile = opts.profile ?? 'starlink';
-  const tl: Falcon9Timeline = { ...defaultTimeline(profile), ...opts.timeline };
+  const tl: Falcon9Timeline = { ...vehicle.timeline(profile), ...opts.timeline };
   const branch = opts.branch ?? defaultBranch(opts.padLatDeg, opts.padLonDeg);
-  const recovery = opts.recovery ?? 'droneship';
+  const recovery: Recovery = vehicle.recoverable ? opts.recovery ?? 'droneship' : 'none';
   const stepSec = Math.max(0.5, opts.stepSec ?? 2);
   const sesSec = tl.mecoSec + tl.sesDelaySec;
   const sepSec = tl.mecoSec + tl.sepDelaySec;
-  if (!(tl.secoSec > sesSec + 10) || !(tl.mecoSec > tl.maxQSec)) throw new Error('inconsistent Falcon 9 timeline');
+  if (!(tl.secoSec > sesSec + 10) || !(tl.mecoSec > tl.maxQSec)) throw new Error(`inconsistent ${vehicle.name} timeline`);
 
   const inertialAz = inertialAzimuthDeg(opts.inclinationDeg, opts.padLatDeg, branch);
   const vSeco = secoSpeedKmS(tl, opts.padLatDeg, inertialAz);
@@ -377,6 +452,23 @@ export function modelFalcon9Ascent(opts: Falcon9AscentOptions): ModeledAscent {
     e.speedKmS = r.speedKmS;
   }
 
+  // booster return from the separation state; its events now lie on this track
+  let boosterTrack: BoosterTrack | null = null;
+  if (recovery !== 'none' && vehicle.booster) {
+    const a = sampleAscentRows(rows, sepSec)!;
+    const vz = (sampleAscentRows(rows, sepSec + 1)!.altKm - sampleAscentRows(rows, sepSec - 1)!.altKm) / 2;
+    boosterTrack = modelBoosterReturn(
+      { sepSec, downrangeKm: a.downrangeKm, altKm: a.altKm, vxKmS: Math.sqrt(Math.max(0, a.speedKmS ** 2 - vz ** 2)), vzKmS: vz },
+      { recovery, physics: vehicle.booster, boostbackSec: booster.boostback, entrySec: booster.entry, landingBurnSec: booster.landingBurn, landingSec: booster.landing },
+    );
+    for (const e of events) {
+      if (e.track !== 'booster') continue;
+      const r = sampleAscentRows(boosterTrack.rows, e.tSec)!;
+      e.altKm = r.altKm;
+      e.speedKmS = r.speedKmS;
+    }
+  }
+
   const phases: AscentPhaseSpan[] = [
     { id: 'first-stage', label: 'FIRST STAGE', fromSec: 0, toSec: tl.mecoSec },
     { id: 'staging', label: 'STAGING', fromSec: tl.mecoSec, toSec: sesSec },
@@ -385,14 +477,15 @@ export function modelFalcon9Ascent(opts: Falcon9AscentOptions): ModeledAscent {
   ];
 
   const out: ModeledAscent = {
-    kind: 'modeled', label: MODELED_LABEL, vehicle: 'Falcon 9',
+    kind: 'modeled', label: MODELED_LABEL, vehicle: vehicle.name,
     inclinationDeg: opts.inclinationDeg, inclinationSource: opts.inclinationSource ?? 'explicit',
-    branch, recovery, inertialAzimuthDeg: inertialAz, azimuthDeg, timeline: tl, rows, events, phases,
+    branch, recovery, inertialAzimuthDeg: inertialAz, azimuthDeg, timeline: tl, rows, events, phases, booster: boosterTrack,
     assumptions: [
-      'Typical Falcon 9 / Starlink webcast figures, not a specific flight.',
+      vehicle.assumption,
       `Launch azimuth derived from inclination ${opts.inclinationDeg.toFixed(1)} deg at pad latitude ${opts.padLatDeg.toFixed(2)} deg (${branch === 'south' ? 'southward' : 'northward'} branch).`,
       'Event times and the speed/altitude curves can be off by tens of seconds and a few percent.',
-      'After SECO the state is held constant; the real orbit rises towards apogee.',
+      'After SECO the state is held constant; the real orbit rises towards apogee. Afterwards a two-body orbit (no J2) is drawn for about 12 hours as a placeholder until a TLE exists.',
+      ...(boosterTrack ? [`Booster return path is a kinematic reconstruction through the event times, landing ${boosterTrack.landingDownrangeKm.toFixed(0)} km downrange (${recovery === 'rtls' ? 'landing zone near the pad' : 'typical droneship distance'}), not a measured track.`] : []),
     ],
   };
   if (memo.size > 64) memo.clear();
@@ -477,10 +570,80 @@ export interface AscentSegmentBoundary {
   confidence?: number;
 }
 
+/** Phase label of the keplerian continuation after the last ascent row. */
+export const ON_ORBIT_PHASE = 'on orbit (modeled)';
+/** How long the modeled orbit is offered after the last ascent row, seconds. */
+export const ORBIT_TAIL_SEC = 12 * 3600;
+/** The orbit must clear the atmosphere to count as reached: perigee radius above the surface by at least this, km. */
+const MIN_PERIGEE_ALT_KM = 80;
+
+/** What the keplerian tail after an ascent is built from (all optional: they default to what the last two rows imply). */
+export interface OrbitTail {
+  /** inclination of the orbital plane, degrees: the velocity at the last row is turned into this plane */
+  inclinationDeg?: number;
+  /** speed in `EARTH:inertial` at the last row, km/s; default: the chord between the last two rows */
+  inertialSpeedKmS?: number;
+}
+
+/**
+ * Two-body (no J2, no drag) orbit through the last sampled row, as a `keplerian` segment from that instant for
+ * `ORBIT_TAIL_SEC`. The position is the last row; the velocity is horizontal, at `inertialSpeedKmS`, heading as the ground
+ * track does (north or south going), in the plane of `inclinationDeg` when given. Null when the rows do not describe a
+ * bound orbit that clears the atmosphere (the flight was not carried to orbit).
+ */
+function orbitTailSegment(samples: Sample[], tail: OrbitTail): CompositeSegment | null {
+  if (samples.length < 2) return null;
+  const a = samples[samples.length - 2], b = samples[samples.length - 1];
+  const dtSec = (b[0] - a[0]) / 1000;
+  if (!(dtSec > 0)) return null;
+  const inertial = (s: Sample): Vec3 => convert({ frame: 'EARTH:fixed', r: [s[1], s[2], s[3]] }, 'EARTH:inertial', s[0]).r;
+  const rA = inertial(a), rB = inertial(b);
+  const rHat = unit(rB);
+  // chord velocity without its radial part: the heading (and, absent a given speed, the speed)
+  const chord = scale(sub(rB, rA), 1 / dtSec);
+  const vh = sub(chord, scale(rHat, dot(chord, rHat)));
+  const speed = tail.inertialSpeedKmS ?? norm(vh);
+  let dir = unit(vh);
+  const cosLat = Math.hypot(rHat[0], rHat[1]);
+  if (tail.inclinationDeg !== undefined && cosLat > 1e-6) {
+    // cos(i) = sin(Az) cos(lat) for a horizontal velocity at azimuth Az; the north/south branch follows the ground track
+    const east = unit(cross([0, 0, 1], rHat));
+    const north = cross(rHat, east);
+    const sinAz = Math.max(-1, Math.min(1, Math.cos(tail.inclinationDeg * DEG) / cosLat));
+    const cosAz = Math.sqrt(1 - sinAz * sinAz) * (dot(vh, north) >= 0 ? 1 : -1);
+    dir = add(scale(east, sinAz), scale(north, cosAz));
+  }
+  if (!(speed > 0) || norm(dir) === 0) return null;
+  let elements: KeplerElements;
+  try {
+    elements = elementsFromState(rB, scale(dir, speed), EARTH.gm, b[0]);
+  } catch {
+    return null;
+  }
+  if (elements.a * (1 - elements.e) < EARTH.radiusKm + MIN_PERIGEE_ALT_KM) return null;
+  return { fromMs: b[0], toMs: b[0] + ORBIT_TAIL_SEC * 1000, phase: ON_ORBIT_PHASE, spec: { type: 'keplerian', bodyId: 'EARTH', elements } };
+}
+
+export interface AscentTailOptions {
+  /**
+   * Continue on a two-body orbit from the last row (`on orbit (modeled)`, for `ORBIT_TAIL_SEC`), see `orbitTailSegment`.
+   * A PLACEHOLDER until the object appears in a TLE feed: no J2, no drag, no maneuvers. Without it, or when the rows do
+   * not describe an orbit, the tail below applies.
+   */
+  orbit?: OrbitTail;
+  /** hold the last sampled position (`last fix (held)`) for `ORBIT_TAIL_SEC` when there is no orbit */
+  holdLast?: boolean;
+  /** then (after the orbit, the hold, or at once) go back to the pad marker, so the entity always has a position */
+  trailingPad?: boolean;
+  /** else go to this ground point and stay (e.g. the booster's landing site) */
+  trailingAt?: { latDeg: number; lonDeg: number; phase: string };
+}
+
 /**
  * Pad (geodetic, until liftoff) followed by one `sampled` EARTH:fixed segment per boundary. `rows`
  * need `downrangeKm`; the azimuth turns them into a ground track from the pad. Segments overlap by
- * exactly one sample so that every time between the first and last row is covered.
+ * exactly one sample so that every time between the first and last row is covered. A segment ends where the next one
+ * starts (the later one wins at that instant), so the composite has no gap even at fractional milliseconds.
  */
 export function ascentCompositeSegments(
   netMs: number,
@@ -488,11 +651,11 @@ export function ascentCompositeSegments(
   azimuthDeg: number,
   rows: { tSec: number; altKm: number; downrangeKm: number }[],
   boundaries: AscentSegmentBoundary[],
-  opts: { trailingPad?: boolean } = {},
+  opts: AscentTailOptions = {},
 ): CompositeSegment[] {
   const samples: Sample[] = profileToFixedSamples(EARTH, pad, azimuthDeg, netMs, rows);
   const padSpec = { type: 'geodetic', bodyId: 'EARTH', latDeg: pad.latDeg, lonDeg: pad.lonDeg, altKm: 0 } as const;
-  const segments: CompositeSegment[] = [{ fromMs: netMs - 30 * DAY_MS, toMs: netMs - 1, phase: 'pad', spec: padSpec }];
+  const segments: CompositeSegment[] = [{ fromMs: netMs - 30 * DAY_MS, toMs: netMs, phase: 'pad', spec: padSpec }];
   const lastMs = samples[samples.length - 1][0];
   boundaries.forEach((b, i) => {
     const fromMs = netMs + b.fromSec * 1000;
@@ -500,13 +663,43 @@ export function ascentCompositeSegments(
     const slice = samples.filter((s) => s[0] >= fromMs && s[0] <= nextMs);
     if (slice.length < 2) return;
     segments.push({
-      fromMs, toMs: i + 1 < boundaries.length ? nextMs - 1 : nextMs, phase: b.phase,
+      fromMs, toMs: nextMs, phase: b.phase,
       spec: { type: 'sampled', frame: 'EARTH:fixed', samples: slice, ...(b.confidence !== undefined ? { confidence: b.confidence } : {}) },
     });
   });
-  // After the modeled ascent the entity would vanish (launch board cards, search and fly-to need a position),
-  // so it goes back to the pad marker, as launch entities without any trajectory always were.
-  if (opts.trailingPad) segments.push({ fromMs: lastMs + 1, toMs: netMs + 30 * DAY_MS, phase: 'pad (launch complete)', spec: padSpec });
+
+  const farMs = netMs + 30 * DAY_MS;
+  const sampled = segments[segments.length - 1];
+  const last = samples[samples.length - 1];
+  const orbit = opts.orbit ? orbitTailSegment(samples, opts.orbit) : null;
+  let endMs = lastMs;
+  if (orbit) {
+    segments.push(orbit);
+    endMs = orbit.toMs;
+  } else {
+    // the last sampled segment keeps its final position for a millisecond, so the next segment can start at lastMs + 1
+    // without a gap for fractional times
+    if ((opts.holdLast || opts.trailingPad || opts.trailingAt) && sampled.spec.type === 'sampled') {
+      sampled.toMs = lastMs + 1;
+      sampled.spec = { ...sampled.spec, holdEnds: true };
+    }
+    endMs = lastMs + 1;
+    if (opts.holdLast) {
+      const heldTo = endMs + ORBIT_TAIL_SEC * 1000;
+      segments.push({
+        fromMs: endMs, toMs: heldTo, phase: 'last fix (held)',
+        spec: { type: 'sampled', frame: 'EARTH:fixed', samples: [[endMs, last[1], last[2], last[3]], [heldTo, last[1], last[2], last[3]]], confidence: 0.3 },
+      });
+      endMs = heldTo;
+    }
+  }
+  // After the flight data the entity would vanish (launch board cards, search and fly-to need a position), so it goes
+  // back to the pad marker, as launch entities without any trajectory always were.
+  if (opts.trailingPad) segments.push({ fromMs: endMs, toMs: Math.max(farMs, endMs + DAY_MS), phase: 'pad (launch complete)', spec: padSpec });
+  else if (opts.trailingAt) {
+    const { latDeg, lonDeg, phase } = opts.trailingAt;
+    segments.push({ fromMs: endMs, toMs: Math.max(farMs, endMs + DAY_MS), phase, spec: { type: 'geodetic', bodyId: 'EARTH', latDeg, lonDeg, altKm: 0 } });
+  }
   return segments;
 }
 
@@ -518,8 +711,57 @@ export function modeledSegmentBoundaries(m: ModeledAscent): AscentSegmentBoundar
   return m.phases.map((p) => ({ phase: names[p.id], fromSec: p.fromSec }));
 }
 
-export function modeledAscentSegments(netMs: number, pad: { latDeg: number; lonDeg: number }, m: ModeledAscent): CompositeSegment[] {
-  return ascentCompositeSegments(netMs, pad, m.azimuthDeg, m.rows, modeledSegmentBoundaries(m), { trailingPad: true });
+/** The orbit a modeled ascent ends on: its plane and the vis-viva speed at SECO (see `OrbitTail`). */
+export function modeledOrbitTail(m: ModeledAscent): OrbitTail {
+  return { inclinationDeg: m.inclinationDeg, inertialSpeedKmS: secoInertialSpeedKmS(m.timeline) };
+}
+
+export interface ModeledAscentSegmentOptions {
+  /** the flight reached orbit (default true): it continues as `on orbit (modeled)`. False for failures: the pad tail only */
+  orbit?: boolean;
+  /** after the modeled orbit (`ORBIT_TAIL_SEC`) the launch entity returns to the pad marker (default true); false ends the composite */
+  padAfterOrbit?: boolean;
+}
+
+/**
+ * Pad, the ascent, the held state until `secoSec + coastSec`, then a two-body orbit from there (`on orbit (modeled)`,
+ * about 12 h, a placeholder until a TLE exists) and the pad marker. With `orbit: false` (the flight did not reach orbit)
+ * the pad marker follows the held state directly.
+ */
+export function modeledAscentSegments(
+  netMs: number, pad: { latDeg: number; lonDeg: number }, m: ModeledAscent, opts: ModeledAscentSegmentOptions = {},
+): CompositeSegment[] {
+  const orbit = opts.orbit !== false;
+  return ascentCompositeSegments(netMs, pad, m.azimuthDeg, m.rows, modeledSegmentBoundaries(m), {
+    orbit: orbit ? modeledOrbitTail(m) : undefined,
+    trailingPad: !orbit || opts.padAfterOrbit !== false,
+  });
+}
+
+/** The keplerian segments of an ascent composite (what the payload entity follows); null when the flight has no orbit. */
+export function orbitSegmentsOf(segments: CompositeSegment[] | undefined): CompositeSegment[] | null {
+  const orbit = (segments ?? []).filter((s) => s.spec.type === 'keplerian');
+  return orbit.length ? orbit : null;
+}
+
+/** Ground point where the modeled booster touches down (along the launch azimuth from the pad). */
+export function boosterLandingPoint(pad: { latDeg: number; lonDeg: number }, m: ModeledAscent): { latDeg: number; lonDeg: number } | null {
+  return m.booster ? destinationPoint(pad.latDeg, pad.lonDeg, m.azimuthDeg, m.booster.landingDownrangeKm, EARTH.radiusKm) : null;
+}
+
+/**
+ * Pad, the vehicle's ascent up to stage separation, the booster's return (coast, boostback or trim, entry burn, landing
+ * burn) and then parked at the landing point. Null when the first stage is expended.
+ */
+export function modeledBoosterSegments(netMs: number, pad: { latDeg: number; lonDeg: number }, m: ModeledAscent): CompositeSegment[] | null {
+  const b = m.booster;
+  const land = boosterLandingPoint(pad, m);
+  if (!b || !land) return null;
+  const sep = b.rows[0].tSec;
+  const rows = [...m.rows.filter((r) => r.tSec < sep), ...b.rows];
+  const names = { coast: 'coast', boostback: 'boostback burn', trim: 'trim burn', entry: 'entry burn', 'landing-burn': 'landing burn' } as const;
+  const boundaries: AscentSegmentBoundary[] = [{ phase: 'stage 1 ascent', fromSec: 0 }, ...b.phases.map((p) => ({ phase: names[p.id], fromSec: p.fromSec }))];
+  return ascentCompositeSegments(netMs, pad, m.azimuthDeg, rows, boundaries, { trailingAt: { ...land, phase: 'landed' } });
 }
 
 const landingOf = (launch: Launch): Recovery => {
@@ -536,17 +778,18 @@ export function isFalcon9(launch: Pick<Launch, 'vehicle' | 'name'>): boolean {
   return /falcon\s*9/i.test(text) && !/heavy/i.test(text);
 }
 
-/** Nominal ascent for a Falcon 9 launch with a known pad, else null. Inclination comes from `defaultInclination`. */
+/** Nominal ascent for a launch of a vehicle with a profile (Falcon 9, Electron) and a known pad, else null. Inclination comes from `defaultInclination`. */
 export function modeledAscentForLaunch(launch: Launch): ModeledAscent | null {
-  if (!launch.pad || !isFalcon9(launch)) return null;
+  const vehicle = vehicleProfileFor(launch);
+  if (!launch.pad || !vehicle) return null;
   const inc = defaultInclination({
     name: launch.name, missionName: launch.mission?.name, orbit: launch.mission?.orbit,
     description: launch.mission?.description, padLatDeg: launch.pad.latitude, padLonDeg: launch.pad.longitude,
   });
-  return modelFalcon9Ascent({
+  return modelAscent(vehicle, {
     padLatDeg: launch.pad.latitude, padLonDeg: launch.pad.longitude,
     inclinationDeg: inc.deg, inclinationSource: inc.source,
     recovery: landingOf(launch),
-    profile: /starlink/i.test(`${launch.mission?.name ?? ''} ${launch.name}`) ? 'starlink' : 'generic',
+    profile: vehicle === VEHICLES.falcon9 && /starlink/i.test(`${launch.mission?.name ?? ''} ${launch.name}`) ? 'starlink' : 'generic',
   });
 }

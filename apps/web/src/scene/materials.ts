@@ -1,11 +1,28 @@
 import * as THREE from 'three';
+import { EARTH } from '@eio/core';
+import { GROUP_SLOTS, offGroup } from '../lib/disc-hide';
+import { OCCLUSION_MARGIN_KM } from '../lib/occlusion';
+import { SHOW_EXEMPT_MIN } from '../lib/pick';
 
 /**
  * Uniforms the point shader needs for the analytic Earth occlusion test (see `lib/occlusion.ts`, same maths):
- * the camera in Earth-scaled space, `|o'|^2 - R'^2` computed in float64 on the CPU, and the ellipsoid z scale.
+ * the camera in Earth-scaled space, `|o'|^2 - R'^2` computed in float64 on the CPU, the shrunk Earth radius R' and the
+ * ellipsoid z scale. The test is the stable sphere form (miss distance `|cross(u, o')|`, see `sphereHides`): with the camera
+ * 1.5e8 km out (the Sun frame) `b^2 - c2` would be pure float32 cancellation (b^2 ~ 2e16, R^2 ~ 4e7).
+ * Plus the displayed Moon (`uSph0`) and Sun (`uSph1`) as spheres: xyz = centre relative to the camera (float64 on the
+ * CPU), w = radius; `uSphC2` = `|centre|^2 - r^2` per sphere (<= 0 disables it: camera inside, or not placed yet).
  */
 export function occlusionUniforms(): Record<string, THREE.IUniform> {
-  return { uOriginS: { value: new THREE.Vector3() }, uC2: { value: 0 }, uOccK: { value: 1 }, uOcc: { value: 1 } };
+  return {
+    uOriginS: { value: new THREE.Vector3() },
+    uC2: { value: 0 },
+    uOccR: { value: EARTH.radiusKm - OCCLUSION_MARGIN_KM },
+    uOccK: { value: 1 },
+    uOcc: { value: 1 },
+    uSph0: { value: new THREE.Vector4() },
+    uSph1: { value: new THREE.Vector4() },
+    uSphC2: { value: new THREE.Vector2() },
+  };
 }
 
 /**
@@ -13,11 +30,20 @@ export function occlusionUniforms(): Record<string, THREE.IUniform> {
  * Positions arrive camera-relative (floating origin). Points are NOT depth tested: a sprite has one depth for all its
  * pixels, so against the Earth's depth it was half clipped at the limb (and z-fought on the ground). Instead the vertex
  * shader hides a point whose line of sight crosses the Earth (analytic ray test) and `aShow` (scope policy, 0/1) hides
- * out-of-scope points.
+ * out-of-scope points. `aShow >= 1.5` (2) marks a point exempt from the small-disc hiding: `uGroup[i]` is a body's cone
+ * (xyz unit direction from the camera, w the sine of its angular radius, > 1 = off) and `uGroupD[i]` the distance to its
+ * centre and `uGroupE[i]` the radius of a shell about it (the body's own system, LEO for the Earth) and how far behind the centre
+ * plane the cone still hides; a non-exempt point inside a cone and nearer than the body (plus that depth), or inside the shell, is not drawn (lib/disc-hide.ts has the same test for picking).
  */
 export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { uPx: { value: pixelRatio }, ...occlusionUniforms() },
+    uniforms: {
+      uPx: { value: pixelRatio },
+      ...occlusionUniforms(),
+      uGroup: { value: Array.from({ length: GROUP_SLOTS }, () => { const g = offGroup(); return new THREE.Vector4(g.x, g.y, g.z, g.sinR); }) },
+      uGroupD: { value: new Array<number>(GROUP_SLOTS).fill(0) },
+      uGroupE: { value: Array.from({ length: GROUP_SLOTS }, () => new THREE.Vector2(0, 0)) },
+    },
     transparent: true,
     depthWrite: false,
     depthTest: false,
@@ -29,20 +55,58 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
       uniform float uPx;
       uniform vec3 uOriginS;
       uniform float uC2;
+      uniform float uOccR;
       uniform float uOccK;
       uniform float uOcc;
+      uniform vec4 uSph0;
+      uniform vec4 uSph1;
+      uniform vec2 uSphC2;
+      uniform vec4 uGroup[${GROUP_SLOTS}];
+      uniform float uGroupD[${GROUP_SLOTS}];
+      uniform vec2 uGroupE[${GROUP_SLOTS}];
       varying vec3 vColor;
       varying float vGlyph;
+      // Small, far body (disc radius <= GROUP_DISC_PX): inside its pick cone and nearer than its centre, or within its shell -> not drawn.
+      // Same maths as hiddenByDisc in lib/disc-hide.ts; the sine of the miss angle is |cross(u, dir)| (no cancellation).
+      bool discHides(vec3 rel) {
+        float L = length(rel);
+        if (L <= 0.0) return false;
+        vec3 u = rel / L;
+        for (int i = 0; i < ${GROUP_SLOTS}; i++) {
+          vec4 g = uGroup[i];
+          if (g.w > 1.0) continue;
+          if (length(rel - g.xyz * uGroupD[i]) < uGroupE[i].x) return true;
+          if (dot(u, g.xyz) <= 0.0) continue;
+          if (length(cross(u, g.xyz)) >= g.w) continue;
+          if (dot(rel, g.xyz) < uGroupD[i] + uGroupE[i].y) return true;
+        }
+        return false;
+      }
       bool earthHides(vec3 rel) {
         if (uOcc < 0.5 || uC2 <= 0.0) return false;
         vec3 d = vec3(rel.xy, rel.z * uOccK);
         float L = length(d);
         if (L <= 0.0) return false;
-        float b = dot(uOriginS, d / L);
+        vec3 u = d / L;
+        float b = dot(uOriginS, u);
         if (b >= 0.0) return false;
-        float disc = b * b - uC2;
-        if (disc <= 0.0) return false;
-        return uC2 / (-b + sqrt(disc)) < L;
+        float p = length(cross(uOriginS, u));
+        if (p >= uOccR) return false;
+        return uC2 / (-b + sqrt((uOccR - p) * (uOccR + p))) < L;
+      }
+      // Moon / Sun: sphere s (xyz camera-relative centre, w radius) with c2 = |centre|^2 - r^2 from the CPU. The miss
+      // distance is |cross(u, centre)| (no |centre|^2 - t^2 cancellation: the Sun is 1.5e8 km away, its radius 7e5) and the
+      // near hit is c2 / (b + sqrt((r - p)(r + p))). Same maths as sphereOccludes in lib/occlusion.ts.
+      bool sphereHides(vec3 rel, vec4 s, float c2) {
+        if (uOcc < 0.5 || c2 <= 0.0) return false;
+        float L = length(rel);
+        if (L <= 0.0) return false;
+        vec3 u = rel / L;
+        float b = dot(u, s.xyz);
+        if (b <= 0.0) return false;
+        float p = length(cross(u, s.xyz));
+        if (p >= s.w) return false;
+        return c2 / (b + sqrt((s.w - p) * (s.w + p))) < L;
       }
       void main() {
         vColor = aColor;
@@ -50,7 +114,7 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = aSize * uPx;
         // size 0 means hidden: a zero point size is clamped up to 1 px on some GPUs/ANGLE, so also clip the vertex away
-        if (aSize <= 0.0 || aShow < 0.5 || earthHides(position)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        if (aSize <= 0.0 || aShow < 0.5 || earthHides(position) || sphereHides(position, uSph0, uSphC2.x) || sphereHides(position, uSph1, uSphC2.y) || (aShow < ${SHOW_EXEMPT_MIN.toFixed(2)} && discHides(position))) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       }`,
     fragmentShader: /* glsl */ `
       varying vec3 vColor;
@@ -78,6 +142,13 @@ const NOISE = /* glsl */ `
   }
   float fbm(vec3 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * vnoise(p); p *= 2.03; a *= 0.5; } return s; }`;
 
+/** 1 x 1 transparent texture the detail sampler points at until the detail layer exists. */
+const EMPTY_DETAIL = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+  t.needsUpdate = true;
+  return t;
+})();
+
 /**
  * Earth surface lit by an ECI sun vector. Body-fixed direction comes from the (z-up) geometry normal,
  * world normal from the model matrix, so the same shader works as the group rotates by GMST.
@@ -86,6 +157,75 @@ const NOISE = /* glsl */ `
  * `logdepthbuf` chunks: mixing log and linear depth would make the Earth, atmosphere and lines disagree.
  */
 export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture | null): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uSun: { value: sun },
+      uTex: { value: texture },
+      uHasTex: { value: texture ? 1 : 0 },
+      // streamed close-up imagery (scene/earth-detail.ts): premultiplied RGBA atlas, its box in the base map's uv, on/off
+      uDetail: { value: EMPTY_DETAIL },
+      uDetailBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uDetailOn: { value: 0 },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying vec3 vL; varying vec3 vN; varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        vL = normal;
+        vN = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */ `
+      #include <logdepthbuf_pars_fragment>
+      uniform vec3 uSun; uniform sampler2D uTex; uniform float uHasTex;
+      uniform sampler2D uDetail; uniform vec4 uDetailBox; uniform float uDetailOn;
+      varying vec3 vL; varying vec3 vN; varying vec2 vUv;
+      ${NOISE}
+      const float FLATTENING = 1.0 / 298.257223563;
+      void main() {
+        #include <logdepthbuf_fragment>
+        vec3 base;
+        if (uHasTex > 0.5) {
+          // The mesh is a sphere squashed by the flattening, so the sphere's own v is not the geodetic latitude the
+          // equirectangular maps are drawn in (up to 0.19 degrees, 21 km, off). Longitude stays the interpolated uv.x,
+          // which is continuous across the date line (an atan here would break the mipmap choice along it).
+          vec3 n = normalize(vL);
+          float phi = atan(n.z, (1.0 - FLATTENING) * length(n.xy));
+          vec2 guv = vec2(vUv.x, phi / 3.14159265 + 0.5);
+          base = texture2D(uTex, guv).rgb;
+          // close-up detail: sampled everywhere (derivatives stay uniform), used inside the atlas box with a soft edge
+          vec2 duv = (guv - uDetailBox.xy) / (uDetailBox.zw - uDetailBox.xy);
+          vec4 det = texture2D(uDetail, clamp(duv, 0.0, 1.0));
+          float edge = smoothstep(0.0, 0.04, min(min(duv.x, 1.0 - duv.x), min(duv.y, 1.0 - duv.y))) * uDetailOn;
+          base = base * (1.0 - det.a * edge) + det.rgb * edge;
+        } else {
+          float h = fbm(vL * 2.4 + 3.1);
+          float land = smoothstep(0.50, 0.53, h);
+          vec3 ocean = mix(vec3(0.015, 0.07, 0.17), vec3(0.04, 0.15, 0.30), smoothstep(0.25, 0.5, h));
+          vec3 ground = mix(vec3(0.14, 0.27, 0.11), vec3(0.45, 0.38, 0.23), smoothstep(0.2, 0.8, fbm(vL * 7.0 + 9.0)));
+          ground = mix(ground, vec3(0.86, 0.89, 0.92), smoothstep(0.76, 0.88, abs(vL.z) + (h - 0.5) * 0.25));
+          base = mix(ocean, ground, land);
+        }
+        float d = dot(normalize(vN), normalize(uSun));
+        float day = smoothstep(-0.07, 0.16, d);
+        vec3 lit = base * (0.30 + 0.80 * smoothstep(-0.1, 1.0, d));
+        vec3 night = base * vec3(0.085, 0.11, 0.18);
+        vec3 col = mix(night, lit, day);
+        col += vec3(0.8, 0.35, 0.12) * 0.07 * exp(-pow(d * 7.0, 2.0));
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  });
+}
+
+/**
+ * Surface of the Moon or Mars lit by the Sun: plain Lambert with a trace of ambient light on the night side. Geometry and
+ * UVs follow the Earth's convention (z = pole, +x at the centre of an equirectangular map). Without a texture a grey noise
+ * surface is used (clearly procedural, not geography; Mars keeps its tinted material until its map has loaded).
+ */
+export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | null): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uSun: { value: sun },
@@ -110,24 +250,12 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
       ${NOISE}
       void main() {
         #include <logdepthbuf_fragment>
-        vec3 base;
-        if (uHasTex > 0.5) {
-          base = texture2D(uTex, vUv).rgb;
-        } else {
-          float h = fbm(vL * 2.4 + 3.1);
-          float land = smoothstep(0.50, 0.53, h);
-          vec3 ocean = mix(vec3(0.015, 0.07, 0.17), vec3(0.04, 0.15, 0.30), smoothstep(0.25, 0.5, h));
-          vec3 ground = mix(vec3(0.14, 0.27, 0.11), vec3(0.45, 0.38, 0.23), smoothstep(0.2, 0.8, fbm(vL * 7.0 + 9.0)));
-          ground = mix(ground, vec3(0.86, 0.89, 0.92), smoothstep(0.76, 0.88, abs(vL.z) + (h - 0.5) * 0.25));
-          base = mix(ocean, ground, land);
-        }
+        vec3 base = uHasTex > 0.5
+          ? texture2D(uTex, vUv).rgb
+          : vec3(0.18 + 0.30 * fbm(vL * 3.0 + 1.7) + 0.12 * fbm(vL * 14.0));
         float d = dot(normalize(vN), normalize(uSun));
-        float day = smoothstep(-0.07, 0.16, d);
-        vec3 lit = base * (0.30 + 0.80 * smoothstep(-0.1, 1.0, d));
-        vec3 night = base * vec3(0.085, 0.11, 0.18);
-        vec3 col = mix(night, lit, day);
-        col += vec3(0.8, 0.35, 0.12) * 0.07 * exp(-pow(d * 7.0, 2.0));
-        gl_FragColor = vec4(col, 1.0);
+        float lit = smoothstep(-0.02, 0.35, d) * (0.15 + 0.95 * max(d, 0.0));
+        gl_FragColor = vec4(base * (0.012 + 1.05 * lit), 1.0);
       }`,
   });
 }

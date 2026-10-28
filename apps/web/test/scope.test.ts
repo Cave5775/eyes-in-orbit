@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SCOPE_FACTOR, SCOPE_MIN_KM, SCOPE_SOLO_CUT, hash01, inScope, inView, scopeRadius, scopeWeight, type ScopeObject,
+  SCOPE_FACTOR, SCOPE_MIN_KM, SCOPE_SOLO_CUT, hash01, inScope, inView, isScopeExempt, scopeRadius, scopeWeight, type ScopeObject,
 } from '../src/lib/scope';
-import { SHELL_THRESHOLD_KM } from '../src/lib/deepspace';
+import { NEAR_EARTH_LIMIT_KM } from '../src/lib/ref-body';
 
 const obj = (o: Partial<ScopeObject>): ScopeObject => ({ d: 0, key: 0, bulk: false, keep: false, ...o });
 
@@ -27,7 +27,7 @@ describe('scope radius', () => {
   it('the default Earth view keeps near-Earth space and starts to drop the shell; pulling out keeps everything', () => {
     const def = scopeRadius(24_000);
     expect(inScope(obj({ d: 1.5e6 }), def)).toBe(true); // JWST
-    expect(inScope(obj({ d: SHELL_THRESHOLD_KM * 1.6 }), def)).toBe(false);
+    expect(inScope(obj({ d: NEAR_EARTH_LIMIT_KM * 1.6 }), def)).toBe(false);
     expect(inScope(obj({ d: 4.0e6 }), scopeRadius(60_000))).toBe(true);
   });
 });
@@ -72,6 +72,18 @@ describe('exemptions and mode', () => {
   it('always keeps selected / related / hovered / filtered-in objects', () => {
     expect(inScope(obj({ d: 1e10, keep: true }), 100)).toBe(true);
     expect(inScope(obj({ d: 1e10, keep: true, bulk: true, key: 3 }), 100)).toBe(true);
+  });
+
+  it('never thins or cuts celestial bodies (star, planet, moon), however far or bulk-flagged', () => {
+    for (const kind of ['star', 'planet', 'moon']) {
+      expect(isScopeExempt(kind)).toBe(true);
+      expect(inScope(obj({ d: 1e10, kind }), 100)).toBe(true);
+      expect(inScope(obj({ d: 1e10, kind, bulk: true, key: 3 }), 100)).toBe(true);
+    }
+    expect(isScopeExempt('satellite')).toBe(false);
+    expect(isScopeExempt(undefined)).toBe(false);
+    expect(inScope(obj({ d: 1e10, kind: 'probe' }), 100)).toBe(false);
+    expect(inScope(obj({ d: 1e10 }), 100)).toBe(false);
   });
 
   it('"all" mode keeps everything', () => {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  MAX_DIST_KM, MIN_ALT_KM, altitudeOf, basisFromUp, ellipsoidUp, minElevation, slerpDir, zoomDistance, type V3,
+  MAX_DIST_KM, MIN_ALT_KM, advanceSurfaceFrame, altitudeOf, blendPosition, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceFrame, type V3,
 } from '../lib/camera';
 
 const MAX_EL = 1.5;
@@ -21,9 +21,10 @@ const tup = (v: THREE.Vector3): V3 => [v.x, v.y, v.z];
 /**
  * Orbit camera around a (possibly moving) target. Two modes:
  *  - `globe`: world z is up (the Earth's axis); az/el are measured in the world frame.
- *  - `surface`: the target is a point on the ground and the frame is its local east/north/up, so "up" on screen is the
- *    local vertical, the horizon is level and az = -90 deg looks north.
- * Left drag orbits, right/shift drag pans (globe only), wheel and pinch zoom with a step proportional to the height
+ *  - `surface`: the target is an object (or a ground point) and the frame is its local east/north/up, so "up" on screen is
+ *    the local vertical, the horizon is level and az = -90 deg looks north. The frame is north-up but carried along the
+ *    ground (see `advanceSurfaceFrame`), so the view does not spin when the target passes over a pole.
+ * Left drag orbits, right/shift drag pans (in surface mode it slides the target along the ground, see `onGroundPan`), wheel and pinch zoom with a step proportional to the height
  * above the surface (see `zoomDistance`). Any user input cancels a fly-to or a mode transition.
  */
 export class OrbitRig {
@@ -39,13 +40,18 @@ export class OrbitRig {
   readonly pan = new THREE.Vector3();
   readonly target = new THREE.Vector3();
   onUserInput?: () => void;
+  /** surface mode: a pan drag asks to move the ground target by this many km along the frame's east and north axes */
+  onGroundPan?: (eastKm: number, northKm: number, frame: SurfaceFrame) => void;
+  /** surface mode: the horizontal frame of the last update (null until the first update after entering the mode) */
+  frame: SurfaceFrame | null = null;
 
   private flight: { t0: number; dur: number; from: THREE.Vector3; fromDist: number; fromAz: number; fromEl: number; to: FlyOptions } | null = null;
-  private blend: { t0: number; dur: number; target: THREE.Vector3; offset: THREE.Vector3; up: THREE.Vector3 } | null = null;
+  private blend: { t0: number; dur: number; pos: THREE.Vector3; up: THREE.Vector3; fresh: boolean } | null = null;
   private pointers = new Map<number, { x: number; y: number }>();
   private lastPinch = 0;
   private readonly offset = new THREE.Vector3();
   private readonly natOffset = new THREE.Vector3();
+  private readonly endPos = new THREE.Vector3();
   private readonly natUp = new THREE.Vector3(0, 0, 1);
   private readonly dispose: () => void;
 
@@ -67,7 +73,7 @@ export class OrbitRig {
         const d = this.pinchDistance();
         if (this.lastPinch > 0 && d > 0) this.zoomBy(this.lastPinch / d);
         this.lastPinch = d;
-      } else if ((e.buttons & 2 || e.buttons & 4 || e.shiftKey) && this.mode === 'globe') this.panBy(dx, dy);
+      } else if (e.buttons & 2 || e.buttons & 4 || e.shiftKey) this.panBy(dx, dy);
       else this.orbitBy(dx, dy);
     };
     const up = (e: PointerEvent) => {
@@ -112,25 +118,39 @@ export class OrbitRig {
   }
 
   flyTo(to: FlyOptions): void {
+    if (this.blend?.fresh) {
+      // asked in the same tick as the mode switch (leaving the surface view for the globe view of a new subject): no frame has been
+      // drawn yet, so the destination is simply the transition's end pose, instead of a flight that starts from the old mode's angles
+      this.dist = to.dist;
+      this.az = to.az;
+      this.el = to.el;
+      this.flight = null;
+      this.pan.set(0, 0, 0);
+      return;
+    }
     this.flight = { t0: performance.now(), dur: to.durationMs ?? 1300, from: this.target.clone(), fromDist: this.dist, fromAz: this.az, fromEl: this.el, to };
     this.pan.set(0, 0, 0);
   }
 
   /**
-   * Switch mode with a smooth transition: the camera pose (target, offset direction and length, up vector) at the moment
-   * of the call is blended into the new mode's pose over `durationMs`. Set az/el/dist for the new mode afterwards.
+   * Switch mode with a smooth transition: the camera pose (position, up vector) at the moment of the call is blended into the
+   * new mode's pose over `durationMs`. The target does not blend: the camera looks at the new mode's target (the followed
+   * object, the ground point, or the Earth's centre) from the first frame to the last. The up vector slerps, the camera position
+   * goes round the Earth along a great circle with its height scaled steadily (`blendPosition`), so it stays above the ground
+   * and the horizon of that target. Set az/el/dist for the new mode afterwards.
    */
   switchMode(mode: RigMode, durationMs = 1500): void {
     this.blend = {
       t0: performance.now(),
       dur: durationMs,
-      target: this.target.clone(),
-      offset: this.camera.position.clone().sub(this.target),
+      pos: this.camera.position.clone(),
       up: this.camera.up.clone(),
+      fresh: true,
     };
     this.flight = null;
     this.pan.set(0, 0, 0);
     this.mode = mode;
+    this.frame = null;
   }
 
   /** Advance one frame. `anchor` is the live world position being followed, or null for the free target. */
@@ -141,7 +161,9 @@ export class OrbitRig {
     if (f) {
       const u = Math.min(1, (now - f.t0) / f.dur);
       const k = ease(u);
-      this.target.lerpVectors(f.from, goal, k);
+      // a fly-to that runs during a mode transition keeps the transition's constant target (see below), its distance/angles still blend
+      if (this.blend) this.target.copy(goal);
+      else this.target.lerpVectors(f.from, goal, k);
       this.dist = Math.exp(Math.log(f.fromDist) + (Math.log(f.to.dist) - Math.log(f.fromDist)) * k);
       this.az = f.fromAz + wrapAngle(f.to.az - f.fromAz) * k;
       this.el = f.fromEl + (f.to.el - f.fromEl) * k;
@@ -152,8 +174,8 @@ export class OrbitRig {
 
     // the mode's own ("natural") pose
     if (this.mode === 'surface') {
-      const basis = basisFromUp(ellipsoidUp(tup(this.target)));
-      this.el = Math.max(minElevation(this.dist), Math.min(MAX_EL, this.el));
+      const basis = (this.frame = advanceSurfaceFrame(this.frame, ellipsoidUp(tup(this.target))));
+      this.el = this.clampSurfaceEl(this.el);
       const ce = Math.cos(this.el), se = Math.sin(this.el), ca = Math.cos(this.az), sa = Math.sin(this.az);
       const { e, n, u } = basis;
       this.natOffset.set(
@@ -172,12 +194,16 @@ export class OrbitRig {
     if (b) {
       const u = Math.min(1, (now - b.t0) / b.dur);
       const k = ease(u);
-      this.target.lerpVectors(b.target, this.target, k);
-      const len = Math.exp(Math.log(Math.max(1e-6, b.offset.length())) + (Math.log(Math.max(1e-6, this.natOffset.length())) - Math.log(Math.max(1e-6, b.offset.length()))) * k);
-      const dir = slerpDir(tup(b.offset), tup(this.natOffset), k);
-      this.camera.position.set(this.target.x + dir[0] * len, this.target.y + dir[1] * len, this.target.z + dir[2] * len);
+      // where the mode's own pose puts the camera now (the object moves, so it is recomputed every frame)
+      // the camera aims at the end pose's target (the object, the ground point or the Earth's centre) for the whole transition:
+      // `this.target` is not blended, so the look direction does not sweep and a followed object stays at the screen centre
+      const endTarget = tup(this.target);
+      const end = this.endPos.copy(this.target).add(this.natOffset);
+      const pos = blendPosition(tup(b.pos), tup(end), k, MIN_ALT_KM, endTarget);
+      this.camera.position.set(pos[0], pos[1], pos[2]);
       const up = slerpDir(tup(b.up), tup(this.natUp), k);
       this.camera.up.set(up[0], up[1], up[2]);
+      b.fresh = false;
       if (u >= 1) this.blend = null;
     } else {
       this.camera.position.copy(this.target).add(this.natOffset);
@@ -202,11 +228,28 @@ export class OrbitRig {
 
   private orbitBy(dx: number, dy: number): void {
     this.az -= dx * 0.0055;
-    this.el = Math.max(this.mode === 'surface' ? minElevation(this.dist) : -MAX_EL, Math.min(MAX_EL, this.el + dy * 0.0055));
+    const el = this.el + dy * 0.0055;
+    this.el = this.mode === 'surface' ? this.clampSurfaceEl(el) : Math.max(-MAX_EL, Math.min(MAX_EL, el));
+  }
+
+  /** Lowest surface-view elevation: above the horizon for a ground target, lower for a high object (the camera still clears the ground). */
+  private minSurfaceEl(): number {
+    return minElevation(this.dist, MIN_ALT_KM, altitudeOf(tup(this.target)));
+  }
+
+  /** Surface elevation limits: above the ground limit, and never straight up or down (the vertical would be parallel to the view). */
+  private clampSurfaceEl(el: number): number {
+    return Math.min(MAX_EL, Math.max(this.minSurfaceEl(), -MAX_EL, el));
   }
 
   private panBy(dx: number, dy: number): void {
     const k = (2 * this.dist * Math.tan((this.camera.fov * Math.PI) / 360)) / this.dom.clientHeight;
+    if (this.mode === 'surface') {
+      // the target slides along the ground at its own height: the owner moves it (and stops following whatever it followed)
+      const d = groundPanDelta(this.az, this.el, dx, dy, k);
+      if (this.frame) this.onGroundPan?.(d.east, d.north, this.frame);
+      return;
+    }
     const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
     const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
     this.pan.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);

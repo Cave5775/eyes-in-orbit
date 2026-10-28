@@ -92,6 +92,22 @@ export interface IssArrays {
   verified: { sarj: boolean; bga: boolean; attitude: boolean };
 }
 
+/** Credentials the UI can set (`GET/PUT /api/credentials`); each one is read by a server connector. */
+export type CredentialKey = 'spacetrackUser' | 'spacetrackPassword' | 'll2Token';
+
+/** What the server tells the UI about one credential. Secret values are never sent, only whether one is set. */
+export interface CredentialInfo {
+  key: CredentialKey;
+  label: string;
+  connector: string;
+  secret: boolean;
+  set: boolean;
+  /** where the active value comes from: typed into the UI, or an environment variable / `.env` */
+  source: 'ui' | 'env' | null;
+  /** the value itself, for non-secret fields (e.g. the Space-Track username) */
+  value?: string;
+}
+
 export interface ConnectorHealth {
   id: string;
   status: 'idle' | 'ok' | 'error' | 'disabled' | 'stub';

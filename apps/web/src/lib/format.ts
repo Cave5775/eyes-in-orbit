@@ -69,6 +69,12 @@ export function fmtDays(d: number | undefined | null): string {
   return d == null || !Number.isFinite(d) ? DASH : `${fmtNum(d, 1)} d`;
 }
 
+/** Age of an element set at sim time: days, or `before epoch` (with how long before) when the sim is earlier than the epoch. */
+export function fmtElementAge(days: number | undefined | null): string {
+  if (days == null || !Number.isFinite(days)) return DASH;
+  return days < 0 ? `before epoch (${fmtNum(-days, 1)} d)` : fmtDays(days);
+}
+
 /** Distance: AU / million km / km, with a fixed number of decimals per band. */
 export function fmtDist(km: number | undefined | null): string {
   if (km == null || !Number.isFinite(km)) return DASH;
@@ -84,6 +90,13 @@ export function fmtDuration(sec: number | undefined): string {
   if (s < 5400) return `${Math.floor(s / 60)}m ${p2(s % 60)}s`;
   if (s < 172800) return `${Math.floor(s / 3600)}h ${p2(Math.floor((s % 3600) / 60))}m`;
   return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+}
+
+/** HUD text for the drawn path window (ms relative to now): around now, still to come (a planned launch) or already flown. */
+export function fmtPathWindow(pastMs: number, futureMs: number): string {
+  if (pastMs > 0) return `starts in ${fmtDuration(pastMs / 1000)}, lasts ${fmtDuration((futureMs - pastMs) / 1000)}`;
+  if (futureMs < 0) return `ended ${fmtDuration(-futureMs / 1000)} ago`;
+  return `-${fmtDuration(-pastMs / 1000)} / +${fmtDuration(futureMs / 1000)}`;
 }
 
 export function fmtAgo(ms: number | undefined, nowMs = Date.now()): string {

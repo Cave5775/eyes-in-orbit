@@ -2,12 +2,6 @@ import type { Connector } from '../connector';
 
 /** Documented placeholders: they appear in /api/health with status `stub` and never run. */
 
-export const spacetrack: Connector = {
-  id: 'spacetrack',
-  stub: (c) =>
-    `Not implemented. Would pull SATCAT/decay/GP data from space-track.org (30 req/min, free account). Needs SPACETRACK_USER and SPACETRACK_PASSWORD${c.spacetrackUser ? ' (user is set)' : ' (not set)'}.`,
-};
-
 export const satnogs: Connector = {
   id: 'satnogs',
   stub: (c) =>

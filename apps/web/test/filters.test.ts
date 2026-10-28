@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EntityRecord } from '@eio/core';
-import { NO_FILTERS, browseOrder, facetCounts, filtersActive, matchScore, matchesFilters, rankEntities, toggled } from '../src/lib/filters';
+import { browseOrder, facetCounts, matchScore, rankEntities } from '../src/lib/filters';
 import { colorKeyOf } from '../src/lib/entity';
 
 const rec = (id: string, name: string, kind: string, group?: string, aliases: Record<string, string> = {}): EntityRecord => ({
@@ -16,26 +16,6 @@ const CATALOG = [
   rec('launch-x', 'Falcon 9 | Crew-14', 'launch_vehicle', 'launch'),
   rec('dsn-VGR1', 'Voyager 1', 'probe', 'dsn', { dsn: 'VGR1' }),
 ];
-
-describe('filters', () => {
-  it('matches kinds and groups, empty set meaning all', () => {
-    const f = { kinds: new Set(['station']), groups: new Set<string>() };
-    expect(CATALOG.filter((r) => matchesFilters(r, f)).map((r) => r.id)).toEqual(['sat-25544', 'sat-48274']);
-    expect(matchesFilters(CATALOG[2], { kinds: new Set(['satellite']), groups: new Set(['starlink']) })).toBe(true);
-    expect(matchesFilters(CATALOG[2], { kinds: new Set(['satellite']), groups: new Set(['active']) })).toBe(false);
-    expect(CATALOG.every((r) => matchesFilters(r, NO_FILTERS))).toBe(true);
-    expect(filtersActive(NO_FILTERS)).toBe(false);
-    expect(filtersActive(f)).toBe(true);
-  });
-
-  it('toggled returns a new set', () => {
-    const a = new Set(['a']);
-    const b = toggled(a, 'b');
-    expect([...b].sort()).toEqual(['a', 'b']);
-    expect([...toggled(b, 'a')]).toEqual(['b']);
-    expect([...a]).toEqual(['a']);
-  });
-});
 
 describe('search ranking', () => {
   it('exact id/alias beats prefix beats substring', () => {
@@ -56,6 +36,10 @@ describe('search ranking', () => {
     expect(rankEntities(CATALOG, 'zzz')).toEqual([]);
   });
 
+  it('ranks every match when the limit is open', () => {
+    expect(rankEntities(CATALOG, 'starlink', Infinity).map((h) => h.id)).toEqual(['sat-44713', 'sat-44714']);
+  });
+
   it('counts facets most common first', () => {
     const { kinds, groups } = facetCounts(CATALOG);
     expect(kinds[0]).toEqual(['satellite', 2]);
@@ -71,12 +55,14 @@ describe('search ranking', () => {
 });
 
 describe('colour keys', () => {
-  it('prefers the server hint, then kind, then group', () => {
-    expect(colorKeyOf({ ...CATALOG[2], render: { colorKey: 'probe' } })).toBe('probe');
-    expect(colorKeyOf(CATALOG[0])).toBe('station');
-    expect(colorKeyOf(CATALOG[2])).toBe('starlink');
+  it('are the browser categories: the kind decides, the feed hint is advisory, Starlink is a satellite', () => {
+    expect(colorKeyOf({ ...CATALOG[2], render: { colorKey: 'probe' } })).toBe('probes');
+    expect(colorKeyOf(CATALOG[0])).toBe('stations');
+    expect(colorKeyOf(CATALOG[2])).toBe('satellites');
+    expect(colorKeyOf({ ...CATALOG[2], render: { colorKey: 'starlink' } })).toBe('satellites');
     expect(colorKeyOf(CATALOG[4])).toBe('debris');
-    expect(colorKeyOf(CATALOG[5])).toBe('vehicle');
-    expect(colorKeyOf(rec('x', 'x', 'weird'))).toBe('satellite');
+    expect(colorKeyOf(CATALOG[5])).toBe('launch-vehicles');
+    expect(colorKeyOf(CATALOG[6])).toBe('probes');
+    expect(colorKeyOf(rec('x', 'x', 'weird'))).toBe('other');
   });
 });

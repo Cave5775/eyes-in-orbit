@@ -83,7 +83,9 @@ export type ProviderSpec =
       /** time-varying offsets: [tMs, x, y, z] */
       samples?: Sample[];
     }
-  | { type: 'composite'; segments: CompositeSegment[] };
+  | { type: 'composite'; segments: CompositeSegment[] }
+  /** A celestial body of the registry (`bodies.ts`): its position comes from the ephemeris, state in `EARTH:inertial`. */
+  | { type: 'body'; bodyId: string };
 
 export interface CompositeSegment {
   fromMs: number;
@@ -123,7 +125,7 @@ export interface EntityEvent {
 export interface RenderHint {
   glyph?: 'dot' | 'diamond' | 'ring' | 'triangle' | 'square';
   /** semantic colour key resolved by the client theme */
-  colorKey?: 'station' | 'satellite' | 'starlink' | 'probe' | 'vehicle' | 'ground' | 'debris' | 'rover' | 'aircraft';
+  colorKey?: 'station' | 'satellite' | 'starlink' | 'probe' | 'vehicle' | 'ground' | 'debris' | 'rover' | 'aircraft' | 'body' | 'navigation';
   orbitLine?: boolean;
   trailSeconds?: number;
   footprint?: boolean;
@@ -149,6 +151,12 @@ export type EntityKind =
   | 'ground_station'
   | 'pad'
   | 'debris'
+  // celestial bodies (entities with a `body` provider, see `bodyEntityRecords`)
+  | 'star'
+  | 'planet'
+  | 'moon'
+  | 'asteroid'
+  | 'dwarf_planet'
   | (string & {});
 
 export interface EntityLinks {
@@ -177,4 +185,6 @@ export interface EntityRecord {
   /** free-form attributes shown in the detail panel */
   attrs?: Record<string, string | number | boolean | null>;
   updatedAt: number;
+  /** ms; first time the hub saw the entity (set on first insert, never changed). Optional: older records have none. */
+  createdAt?: number;
 }

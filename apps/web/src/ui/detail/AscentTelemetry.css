@@ -1,5 +1,5 @@
 /* Ascent telemetry section of the Launch tab. Colours come from the app's CSS variables. */
-.at { --at-modeled: var(--accent); --at-live: var(--ok); --at-file: var(--c-probe); padding-bottom: 6px; }
+.at { --at-modeled: var(--accent); --at-live: var(--ok); --at-file: var(--c-probes); padding-bottom: 6px; }
 .at-chips { padding: 0 12px 6px; }
 .at-note { margin: 4px 12px; font-size: 11px; }
 .at-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -45,13 +45,22 @@
 .at-ev circle { fill: var(--panel); stroke: var(--dim); stroke-width: 1.5; }
 .at-ev.past text { fill: var(--text); }
 .at-ev.past line { stroke: var(--text); }
-.at-ev.past circle { fill: var(--c-vehicle); stroke: var(--c-vehicle); }
+.at-ev.past circle { fill: var(--c-launch-vehicles); stroke: var(--c-launch-vehicles); }
 
 .at-events { width: calc(100% - 24px); margin: 4px 12px 0; border-collapse: collapse; font-size: 11px; }
 .at-events th, .at-events td { text-align: left; padding: 1px 4px 1px 0; font-weight: 400; white-space: nowrap; }
 .at-events thead th { color: var(--dim); font-size: 9.5px; letter-spacing: 0.1em; border-bottom: 1px solid var(--line); }
 .at-events tr.past th, .at-events tr.past td { color: var(--text); }
 .at-events tr:not(.past) th, .at-events tr:not(.past) td.mono { color: var(--dim); }
+
+.at-jumpable { cursor: pointer; }
+.at-ev { cursor: pointer; }
+.at-ev:hover text { fill: var(--accent); }
+.at-ev:hover line, .at-ev:hover circle { stroke: var(--accent); }
+.at-events tr.jumpable { cursor: pointer; }
+.at-events tr.jumpable:hover th, .at-events tr.jumpable:hover td { color: var(--accent); }
+.at-jump { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.at-jump:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
 .at-data { margin: 4px 12px 0; font-size: 11px; }
 .at-data summary { cursor: pointer; color: var(--dim); }

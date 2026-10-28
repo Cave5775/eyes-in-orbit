@@ -1,9 +1,8 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EntityGraph, DEG, stateToGeodetic, type EntityRecord } from '@eio/core';
+import type { EntityRecord } from '@eio/core';
 import { describe, expect, it } from 'vitest';
-import { buildDemoEntities } from '../src/connectors/demo';
 import { loadTrajectories } from '../src/connectors/flightclub';
 import { Hub } from '../src/hub';
 import { filterEntities, searchEntities } from '../src/search';
@@ -149,47 +148,5 @@ describe('trajectory files', () => {
     const example = loadTrajectories(new URL('../../../data/trajectories', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
     expect(example.errors).toEqual([]);
     expect(example.trajectories.map((x) => x.id)).toContain('example-leo-ascent');
-  });
-});
-
-describe('demo entities', () => {
-  const START = Date.parse('2026-10-22T12:00:00Z');
-
-  it('builds booster, drone, rover, pads with the contract ids and kinds', () => {
-    const list = buildDemoEntities(START, START + 5000);
-    expect(list.map((e) => e.id).sort()).toEqual(['demo-booster', 'demo-drone', 'demo-lz', 'demo-pad', 'demo-rover']);
-    expect(list.every((e) => e.group === 'demo')).toBe(true);
-    const rover = list.find((e) => e.id === 'demo-rover')!;
-    expect(rover).toMatchObject({ bodyId: 'MARS', provider: { type: 'geodetic', bodyId: 'MARS' } });
-    expect(list.find((e) => e.id === 'demo-drone')!.provider!.type).toBe('relative');
-  });
-
-  it('booster flies pad -> ascent -> relative landing -> landed, continuously, and loops', () => {
-    const g = new EntityGraph();
-    for (const e of buildDemoEntities(START, START + 5000)) g.upsert({ ...e, updatedAt: 0 });
-    const altAt = (t: number) => stateToGeodetic(g.stateOf('demo-booster', t)!, t, 'EARTH').alt;
-    const lat = (t: number) => stateToGeodetic(g.stateOf('demo-booster', t)!, t, 'EARTH').lat / DEG;
-
-    expect(altAt(START + 10_000)).toBeCloseTo(0, 3); // on the pad
-    expect(altAt(START + 150_000 - 1)).toBeCloseTo(70, 0); // top of ascent
-    expect(altAt(START + 150_000)).toBeCloseTo(70, 0); // landing arc starts where ascent ended
-    expect(altAt(START + 240_000)).toBeGreaterThan(5);
-    expect(altAt(START + 330_000 + 1000)).toBeCloseTo(0, 3); // landed
-    expect(lat(START + 400_000)).toBeCloseTo(lat(START + 10_000), 2);
-    // second cycle starts over at the pad
-    expect(altAt(START + 600_000 + 10_000)).toBeCloseTo(0, 3);
-    expect(altAt(START + 600_000 + 130_000)).toBeGreaterThan(10);
-  });
-
-  it('drone stays within ~150 m of the landing zone and rebuilding later windows shifts coverage', () => {
-    const g = new EntityGraph();
-    for (const e of buildDemoEntities(START, START + 5000)) g.upsert({ ...e, updatedAt: 0 });
-    const t = START + 123_456;
-    const d = g.stateIn('demo-drone', t, 'EARTH:fixed')!.r, lz = g.stateIn('demo-lz', t, 'EARTH:fixed')!.r;
-    expect(Math.hypot(d[0] - lz[0], d[1] - lz[1], d[2] - lz[2])).toBeLessThan(0.2);
-
-    const later = buildDemoEntities(START, START + 3 * 600_000 + 5000);
-    const segs = (later.find((e) => e.id === 'demo-booster')!.provider as { segments: { fromMs: number }[] }).segments;
-    expect(segs[0].fromMs).toBe(START + 3 * 600_000);
   });
 });

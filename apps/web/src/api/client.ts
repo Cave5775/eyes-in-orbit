@@ -1,7 +1,8 @@
-import type { Article, AscentSeries, Launch, ServerMessage } from '@eio/core';
+import type { Article, AscentSeries, CredentialInfo, Launch, ServerMessage } from '@eio/core';
 import { isIss } from '../lib/entity';
 import { createMockApi } from '../mock/mock-api';
 import { useStore } from '../state/store';
+import { withBodyEntities } from './body-entities';
 import type { Api } from './types';
 import { StreamClient } from './stream';
 
@@ -27,6 +28,18 @@ export const restApi: Api = {
   iss: () => getJson('/api/iss'),
   health: () => getJson('/api/health', 4_000),
   ascent: (launchId) => getJson<AscentSeries>(`/api/telemetry/${encodeURIComponent(launchId)}`, 8_000).catch(() => null),
+  credentials: async () => (await getJson<{ credentials: CredentialInfo[] }>('/api/credentials', 8_000)).credentials,
+  saveCredentials: async (values) => {
+    const res = await fetch('/api/credentials', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ values }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    const body = (await res.json().catch(() => ({}))) as { credentials?: CredentialInfo[]; error?: string };
+    if (!res.ok || !body.credentials) throw new Error(body.error ?? `HTTP ${res.status}`);
+    return body.credentials;
+  },
 };
 
 /** Active data source: the REST client, or the offline mock when the API is unreachable (or `?mock=1`). */
@@ -40,7 +53,8 @@ async function loadAll(full: boolean): Promise<void> {
   const s = store();
   const results = await Promise.allSettled([
     api.entities(full ? undefined : lastEntitiesAt).then((r) => {
-      s.upsertEntities(r.entities, full);
+      // a full load replaces the catalog, so bodies the server did not send are added locally (an incremental one only merges)
+      s.upsertEntities(full ? withBodyEntities(r.entities, r.serverTime) : r.entities, full);
       lastEntitiesAt = r.serverTime - 1000;
     }),
     api.launches().then(s.setLaunches),

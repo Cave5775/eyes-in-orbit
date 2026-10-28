@@ -13,7 +13,7 @@
  * Beyond the scope radius the satellite cloud is thinned out over one more radius instead of being cut at an edge
  * (a stable pseudo-random subset, so the sky does not shimmer while zooming); individual entities (probes, stations,
  * pads) are cut at 1.5 radii. Whatever the policy, the caller always keeps the selection, its related objects, the
- * hovered object, and (while a kind, group or launch filter is on) the objects the filter lets through.
+ * hovered object, and (while the search has an only or text term) the objects it lets through.
  *
  * Horizon culling is separate and exact (`lib/occlusion.ts`, also done in the point shader): this module only decides
  * by distance from the focus. All distances in km.
@@ -56,13 +56,24 @@ export interface ScopeObject {
   key: number;
   /** member of a bulk cloud (the SGP4 catalogue): thinned rather than cut */
   bulk: boolean;
-  /** selected, related, hovered or let through by an active filter: never culled */
+  /** selected, related, hovered or let through by the search: never culled */
   keep: boolean;
+  /** entity kind; celestial bodies (see `SCOPE_EXEMPT_KINDS`) are never thinned or cut */
+  kind?: string;
 }
+
+/**
+ * Kinds that are exempt from scope culling and thinning: the celestial bodies (stars, planets, moons). They are drawn
+ * by the scene itself rather than as points, so they are not in the point sets either; this keeps a body from being
+ * dropped should it ever be passed through the policy (the Sun is 1.5e8 km from the Earth, Mars further).
+ */
+export const SCOPE_EXEMPT_KINDS: ReadonlySet<string> = new Set(['star', 'planet', 'moon']);
+
+export const isScopeExempt = (kind: string | undefined): boolean => kind !== undefined && SCOPE_EXEMPT_KINDS.has(kind);
 
 /** Is the object inside the scope? `mode: 'all'` keeps everything (horizon and filters still apply elsewhere). */
 export function inScope(o: ScopeObject, radiusKm: number, mode: ScopeMode = 'auto'): boolean {
-  if (mode === 'all' || o.keep) return true;
+  if (mode === 'all' || o.keep || isScopeExempt(o.kind)) return true;
   if (o.bulk) return hash01(o.key) < scopeWeight(o.d, radiusKm);
   return o.d <= radiusKm * SCOPE_SOLO_CUT;
 }

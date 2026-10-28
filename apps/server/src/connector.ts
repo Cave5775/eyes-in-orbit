@@ -28,8 +28,8 @@ export interface Connector {
   readonly topic?: string;
   /** false for connectors that never use the network (they still run when OFFLINE=1) */
   readonly network?: boolean;
-  /** report a fixed `stub` status (with this note) and never run */
-  stub?(config: Config): string;
+  /** report a fixed `stub` status (with the returned note) and never run; return undefined when the connector can run */
+  stub?(config: Config): string | undefined;
   /** called once at startup (register static entities, timers) */
   start?(ctx: ConnectorContext): void | Promise<void>;
   /** one poll; throw to report an error and back off */
@@ -100,8 +100,9 @@ export class Scheduler {
   async start(): Promise<void> {
     for (const slot of this.slots.values()) {
       const { connector, ctx } = slot;
-      if (connector.stub) {
-        Object.assign(ctx.health, { status: 'stub', note: connector.stub(this.deps.config) });
+      const stubNote = connector.stub?.(this.deps.config);
+      if (stubNote) {
+        Object.assign(ctx.health, { status: 'stub', note: stubNote });
         continue;
       }
       try {
@@ -121,6 +122,33 @@ export class Scheduler {
       clearTimeout(s.timer);
       s.connector.stop?.();
     }
+  }
+
+  /**
+   * Re-evaluate a connector after its configuration (credentials) changed: a stub becomes runnable, or the other way
+   * round; one that was stubbed or failing runs right away so the new values are tried at once.
+   */
+  async refresh(id: string): Promise<void> {
+    const slot = this.slots.get(id);
+    if (!slot || slot.stopped) return;
+    const { connector, ctx } = slot;
+    const wasStub = ctx.health.status === 'stub';
+    const stubNote = connector.stub?.(this.deps.config);
+    if (stubNote) {
+      clearTimeout(slot.timer);
+      Object.assign(ctx.health, { status: 'stub', note: stubNote, nextRunAt: undefined });
+    } else if (wasStub || ctx.health.status === 'error') {
+      if (wasStub) {
+        Object.assign(ctx.health, { status: 'idle', note: undefined });
+        try {
+          await connector.start?.(ctx);
+        } catch (err) {
+          this.fail(slot, err);
+        }
+      }
+      if (connector.run) this.schedule(slot, 0);
+    }
+    this.deps.hub.emit('health', this.deps.hub.healthList());
   }
 
   /** Run a connector as soon as possible (used when its topic gains a subscriber). */

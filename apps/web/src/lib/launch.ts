@@ -1,8 +1,12 @@
-import { LL2_STATUS, deriveMissionState, type Launch, type MissionState } from '@eio/core';
+import { LL2_STATUS, deriveMissionState, missionTimingFor, type Launch, type MissionState } from '@eio/core';
 
-/** Re-derive phase and T-minus for `launch` at sim time `nowMs` (server phases are only refreshed every 15 s). */
+/**
+ * Re-derive phase and T-minus for `launch` at sim time `nowMs` (server phases are only refreshed every 15 s). The ascent and
+ * insertion durations are the launch vehicle's own (`missionTimingFor`), the same the server passes, so the phase flips at the
+ * moments the modeled flight does (ON_ORBIT from T+1110 s for Falcon 9).
+ */
 export function liveMission(launch: Launch, nowMs: number): MissionState {
-  return deriveMissionState({ statusId: launch.status.id, netMs: Date.parse(launch.net), nowMs });
+  return deriveMissionState({ statusId: launch.status.id, netMs: Date.parse(launch.net), nowMs, ...missionTimingFor(launch) });
 }
 
 export type ChipTone = 'ok' | 'warn' | 'bad' | 'dim';

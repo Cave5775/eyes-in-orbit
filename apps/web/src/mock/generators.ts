@@ -1,6 +1,6 @@
 import {
-  DEG, EARTH, LL2_STATUS, Sgp4Provider, ascentEntityEvents, convert, deriveMissionState, enuBasis, geodeticToFixed,
-  modeledAscentForLaunch, modeledAscentSegments, stateToGeodetic, sunDirectionEci,
+  DEG, EARTH, LL2_STATUS, MARS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, deriveMissionState,
+  missionTimingFor, modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, orbitSegmentsOf, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
   type Sample, type StreamLink, type TelemetryPoint, type Vec3,
 } from '@eio/core';
@@ -177,12 +177,17 @@ export function mockSatellites(nowMs: number, count = 2000, seed = 7): EntityRec
     const base = { norad, epochMs: nowMs - pick(0, 7) * DAY, raan: pick(0, 360), argp: pick(0, 360), ma: pick(0, 360) };
     const name = `${GENERIC_NAMES[Math.floor(rnd() * GENERIC_NAMES.length)]} ${Math.floor(pick(1, 999))}`;
     let omm: Omm;
+    let nav = false;
     if (roll < 0.55) omm = makeOmm({ ...base, name, meanMotion: meanMotionForAlt(pick(400, 1300)), ecc: pick(0.0001, 0.02), incl: pick(20, 100) });
     else if (roll < 0.75) omm = makeOmm({ ...base, name, meanMotion: meanMotionForAlt(pick(500, 800)), ecc: pick(0.0001, 0.002), incl: pick(97, 98.8) });
-    else if (roll < 0.85) omm = makeOmm({ ...base, name: `GPS BIIR-${Math.floor(pick(1, 40))}`, meanMotion: 2.0057, ecc: pick(0.001, 0.02), incl: pick(54.5, 56.5) });
+    else if (roll < 0.85) {
+      // GPS-like MEO satellites form the navigation group (CelesTrak `gps-ops`)
+      nav = true;
+      omm = makeOmm({ ...base, name: `GPS BIIR-${Math.floor(pick(1, 40))}`, meanMotion: 2.0057, ecc: pick(0.001, 0.02), incl: pick(54.5, 56.5) });
+    }
     else if (roll < 0.95) omm = makeOmm({ ...base, name: `GEO COMSAT ${Math.floor(pick(1, 200))}`, meanMotion: 1.0027, ecc: pick(0.0001, 0.001), incl: pick(0.02, 0.12) });
     else omm = makeOmm({ ...base, name: `MOLNIYA ${Math.floor(pick(1, 60))}`, meanMotion: 2.0058, ecc: pick(0.65, 0.74), incl: 63.4 });
-    out.push(satRecord(omm, 'satellite', 'active', 'satellite', nowMs));
+    out.push(nav ? satRecord(omm, 'satellite', 'gps-ops', 'navigation', nowMs) : satRecord(omm, 'satellite', 'active', 'satellite', nowMs));
     norad++;
   }
   return out;
@@ -228,7 +233,8 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
   for (const d of LAUNCH_DEFS) {
     const net = nowMs + d.offsetMs;
     const pad = PADS[d.pad];
-    const state = deriveMissionState({ statusId: d.statusId, netMs: net, nowMs });
+    const timing = missionTimingFor({ vehicle: d.vehicle, name: d.name });
+    const state = deriveMissionState({ statusId: d.statusId, netMs: net, nowMs, ...timing });
     const streams = d.offsetMs < 12 * HOUR ? [NASA_LIVE, NASA_TV] : [NASA_TV];
     const id = `mock-${d.key}`;
     const entityId = `launch-${id}`;
@@ -237,12 +243,15 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
       net: new Date(net).toISOString(), windowStart: new Date(net).toISOString(), windowEnd: new Date(net + 30 * MIN).toISOString(),
       provider: d.provider, vehicle: d.vehicle, mission: d.mission, pad, streams, phase: state.phase, hold: state.hold, entityId,
     });
-    // Falcon 9 launches get the same MODELED nominal ascent the server attaches (composite: pad, then ascent samples)
+    // Falcon 9 launches get the same MODELED nominal ascent the server attaches (composite: pad, the ascent samples, then the
+    // modeled orbit and the pad marker); a failed flight skips the orbit
     const modeled = modeledAscentForLaunch(launches[launches.length - 1]);
+    const failed = d.statusId === LL2_STATUS.FAILURE || d.statusId === LL2_STATUS.PARTIAL_FAILURE;
+    const ascentSegments = modeled ? modeledAscentSegments(net, { latDeg: pad.latitude, lonDeg: pad.longitude }, modeled, { orbit: !failed }) : null;
     entities.push({
       id: entityId, name: d.name, kind: 'launch_vehicle', bodyId: 'EARTH', aliases: { ll2: id }, group: 'launch',
-      provider: modeled
-        ? { type: 'composite', segments: modeledAscentSegments(net, { latDeg: pad.latitude, lonDeg: pad.longitude }, modeled) }
+      provider: ascentSegments
+        ? { type: 'composite', segments: ascentSegments }
         : { type: 'geodetic', bodyId: 'EARTH', latDeg: pad.latitude, lonDeg: pad.longitude, altKm: 0.01 },
       phase: state.phase, links: { streams, newsQuery: d.mission?.name ?? d.name, launchId: id },
       events: modeled ? ascentEntityEvents(modeled.events, net) : undefined,
@@ -256,6 +265,38 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
       },
       updatedAt: nowMs,
     });
+    // the recovered first stage as its own entity, like the server's `launch-<id>-booster`
+    const boosterSegments = modeled ? modeledBoosterSegments(net, { latDeg: pad.latitude, lonDeg: pad.longitude }, modeled) : null;
+    if (modeled?.booster && boosterSegments) {
+      entities.push({
+        id: `${entityId}-booster`, name: `${d.name} (booster)`, kind: 'stage', bodyId: 'EARTH', parentId: entityId, aliases: {}, group: 'launch',
+        provider: { type: 'composite', segments: boosterSegments },
+        events: ascentEntityEvents(modeled.events.filter((e) => e.track === 'booster'), net),
+        render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 120, label: true, model: 'rocket-stage' },
+        attrs: {
+          launch: d.name, recovery: modeled.recovery, landingDownrangeKm: Math.round(modeled.booster.landingDownrangeKm),
+          trajectorySource: 'modeled', trajectoryNote: 'MODELED booster return path through the event times, not measured',
+        },
+        updatedAt: nowMs,
+      });
+    }
+    // the payload as its own satellite, like the server's `launch-<id>-payload`: only for launches that are flying or flown
+    // (the mock's phases are fixed at load) and reached orbit; it follows the keplerian part of the vehicle's composite
+    const orbit = orbitSegmentsOf(ascentSegments ?? undefined);
+    if (orbit && ['ACTIVE_ASCENT', 'ORBIT_INSERTION', 'ON_ORBIT'].includes(state.phase)) {
+      entities.push({
+        id: `${entityId}-payload`, name: `${d.mission?.name ?? d.name} (payload)`, kind: 'satellite', bodyId: 'EARTH', parentId: entityId, aliases: {}, group: 'launch',
+        provider: { type: 'composite', segments: orbit },
+        render: { colorKey: 'satellite', label: true, orbitLine: true },
+        attrs: {
+          provider: d.provider, launch: d.name, mission: d.mission?.name ?? null, orbit: d.mission?.orbit ?? null,
+          ascentInclinationDeg: modeled?.inclinationDeg ?? null,
+          trajectorySource: 'modeled',
+          trajectoryNote: 'MODELED two-body orbit (no J2, no drag) from the end of the modeled ascent, about 12 h, until a TLE exists',
+        },
+        updatedAt: nowMs,
+      });
+    }
   }
   launches.sort((a, b) => Date.parse(a.net) - Date.parse(b.net));
   return { launches, entities };
@@ -271,7 +312,7 @@ export function mockAscentSeries(launch: Launch): AscentSeries | null {
   };
 }
 
-// ---------------------------------------------------------------- deep space / ground / demo
+// ---------------------------------------------------------------- deep space / ground
 
 const STATIONS = [
   { id: 'dsn-goldstone', name: 'Goldstone DSN Complex', lat: 35.4267, lon: -116.89, code: 'GDSCC' },
@@ -283,12 +324,37 @@ const unitFromRaDec = (raDeg: number, decDeg: number): Vec3 => [
   Math.cos(decDeg * DEG) * Math.cos(raDeg * DEG), Math.cos(decDeg * DEG) * Math.sin(raDeg * DEG), Math.sin(decDeg * DEG),
 ];
 
-/** Geocentric samples over [now-1d, now+2d] in 30 minute steps, as the server's Horizons connector produces. */
-function probeSamples(nowMs: number, at: (t: number) => Vec3): Sample[] {
+/**
+ * Samples over [now-3d, now+7d] in 30 minute steps, as the server's Horizons connector produces for the default
+ * (geocentric) targets; `win` overrides the window and step (LRO: -1 d .. +3 d, 5 min) and `at` may return a
+ * 6-vector (position and velocity, km and km/s) like the Horizons rows.
+ */
+function probeSamples(nowMs: number, at: (t: number) => Vec3 | number[], win = { pastDays: 3, futureDays: 7, stepMin: 30 }): Sample[] {
   const out: Sample[] = [];
-  for (let t = nowMs - DAY; t <= nowMs + 2 * DAY; t += 30 * MIN) out.push([t, ...at(t)]);
+  for (let t = nowMs - win.pastDays * DAY; t <= nowMs + win.futureDays * DAY; t += win.stepMin * MIN) out.push([t, ...at(t)] as Sample);
   return out;
 }
+
+/**
+ * The mock LRO: polar orbit about the Moon, 50 x 150 km altitude (period ~1.96 h), elements at `nowMs`.
+ * The plane contains the Moon's spin axis (pole RA ~270 deg, so i = 90 deg and raan = 270 deg in the equatorial axes).
+ */
+const LRO_ORBIT = (nowMs: number) => {
+  const a = MOON.radiusKm + 100, e = 50 / a;
+  return { a, e, i: 90 * DEG, raan: 270 * DEG, argp: 270 * DEG, m0: 0, epochMs: nowMs };
+};
+
+/**
+ * The mock MRO: near-polar sun-synchronous orbit about Mars, 255 x 320 km altitude (period ~113 min), elements at `nowMs`.
+ * i = 93 deg, so the Mars-inertial track is a tilted ring around Mars, never a point on the Earth-centred scale.
+ */
+const MRO_ORBIT = (nowMs: number) => {
+  const a = MARS.radiusKm + 288, e = 32 / a;
+  return { a, e, i: 93 * DEG, raan: 20 * DEG, argp: 270 * DEG, m0: 0, epochMs: nowMs };
+};
+
+/** The body entities, built by the same core function as the server's `bodies` connector so the mock cannot drift. */
+export const mockBodies = (nowMs: number): EntityRecord[] => bodyEntityRecords(undefined, nowMs);
 
 export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
   const out: EntityRecord[] = STATIONS.map((s) => ({
@@ -311,52 +377,33 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
     links: { newsQuery: 'James Webb Space Telescope' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
     attrs: { rangeKm: 1.5e6, rtltSec: 10, dataRate: 28_000_000, dish: 'DSS-63' }, updatedAt: nowMs,
   });
+  const mroOrbit = MRO_ORBIT(nowMs);
   out.push({
-    id: 'dsn-MRO', name: 'Mars Reconnaissance Orbiter', kind: 'probe', bodyId: 'EARTH', aliases: { dsn: 'MRO', horizons: '-74' }, group: 'dsn',
+    // Mars-centred like the server's Horizons target (500@499, MARS:inertial, position and velocity, 5 min steps, -1 d .. +3 d)
+    id: 'dsn-MRO', name: 'Mars Reconnaissance Orbiter', kind: 'probe', bodyId: 'MARS', aliases: { dsn: 'MRO', horizons: '-74' }, group: 'dsn',
     provider: {
-      type: 'sampled', frame: 'EARTH:inertial',
-      samples: probeSamples(nowMs, (t) => {
-        const ang = ((t - nowMs) / (112 * MIN)) * 2 * Math.PI;
-        const s = convert({ frame: 'MARS:inertial', r: [3800 * Math.cos(ang), 3800 * Math.sin(ang), 0] }, 'EARTH:inertial', t);
-        return s.r;
-      }),
+      type: 'sampled', frame: 'MARS:inertial',
+      samples: probeSamples(nowMs, (t) => { const s = keplerState(mroOrbit, MARS.gm, t); return [...s.r, ...s.v]; }, { pastDays: 1, futureDays: 3, stepMin: 5 }),
     },
     links: { newsQuery: 'Mars Reconnaissance Orbiter' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
-    attrs: { rangeKm: 2.2e8, rtltSec: 1470, dataRate: 2_000_000, dish: 'DSS-43' }, updatedAt: nowMs,
+    attrs: {
+      rangeKm: 2.2e8, rtltSec: 1470, dataRate: 2_000_000, dish: 'DSS-43',
+      trackCentre: 'Mars', trackNote: 'Track is Mars-centred (Horizons 500@499, 5 min steps, -1 d to +3 d), not Earth-centred',
+    },
+    updatedAt: nowMs,
   });
 
-  // demo: booster arc loop, drone orbiting it, rover on Mars
-  const LZ = { lat: 28.4858, lon: -80.5444 };
-  const pad = geodeticToFixed({ lat: LZ.lat * DEG, lon: LZ.lon * DEG, alt: 0.01 }, EARTH);
-  const { e, u } = enuBasis(LZ.lat * DEG, LZ.lon * DEG);
-  const CYCLE = 8 * MIN;
-  const start = nowMs - 30 * MIN;
-  const boosterSamples: Sample[] = [];
-  for (let t = start; t <= nowMs + 3 * HOUR; t += 10_000) {
-    const x = ((t - start) % CYCLE) / CYCLE;
-    const alt = 90 * 4 * x * (1 - x);
-    const east = 60 * Math.sin(Math.PI * x);
-    boosterSamples.push([t, ...([0, 1, 2].map((k) => pad[k] + e[k] * east + u[k] * alt) as Vec3)]);
-  }
+  // LRO: Moon-centred like the server's Horizons target (MOON:inertial, position and velocity, 5 min steps, -1 d .. +3 d)
+  const lroOrbit = LRO_ORBIT(nowMs);
   out.push({
-    id: 'demo-booster', name: 'Demo Booster (boostback arc)', kind: 'stage', bodyId: 'EARTH', aliases: {}, group: 'demo',
-    provider: { type: 'sampled', frame: 'EARTH:fixed', samples: boosterSamples, holdEnds: true },
-    render: { colorKey: 'vehicle', glyph: 'triangle', trailSeconds: 240, model: 'rocket-stage' }, updatedAt: nowMs,
-  });
-  const droneSamples: Sample[] = [];
-  for (let t = start; t <= nowMs + 3 * HOUR; t += 5_000) {
-    const a = ((t - start) / 40_000) * 2 * Math.PI;
-    droneSamples.push([t, 1.2 * Math.cos(a), 1.2 * Math.sin(a), 0.4]);
-  }
-  out.push({
-    id: 'demo-drone', name: 'Demo Drone (orbits booster)', kind: 'drone', bodyId: 'EARTH', parentId: 'demo-booster', aliases: {}, group: 'demo',
-    provider: { type: 'relative', parentId: 'demo-booster', mode: 'enu', samples: droneSamples },
-    render: { colorKey: 'aircraft', glyph: 'ring' }, updatedAt: nowMs,
-  });
-  out.push({
-    id: 'demo-rover', name: 'Demo Rover (Jezero)', kind: 'rover', bodyId: 'MARS', aliases: {}, group: 'demo',
-    provider: { type: 'geodetic', bodyId: 'MARS', latDeg: 18.44, lonDeg: 77.45, altKm: -2.6 },
-    render: { colorKey: 'rover', glyph: 'square' }, updatedAt: nowMs,
+    id: 'dsn-LRO', name: 'Lunar Reconnaissance Orbiter', kind: 'probe', bodyId: 'MOON', aliases: { dsn: 'LRO', horizons: '-85' }, group: 'dsn',
+    provider: {
+      type: 'sampled', frame: 'MOON:inertial',
+      samples: probeSamples(nowMs, (t) => { const s = keplerState(lroOrbit, MOON.gm, t); return [...s.r, ...s.v]; }, { pastDays: 1, futureDays: 3, stepMin: 5 }),
+    },
+    links: { newsQuery: 'Lunar Reconnaissance Orbiter' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
+    attrs: { trackCentre: 'Moon', trackNote: 'Track is Moon-centred (Horizons 500@301, 5 min steps, -1 d to +3 d), not Earth-centred' },
+    updatedAt: nowMs,
   });
   return out;
 }
@@ -405,6 +452,7 @@ export function mockHealth(nowMs: number): ConnectorHealth[] {
     ok('spaceflight-news', 95, 31, 'mock'),
     ok('dsn-now', 12, 340, 'mock'),
     ok('horizons', 7200, 2, 'mock'),
+    { id: 'bodies', status: 'ok', lastOkAt: nowMs, runs: 1, note: '4 bodies (mock)' },
     { id: 'iss-live', status: 'stub', runs: 0, note: 'mock' },
   ];
 }

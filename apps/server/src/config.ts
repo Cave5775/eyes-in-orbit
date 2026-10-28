@@ -15,6 +15,7 @@ export interface Config {
   /** DSN Now XML candidates, tried in order until one parses */
   dsnUrls: string[];
   spacetrackUser?: string;
+  spacetrackPassword?: string;
   satnogsToken?: string;
   webcastUrl?: string;
 }
@@ -41,6 +42,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     disabledConnectors: (env.DISABLED_CONNECTORS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     dsnUrls: dsn?.length ? dsn : ['https://eyes.nasa.gov/dsn/data/dsn.xml', 'https://eyes.nasa.gov/dsn/dsn.xml'],
     spacetrackUser: env.SPACETRACK_USER || undefined,
+    spacetrackPassword: env.SPACETRACK_PASSWORD || undefined,
     satnogsToken: env.SATNOGS_TOKEN || undefined,
     webcastUrl: env.WEBCAST_URL || undefined,
   };

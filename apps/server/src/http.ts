@@ -1,13 +1,7 @@
+import { HttpError, TIMEOUT_MS, USER_AGENT, diagnosticHeaders, requestHeaders, withCauseCode } from './http-util';
 import { isFresh, type Store } from './store';
 
-export const USER_AGENT = 'EyesInOrbit/0.1 (local mission control)';
-const TIMEOUT_MS = 20_000;
-
-export class HttpError extends Error {
-  constructor(public status: number, url: string, body = '') {
-    super(`HTTP ${status} for ${url}${body ? `: ${body.slice(0, 160).replace(/\s+/g, ' ')}` : ''}`);
-  }
-}
+export { HttpError, USER_AGENT };
 
 export interface Cached<T> {
   value: T;
@@ -34,16 +28,27 @@ export class Http {
     return !!this.opts.offline;
   }
 
-  /** GET text with UA header and timeout; throws `HttpError` on non-2xx. */
+  /**
+   * GET text with UA header and timeout; throws `HttpError` on non-2xx (with `retry-after`/`server`/`cf-ray`/`via` and
+   * a body excerpt) and an error whose message carries undici's cause code on network failures.
+   */
   async text(url: string, headers: Record<string, string> = {}): Promise<string> {
-    if (this.opts.offline) throw new Error('offline (OFFLINE=1)');
-    const res = await (this.opts.fetch ?? fetch)(url, {
-      headers: { 'user-agent': USER_AGENT, accept: 'application/json, text/xml, */*', ...headers },
-      signal: AbortSignal.timeout(this.opts.timeoutMs ?? TIMEOUT_MS),
-    });
-    const body = await res.text();
-    if (!res.ok) throw new HttpError(res.status, url, body);
+    const { res, body } = await this.request(url, headers);
+    if (!res.ok) throw httpError(res, url, body);
     return body;
+  }
+
+  private async request(url: string, headers: Record<string, string>): Promise<{ res: Response; body: string }> {
+    if (this.opts.offline) throw new Error('offline (OFFLINE=1)');
+    try {
+      const res = await (this.opts.fetch ?? fetch)(url, {
+        headers: requestHeaders(headers),
+        signal: AbortSignal.timeout(this.opts.timeoutMs ?? TIMEOUT_MS),
+      });
+      return { res, body: await res.text() };
+    } catch (err) {
+      throw withCauseCode(err);
+    }
   }
 
   /**
@@ -68,7 +73,15 @@ export class Http {
       return { value: row.value, fromCache: true, stale: !isFresh(row), fetchedAt: row.fetchedAt };
     }
     try {
-      const value = parse(await this.text(url, headers));
+      const { res, body } = await this.request(url, headers ?? {});
+      if (res.status === 304 && row) {
+        // not modified since the `if-modified-since` the caller sent: keep the entry and restart its TTL
+        const fetchedAt = Date.now();
+        this.store.set(key, row.value, ttlMs, fetchedAt);
+        return { value: row.value, fromCache: true, stale: false, fetchedAt };
+      }
+      if (!res.ok) throw httpError(res, url, body);
+      const value = parse(body);
       const fetchedAt = Date.now();
       this.store.set(key, value, ttlMs, fetchedAt);
       return { value, fromCache: false, stale: false, fetchedAt };
@@ -78,3 +91,6 @@ export class Http {
     }
   }
 }
+
+const httpError = (res: Response, url: string, body: string): HttpError =>
+  new HttpError(res.status, url, body, diagnosticHeaders(res.headers));
