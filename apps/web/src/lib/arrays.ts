@@ -31,7 +31,7 @@ export function sunTrackingAngles(sunBody: V3): { alpha: number; gamma: number }
 }
 
 /**
- * Model SARJ angle (degrees, 0..360) for a live SARJ reading. VERIFIED against live data (README): the starboard reading
+ * Model SARJ angle (degrees, 0..360) for a live SARJ reading. VERIFIED against live data (docs/reference.md): the starboard reading
  * is the computed sun-tracking angle minus 90 degrees, the port reading is 90 degrees minus it (mirrored convention).
  */
 export function sarjLiveToAlphaDeg(side: 'port' | 'starboard', liveDeg: number): number {
@@ -108,7 +108,7 @@ export function issJoints({ sunBody, sarjLive, sources }: IssPoseInput): IssJoin
   const alphaStbd = sources.sarj === 'LIVE' && sarjLive?.starboard !== undefined ? sarjLiveToAlphaDeg('starboard', sarjLive.starboard) * DEG : t.alpha;
   j['sarj.port'] = alphaPort;
   j['sarj.stbd'] = alphaStbd;
-  // BGA live values are not verified (README), so every wing takes the computed beta tilt
+  // BGA live values are not verified (docs/reference.md), so every wing takes the computed beta tilt
   for (const c of ISS_CHANNELS) j[`bga.${c}`] = t.gamma;
   return j;
 }
