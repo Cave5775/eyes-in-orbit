@@ -157,7 +157,7 @@ export function EntityBrowser() {
     const frameRec = entities.get(frame);
     return buildTreeRows(rows, {
       bodies, frameId: frame, frameBodyId: frameRec ? bodyOf(frameRec) ?? frameRec.bodyId : undefined,
-      openAll: filtering, overrides, kindName: kindLabel, bodyOf: (r) => recOf(r)?.bodyId,
+      openAll: filtering, skeleton: !filtering, overrides, kindName: kindLabel, bodyOf: (r) => recOf(r)?.bodyId,
       standsForBody: (r) => { const p = recOf(r)?.provider; return p?.type === 'body' ? p.bodyId : undefined; },
     });
   }, [mode, rows, entities, frame, filtering, overrides]);

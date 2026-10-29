@@ -39,6 +39,8 @@ export interface TreeOptions<T extends TreeItem> {
   frameBodyId?: string;
   /** a query or a filter is active: every node that has a hit is open by default */
   openAll?: boolean;
+  /** no filter is active: every body of the registry is a node (count 0 allowed), even with nothing listed under it */
+  skeleton?: boolean;
   /** explicit user choices by row key; they win over the defaults */
   overrides?: ReadonlyMap<string, boolean>;
   /** a body with more direct entities than this lists them under kind groups (default 12) */
@@ -139,7 +141,7 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
   const isShown = (n: Node<T>): boolean => {
     let s = shown.get(n);
     if (s === undefined) {
-      s = n.count > 0 || n.backed || n.children.some(isShown);
+      s = !!opts.skeleton || n.count > 0 || n.backed || n.children.some(isShown);
       shown.set(n, s);
     }
     return s;

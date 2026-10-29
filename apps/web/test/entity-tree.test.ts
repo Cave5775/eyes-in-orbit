@@ -304,3 +304,38 @@ describe('reveal a selected entity', () => {
     });
   });
 });
+
+describe('the whole body catalogue in the tree', () => {
+  const recs = allBodyEntityRecords();
+  const items: TreeItem[] = recs.map((r) => ({ id: r.id, kind: r.kind, bodyId: r.bodyId, provider: r.provider }));
+  const frame = { bodies: BODIES, frameId: 'body-earth', frameBodyId: 'EARTH' };
+  const nodes = (rows: TreeRow[]) => rows.filter((r): r is Extract<TreeRow, { type: 'body' }> => r.type === 'body');
+  it('every body is a node, even a planet with no objects, moons collapsed under their planet', () => {
+    expect(recs.length).toBe(35);
+    const rows = buildTreeRows(items, frame);
+    const ids = nodes(rows).map((r) => r.bodyId);
+    expect(ids).toContain('URANUS');
+    expect(ids).toContain('MERCURY');
+    expect(nodes(rows).find((r) => r.bodyId === 'URANUS')).toMatchObject({ count: 0, open: false });
+    expect(ids).not.toContain('IO'); // folded under JUPITER
+    expect(ids).toContain('MOON'); // the path to the frame is open
+  });
+  it('a node exists for each of the 35 bodies when everything is open', () => {
+    const rows = buildTreeRows(items, { ...frame, openAll: true });
+    expect(new Set(nodes(rows).map((r) => r.entityId)).size).toBe(35);
+  });
+  it('a hit on a moon shows Sun > planet > moon only', () => {
+    const io = items.filter((i) => i.id === 'body-io');
+    const rows = buildTreeRows(io, { ...frame, openAll: true });
+    expect(nodes(rows).map((r) => r.bodyId)).toEqual(['SUN', 'JUPITER', 'IO']);
+  });
+});
+
+describe('skeleton (no filter)', () => {
+  it('shows every registry body even when no entity backs it; a filter shows only the paths to hits', () => {
+    const nodes = (rows: TreeRow[]) => rows.filter((r) => r.type === 'body').map((r) => (r as { bodyId: string }).bodyId);
+    const b = { bodies: BODIES, frameId: 'body-earth', frameBodyId: 'EARTH' };
+    expect(nodes(buildTreeRows([], { ...b, skeleton: true }))).toEqual(expect.arrayContaining(['SUN', 'URANUS', 'MERCURY', 'EARTH', 'MOON']));
+    expect(nodes(buildTreeRows([], b))).toEqual([]);
+  });
+});
