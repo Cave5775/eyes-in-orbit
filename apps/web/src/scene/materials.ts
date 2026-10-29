@@ -2,13 +2,14 @@ import * as THREE from 'three';
 import { GROUP_SLOTS, offGroup } from '../lib/disc-hide';
 import { MAX_OCCLUDERS, type OccluderSet } from '../lib/occlusion';
 import { SHOW_EXEMPT_MIN } from '../lib/pick';
+import { DEFAULT_NOISE, hexRgb, ringTexture, type BodyStyle, type RingStyle } from '../lib/body-style';
 
 /**
  * Uniforms the point shader needs for body occlusion: ONE array of `MAX_OCCLUDERS` slots, the camera-relative slots of the
  * frame's `OccluderSet` (lib/occlusion.ts; every drawn body, Earth and Mars alike, chosen by apparent size) and the number in use.
  * `uOccS[i]`: xyz = body centre relative to the camera with z scaled by the ellipsoid factor, w = shrunk radius (float64 on
- * the CPU, then rounded); `uOccE[i]`: x = `|centre|^2 - r^2` (> 0: the camera is outside), y = the z scale (1 for a sphere, the
- * Earth's 1 / (1 - f)). The test is the stable sphere form (`bodyHides`; miss distance `|cross(u, centre)|`): with the camera
+ * the CPU, then rounded); `uOccE[i]`: x = `|centre|^2 - r^2` (> 0: the camera is outside), y = the scale along the pole (1 for a sphere, the
+ * Earth's 1 / (1 - f)); `uOccP[i]` the unit pole axis (+z for the Earth, the body's own for a flattened planet; xyz of the centre are already stretched along it). The test is the stable sphere form (`bodyHides`; miss distance `|cross(u, centre)|`): with the camera
  * 1.5e8 km out (the Sun frame) `b^2 - c2` would be pure float32 cancellation (b^2 ~ 2e16, R^2 ~ 4e7). Arrays are built once
  * and mutated (`setOccluderUniforms`): nothing is allocated per frame.
  */
@@ -17,16 +18,29 @@ export function occlusionUniforms(): Record<string, THREE.IUniform> {
     uOccN: { value: 0 },
     uOccS: { value: Array.from({ length: MAX_OCCLUDERS }, () => new THREE.Vector4()) },
     uOccE: { value: Array.from({ length: MAX_OCCLUDERS }, () => new THREE.Vector2(0, 1)) },
+    uOccP: { value: Array.from({ length: MAX_OCCLUDERS }, () => new THREE.Vector3(0, 0, 1)) },
   };
 }
 
+/**
+ * Vertex uniform vectors the point shader declares, counted the way GLSL packs them (a vec4, a vec2, a float and each element of
+ * an array of those take one vector; a mat4 takes 4): the occluder arrays (`uOccS` vec4 + `uOccE` vec2 + `uOccP` vec3 per slot), the cone arrays
+ * (`uGroup` vec4 + `uGroupD` float + `uGroupE` vec2 per slot), `uOccN`, `uPx`, and three.js's built-ins for a ShaderMaterial
+ * (modelMatrix, viewMatrix, modelViewMatrix, projectionMatrix = 16, normalMatrix 3, cameraPosition 1). The assumption is
+ * WebGL2's guaranteed minimum of 256 vertex uniform vectors (WebGL1's 128 is also met); a test asserts the sum stays within it.
+ */
+export const POINT_UNIFORM_VECTORS = 3 * MAX_OCCLUDERS + 3 * GROUP_SLOTS + 2 + (16 + 3 + 1);
+/** The vertex uniform vectors WebGL2 guarantees (`MAX_VERTEX_UNIFORM_VECTORS`). */
+export const MIN_VERTEX_UNIFORM_VECTORS = 256;
+
 /** Copy the frame's occluder slots into the point material's uniforms (no allocation). */
 export function setOccluderUniforms(u: Record<string, THREE.IUniform>, set: OccluderSet): void {
-  const s = u.uOccS.value as THREE.Vector4[], e = u.uOccE.value as THREE.Vector2[];
+  const s = u.uOccS.value as THREE.Vector4[], e = u.uOccE.value as THREE.Vector2[], pa = u.uOccP.value as THREE.Vector3[];
   for (let i = 0; i < set.count; i++) {
     const v = set.slots[i];
     s[i].set(v.x, v.y, v.z, v.r);
     e[i].set(v.c2, v.k);
+    pa[i].set(v.pxa, v.pya, v.pza);
   }
   u.uOccN.value = set.count;
 }
@@ -62,6 +76,7 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
       uniform int uOccN;
       uniform vec4 uOccS[${MAX_OCCLUDERS}];
       uniform vec2 uOccE[${MAX_OCCLUDERS}];
+      uniform vec3 uOccP[${MAX_OCCLUDERS}];
       uniform vec4 uGroup[${GROUP_SLOTS}];
       uniform float uGroupD[${GROUP_SLOTS}];
       uniform vec2 uGroupE[${GROUP_SLOTS}];
@@ -93,7 +108,8 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
           vec4 s = uOccS[i];
           vec2 e = uOccE[i];
           if (e.x <= 0.0) continue;
-          vec3 d = vec3(rel.xy, rel.z * e.y);
+          vec3 pa = uOccP[i];
+          vec3 d = rel + (e.y - 1.0) * dot(rel, pa) * pa;
           float L = length(d);
           if (L <= 0.0) continue;
           vec3 u = d / L;
@@ -253,6 +269,117 @@ export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | n
         float d = dot(normalize(vN), normalize(uSun));
         float lit = smoothstep(-0.02, 0.35, d) * (0.15 + 0.95 * max(d, 0.0));
         gl_FragColor = vec4(base * (0.012 + 1.05 * lit), 1.0);
+      }`,
+  });
+}
+
+/**
+ * A body without a map: a lit sphere in its style's colour (lib/body-style.ts). Gas and ice giants get a latitudinal band
+ * pattern (bands run with the pole = local z, a deterministic sine with a little longitudinal turbulence, in the body's own two
+ * band colours); solid bodies get slight albedo noise. Terminator as the Moon's (no scene lights). `invB2 = 1 / (1 - f)^2`
+ * corrects the normal of a geometry squashed along z by (1 - f) (the oblate giants, scene/celestial.ts); 1 for a sphere.
+ */
+export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, invB2 = 1): THREE.ShaderMaterial {
+  const bands = style.bands;
+  const a = hexRgb(bands?.colors[0] ?? style.color), b = hexRgb(bands?.colors[1] ?? style.color);
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uSun: { value: sun },
+      uTint: { value: new THREE.Vector3(...hexRgb(style.color)) },
+      uBandA: { value: new THREE.Vector3(...a) },
+      uBandB: { value: new THREE.Vector3(...b) },
+      uBandN: { value: bands ? bands.count : 0 },
+      uBandK: { value: bands ? bands.contrast : 0 },
+      uNoise: { value: bands ? 0.04 : (style.noise ?? DEFAULT_NOISE) },
+      uInvB2: { value: invB2 },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      uniform float uInvB2;
+      varying vec3 vL; varying vec3 vN;
+      void main() {
+        vL = normal;
+        vN = normalize(mat3(modelMatrix) * vec3(normal.xy, normal.z * uInvB2));
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */ `
+      #include <logdepthbuf_pars_fragment>
+      uniform vec3 uSun; uniform vec3 uTint; uniform vec3 uBandA; uniform vec3 uBandB;
+      uniform float uBandN; uniform float uBandK; uniform float uNoise;
+      varying vec3 vL; varying vec3 vN;
+      ${NOISE}
+      void main() {
+        #include <logdepthbuf_fragment>
+        vec3 n = normalize(vL);
+        vec3 col = uTint;
+        if (uBandN > 0.0) {
+          float lat = n.z;
+          float turb = 0.45 * sin(atan(n.y, n.x) * 3.0 + lat * 9.0) + 0.25 * sin(atan(n.y, n.x) * 7.0 - lat * 21.0);
+          float w = 0.5 + 0.5 * sin(lat * uBandN * 3.14159265 + turb * 0.6);
+          w = mix(w, 0.5 + 0.5 * sin(lat * uBandN * 8.0 + 1.7 * turb), 0.25);
+          col = mix(uTint, mix(uBandA, uBandB, smoothstep(0.15, 0.85, w)), min(1.0, uBandK * 1.2));
+        }
+        col *= 1.0 + uNoise * (fbm(n * 4.0 + 1.3) * 2.0 - 1.0) + 0.5 * uNoise * (fbm(n * 17.0) - 0.5);
+        float d = dot(normalize(vN), normalize(uSun));
+        float lit = smoothstep(-0.02, 0.35, d) * (0.15 + 0.95 * max(d, 0.0));
+        gl_FragColor = vec4(col * (0.012 + 1.05 * lit), 1.0);
+      }`,
+  });
+}
+
+/** The 1-D radial opacity/colour texture of a ring system (\`ringTexture\`), linear filtered, edge clamped. */
+export function createRingData(ring: RingStyle): THREE.DataTexture {
+  const w = 512;
+  const tex = new THREE.DataTexture(ringTexture(ring, w), w, 1, THREE.RGBAFormat);
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Ring plane geometry (local z = the body's pole, like the sphere): an annulus of \`ring\`'s radii. Pair with \`createRingMaterial\`.
+ */
+export const createRingGeometry = (ring: RingStyle): THREE.RingGeometry => new THREE.RingGeometry(ring.innerKm, ring.outerKm, 192, 1);
+
+/**
+ * Semi-transparent, double-sided ring lit by the Sun: radial opacity and colour from the data texture; a face seen from the side
+ * away from the Sun (light shining through) is dimmer, an edge-on ring faint. No shadow of the ring on the planet nor of the
+ * planet on the ring. Not depth-written (no ring edge cuts a body behind it), depth-tested with the same logarithmic depth as the bodies.
+ */
+export function createRingMaterial(sun: THREE.Vector3, ring: RingStyle, data: THREE.Texture = createRingData(ring)): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: { uSun: { value: sun }, uTex: { value: data }, uInner: { value: ring.innerKm }, uOuter: { value: ring.outerKm } },
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying float vR; varying vec3 vN; varying vec3 vW;
+      void main() {
+        vR = length(position.xy);
+        vN = normalize(mat3(modelMatrix) * vec3(0.0, 0.0, 1.0));
+        vW = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */ `
+      #include <logdepthbuf_pars_fragment>
+      uniform vec3 uSun; uniform sampler2D uTex; uniform float uInner; uniform float uOuter;
+      varying float vR; varying vec3 vN; varying vec3 vW;
+      void main() {
+        #include <logdepthbuf_fragment>
+        vec4 t = texture2D(uTex, vec2((vR - uInner) / (uOuter - uInner), 0.5));
+        if (t.a < 0.01) discard;
+        float d = dot(vN, normalize(uSun));
+        float side = (dot(vN, -vW) * d > 0.0) ? 1.0 : 0.3;
+        float lit = (0.16 + 0.9 * pow(abs(d), 0.5)) * side;
+        gl_FragColor = vec4(t.rgb * lit, t.a);
       }`,
   });
 }

@@ -13,7 +13,9 @@ export function glslBodyHides(set: Pick<OccluderSet, 'slots' | 'count'>, relX: n
     const v = set.slots[i];
     const sx = f(v.x), sy = f(v.y), sz = f(v.z), sw = f(v.r), c2 = f(v.c2), k = f(v.k);
     if (c2 <= 0) continue;
-    const dx = px, dy = py, dz = f(pz * k);
+    const qx = f(v.pxa), qy = f(v.pya), qz = f(v.pza);
+    const gk = f(f(k - 1) * f(f(f(px * qx) + f(py * qy)) + f(pz * qz)));
+    const dx = f(px + f(gk * qx)), dy = f(py + f(gk * qy)), dz = f(pz + f(gk * qz));
     const L = f(Math.sqrt(f(f(f(dx * dx) + f(dy * dy)) + f(dz * dz))));
     if (L <= 0) continue;
     const ux = f(dx / L), uy = f(dy / L), uz = f(dz / L);

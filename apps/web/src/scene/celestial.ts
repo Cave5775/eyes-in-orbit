@@ -1,11 +1,13 @@
 import * as THREE from 'three';
-import { EARTH, MARS, MOON, SUN, bodyOf, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
-import { bodyFixedToInertial, fitMapSize } from '../lib/body-map';
+import { EARTH, MARS, MOON, SUN, bodyOf, defaultBodies, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
+import { bodyFixedToInertial, fitMapSize, poleDirection } from '../lib/body-map';
+import { MARKER_BELOW_PX, MARKER_SIZE_PX, bodyStyle, hexRgb } from '../lib/body-style';
+import { bodyDiscRadiusPx, SHOW_EXEMPT } from '../lib/pick';
 import type { DrawnBody } from '../lib/body-scene';
 import type { SceneBody } from '../lib/occlusion';
 import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM } from '../lib/disc-hide';
 import { isRegistryBody, refDisplay, refPositionEci, refRadiusKm } from '../lib/ref-body';
-import { createMapMaterial } from './materials';
+import { createBodyMaterial, createMapMaterial, createRingGeometry, createRingMaterial } from './materials';
 
 /**
  * Bodies drawn with a map (file in /textures, `npm run assets`): a sphere of the body's equatorial radius (the flattening,
@@ -20,6 +22,12 @@ export interface MapEnv {
   maxAnisotropy: () => number;
   /** loads an image as a texture; `onError` also covers a response that is no image (the dev server answers a missing file with its HTML page) */
   loadTexture: (url: string, onLoad: (tex: THREE.Texture) => void, onError: () => void) => void;
+  /**
+   * The scene's point material (scene/materials.ts `createPointMaterial`): with it the layer draws a small marker glyph for a body
+   * whose disc is under `MARKER_BELOW_PX` px (`updateMarkers`). Its occluder and cone uniforms are the scene's, so a marker is hidden
+   * behind a body exactly as a satellite is. Absent (tests without a GPU): no markers.
+   */
+  pointMaterial?: THREE.Material;
 }
 
 const DEFAULT_ENV: MapEnv = {
@@ -35,9 +43,8 @@ export function createMapSphere(radiusKm: number, widthSegments = 128, heightSeg
   return g;
 }
 
-/** Colour of a body without a texture (linear display colours, authored directly): Mars is a rusty ochre. */
-const BODY_TINT: Record<string, [number, number, number]> = { MARS: [0.74, 0.36, 0.2] };
-const DEFAULT_TINT: [number, number, number] = [0.55, 0.55, 0.58];
+/** Bodies with a flattening under this are drawn as spheres (the Moon's 0.0012 is under a pixel at any distance a sphere would show it). */
+const MIN_DRAWN_FLATTENING = 0.002;
 
 /**
  * One body the layer knows: its entity, where it is displayed and (all but the Earth) its meshes. It IS the `SceneBody` the
@@ -57,6 +64,15 @@ interface Drawn extends SceneBody {
   /** set when the body leaves the layer (a map still loading is then dropped) */
   removed?: boolean;
   place?: (origin: THREE.Vector3, t: number) => void;
+}
+
+/** The small glyphs of the bodies whose disc is too small to see (one `THREE.Points`, updated in place by `updateMarkers`). */
+interface Markers {
+  points: THREE.Points;
+  pos: THREE.BufferAttribute;
+  size: THREE.BufferAttribute;
+  /** the bodies, in attribute order */
+  bodies: Drawn[];
 }
 
 /**
@@ -80,6 +96,7 @@ export class CelestialLayer {
   /** the bodies in layer order, rebuilt when the set changes (the objects are the `drawn` values, mutated by `update`) */
   private list: Drawn[] = [];
   private moonMat: THREE.ShaderMaterial | null = null;
+  private markers: Markers | null = null;
   /** 'texture' once /textures/moon.jpg has loaded */
   mode: 'texture' | 'procedural' = 'procedural';
 
@@ -108,6 +125,72 @@ export class CelestialLayer {
       else this.drawn.set(bodyId, this.create(bodyId, entityId));
     }
     this.list = [...this.drawn.values()];
+    this.buildMarkers();
+  }
+
+  /**
+   * One marker per body, drawn through the scene's point shader (so a marker is hidden by the bodies in front of it like any
+   * point) in a Points of its own: not part of any point set, so the scope policy never thins them, the disc cones skip them
+   * (`aShow` = SHOW_EXEMPT) and they are not in the RENDERED count. Position and size are rewritten every frame; the colour is the body's style colour.
+   */
+  private buildMarkers(): void {
+    this.disposeMarkers();
+    const mat = this.env.pointMaterial;
+    if (!mat || this.list.length === 0) return;
+    const n = this.list.length;
+    const geo = new THREE.BufferGeometry();
+    const pos = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
+    const size = new THREE.BufferAttribute(new Float32Array(n), 1);
+    pos.setUsage(THREE.DynamicDrawUsage);
+    size.setUsage(THREE.DynamicDrawUsage);
+    const color = new Float32Array(n * 3);
+    this.list.forEach((d, i) => {
+      const c = hexRgb(bodyStyle(d.bodyId).color);
+      for (let k = 0; k < 3; k++) color[i * 3 + k] = c[k] + (1 - c[k]) * 0.3; // a little paler than the disc: it must read on black
+    });
+    geo.setAttribute('position', pos);
+    geo.setAttribute('aColor', new THREE.BufferAttribute(color, 3));
+    geo.setAttribute('aSize', size);
+    geo.setAttribute('aGlyph', new THREE.BufferAttribute(new Float32Array(n).fill(2), 1)); // the ring glyph
+    geo.setAttribute('aShow', new THREE.BufferAttribute(new Float32Array(n).fill(SHOW_EXEMPT), 1));
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    points.renderOrder = 7;
+    this.scene.add(points);
+    this.markers = { points, pos, size, bodies: [...this.list] };
+  }
+
+  private disposeMarkers(): void {
+    this.markers?.points.removeFromParent();
+    this.markers?.points.geometry.dispose();
+    this.markers = null;
+  }
+
+  /**
+   * Show the marker of each body whose disc radius is under `MARKER_BELOW_PX` px for a camera with vertical field of view `fovDeg` on
+   * a viewport `viewportPx` high, hide the rest (size 0); call after `update`. The marker sits on the sight line to the body's
+   * centre, 1.5 radii nearer the camera, so the body's own occluder slot never hides it, whereas a body in front of it does. No allocation.
+   */
+  updateMarkers(fovDeg: number, viewportPx: number): void {
+    const m = this.markers;
+    if (!m) return;
+    const p = m.pos.array as Float32Array, s = m.size.array as Float32Array;
+    for (let i = 0; i < m.bodies.length; i++) {
+      const d = m.bodies[i];
+      const dist = Math.hypot(d.rel[0], d.rel[1], d.rel[2]);
+      const r = d.radiusKm * d.k;
+      if (!(dist > 0) || !(bodyDiscRadiusPx(d.radiusKm, d.k, dist, fovDeg, viewportPx) < MARKER_BELOW_PX)) {
+        s[i] = 0;
+        continue;
+      }
+      const f = 1 - (1.5 * r) / dist;
+      p[i * 3] = d.rel[0] * f;
+      p[i * 3 + 1] = d.rel[1] * f;
+      p[i * 3 + 2] = d.rel[2] * f;
+      s[i] = MARKER_SIZE_PX;
+    }
+    m.pos.needsUpdate = true;
+    m.size.needsUpdate = true;
   }
 
   private create(bodyId: string, entityId: string): Drawn {
@@ -197,21 +280,41 @@ export class CelestialLayer {
   }
 
   /**
-   * Mars and any other registry body: a tinted sphere, lit from where the Sun is as seen from that body. With a `map` (Mars)
-   * the sphere gets the Moon's treatment: pole on z, oriented by the IAU rotation each frame, and the map as soon as it has loaded.
+   * Mars and any other registry body: a lit sphere in its style's colour (lib/body-style.ts: bands for the giants, albedo noise
+   * for solid bodies), pole on z and oriented by the IAU rotation each frame. A body with a flattening (Jupiter, Saturn, Uranus,
+   * Neptune, Ceres) is squashed along that pole by (1 - f) and exposes the pole in `SceneBody.pole` so the occluders, disc cones
+   * and picks see the same ellipsoid. A style with rings (Saturn) adds a ring mesh in the equatorial plane (not in the occluder
+   * list, so it hides and picks nothing). With a `map` (Mars) the sphere gets the Moon's treatment: the map as soon as it has
+   * loaded (the flattening, 1/169.8, stays ignored as before).
    */
   private buildGeneric(d: Drawn, map?: { body: Body; file: string }): void {
-    const tint = BODY_TINT[d.bodyId] ?? DEFAULT_TINT;
+    const style = bodyStyle(d.bodyId);
+    const body = map ? map.body : defaultBodies.has(d.bodyId) ? defaultBodies.get(d.bodyId) : undefined;
     const sunFromBody = new THREE.Vector3(1, 0, 0);
-    const mat = createBodyMaterial(sunFromBody, tint);
+    const f = !map && body && body.flattening >= MIN_DRAWN_FLATTENING ? body.flattening : 0;
+    const mat = createBodyMaterial(sunFromBody, style, 1 / ((1 - f) * (1 - f)));
     if (map) d.radiusKm = map.body.radiusKm;
-    const mesh = new THREE.Mesh(map ? createMapSphere(d.radiusKm) : new THREE.SphereGeometry(d.radiusKm, 64, 32), mat);
+    const mesh = new THREE.Mesh(createMapSphere(d.radiusKm, 96, 48), mat);
     d.objects.push(mesh);
+    if (f > 0 && body) {
+      d.flattening = f;
+      d.pole = poleDirection(body);
+    }
+    let ring: THREE.Mesh | null = null;
+    if (style.rings) {
+      ring = new THREE.Mesh(createRingGeometry(style.rings), createRingMaterial(sunFromBody, style.rings));
+      d.objects.push(ring);
+    }
     d.place = (origin, t) => {
       const m = refDisplay(d.bodyId, t);
       mesh.position.set(m.r[0] - origin.x, m.r[1] - origin.y, m.r[2] - origin.z);
-      mesh.scale.setScalar(m.k);
-      if (map) this.orient(mesh, map.body, t);
+      mesh.scale.set(m.k, m.k, m.k * (1 - f));
+      if (body) this.orient(mesh, body, t);
+      if (ring) {
+        ring.position.copy(mesh.position);
+        ring.scale.setScalar(m.k);
+        ring.quaternion.copy(mesh.quaternion);
+      }
       // the real direction to the Sun from the body (not the Earth's)
       const p = refPositionEci(d.bodyId, t), s = refPositionEci('SUN', t);
       sunFromBody.set(s[0] - p[0], s[1] - p[1], s[2] - p[2]).normalize();
@@ -308,6 +411,7 @@ export class CelestialLayer {
 
   dispose(): void {
     this.disposed = true;
+    this.disposeMarkers();
     for (const d of this.drawn.values()) {
       for (const o of d.objects) {
         const mat = (o as THREE.Sprite).material as THREE.SpriteMaterial | undefined;
@@ -315,34 +419,6 @@ export class CelestialLayer {
       }
     }
   }
-}
-
-/** Plain lit sphere without a texture: tint with a little banding, terminator as the Moon's (no scene lights are used). */
-function createBodyMaterial(sun: THREE.Vector3, tint: [number, number, number]): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    uniforms: { uSun: { value: sun }, uTint: { value: new THREE.Vector3(...tint) } },
-    vertexShader: /* glsl */ `
-      #include <common>
-      #include <logdepthbuf_pars_vertex>
-      varying vec3 vL; varying vec3 vN;
-      void main() {
-        vL = normal;
-        vN = normalize(mat3(modelMatrix) * normal);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        #include <logdepthbuf_vertex>
-      }`,
-    fragmentShader: /* glsl */ `
-      #include <logdepthbuf_pars_fragment>
-      uniform vec3 uSun; uniform vec3 uTint;
-      varying vec3 vL; varying vec3 vN;
-      void main() {
-        #include <logdepthbuf_fragment>
-        float band = 0.88 + 0.12 * sin(vL.z * 9.0 + 2.5 * sin(vL.x * 6.0 + vL.y * 4.0));
-        float d = dot(normalize(vN), normalize(uSun));
-        float lit = smoothstep(-0.02, 0.35, d) * (0.15 + 0.95 * max(d, 0.0));
-        gl_FragColor = vec4(uTint * band * (0.012 + 1.05 * lit), 1.0);
-      }`,
-  });
 }
 
 /** Soft white-to-transparent disc for the Sun's glow. */

@@ -12,8 +12,9 @@ import type { V3 } from './camera';
  * picker, hover, labels and the other CPU tests call `OccluderSet.hides`. Nothing here names a body, so adding one needs
  * nothing but `CelestialLayer` exposing it (see docs/frames.md, "Adding a body").
  *
- * A body is a sphere or, when it has a flattening f, an ellipsoid (a, a, b = a (1 - f)): scaling z by `k = 1 / (1 - f)` maps it
- * to a sphere of radius `a`, so a ray test against a sphere is exact for it (the Earth is the only one with f > 0). Each test
+ * A body is a sphere or, when it has a flattening f, an ellipsoid (a, a, b = a (1 - f)): stretching its pole axis by `k = 1 / (1 - f)` maps it
+ * to a sphere of radius `a`, so a ray test against a sphere is exact for it (the pole is +z for the Earth, `SceneBody.pole` for the
+ * oblate giants). Each test
  * sphere is shrunk by a small margin so a marker lying ON the surface (a pad, a lander) is never taken to be hidden by the
  * ground it stands on.
  *
@@ -47,6 +48,8 @@ export interface SceneBody {
   k: number;
   /** flattening (0 for a sphere; the Earth's for the Earth), see `ELLIPSOID_K` */
   flattening?: number;
+  /** unit vector of the body's pole in the world frame (default +z, the Earth's): the axis the flattening squashes */
+  pole?: V3;
   /** how far the body's own system reaches above its surface and behind its centre plane, km (lib/disc-hide.ts) */
   reachKm?: number;
   depthKm?: number;
@@ -62,32 +65,42 @@ export interface SphereView {
   z: number;
   r: number;
   c2: number;
-  /** z scale of the ellipsoid, 1 for a sphere */
+  /** scale of the ellipsoid along its pole, 1 for a sphere */
   k: number;
+  /** unit pole axis (camera-relative frame = world frame), +z for the Earth: the scaling is `v + (k - 1)(v . pole) pole` */
+  pxa: number;
+  pya: number;
+  pza: number;
 }
 
-export const newSphereView = (): SphereView => ({ x: 0, y: 0, z: 0, r: 0, c2: 0, k: 1 });
+export const newSphereView = (): SphereView => ({ x: 0, y: 0, z: 0, r: 0, c2: 0, k: 1, pxa: 0, pya: 0, pza: 1 });
 
 /** Margin for a sphere: the Earth's absolute margin, but never more than 1 % of the radius (a small, far Sun). */
 const sphereMargin = (r: number, marginKm: number): number => Math.min(marginKm, r * 0.01);
 
 /** Fill `out` for a body whose centre is `(rx, ry, rz)` from the camera. */
-export function setSphereView(out: SphereView, rx: number, ry: number, rz: number, radiusKm: number, flattening = 0, marginKm = OCCLUSION_MARGIN_KM): SphereView {
+export function setSphereView(out: SphereView, rx: number, ry: number, rz: number, radiusKm: number, flattening = 0, marginKm = OCCLUSION_MARGIN_KM, pole?: V3): SphereView {
   const k = flattening > 0 ? 1 / (1 - flattening) : 1;
-  const z = rz * k;
+  const pxa = pole ? pole[0] : 0, pya = pole ? pole[1] : 0, pza = pole ? pole[2] : 1;
+  // the ellipsoid (a, a, b = a / k) squashed along the pole axis becomes a sphere when the axis is stretched by k
+  const g = (k - 1) * (rx * pxa + ry * pya + rz * pza);
+  const x = rx + g * pxa, y = ry + g * pya, z = rz + g * pza;
   const r = radiusKm - sphereMargin(radiusKm, marginKm);
-  out.x = rx;
-  out.y = ry;
+  out.x = x;
+  out.y = y;
   out.z = z;
   out.r = r;
-  out.c2 = rx * rx + ry * ry + z * z - r * r;
+  out.c2 = x * x + y * y + z * z - r * r;
   out.k = k;
+  out.pxa = pxa;
+  out.pya = pya;
+  out.pza = pza;
   return out;
 }
 
-/** A new view of a body at `rel` (the Earth: `flattening = EARTH.flattening`). */
-export const sphereView = (rel: V3, radiusKm: number, flattening = 0, marginKm = OCCLUSION_MARGIN_KM): SphereView =>
-  setSphereView(newSphereView(), rel[0], rel[1], rel[2], radiusKm, flattening, marginKm);
+/** A new view of a body at `rel` (the Earth: `flattening = EARTH.flattening`; another body: its `pole`). */
+export const sphereView = (rel: V3, radiusKm: number, flattening = 0, marginKm = OCCLUSION_MARGIN_KM, pole?: V3): SphereView =>
+  setSphereView(newSphereView(), rel[0], rel[1], rel[2], radiusKm, flattening, marginKm, pole);
 
 /**
  * True when the body `v` (see `SphereView`) lies between the camera and the point `rel` (camera-relative). Only a point whose
@@ -99,10 +112,11 @@ export const sphereView = (rel: V3, radiusKm: number, flattening = 0, marginKm =
  */
 export function sphereOccludes(v: SphereView, rx: number, ry: number, rz: number): boolean {
   if (v.c2 <= 0) return false; // camera inside the body: nothing sensible to hide
-  const dz = rz * v.k;
-  const L = Math.hypot(rx, ry, dz);
+  const g = (v.k - 1) * (rx * v.pxa + ry * v.pya + rz * v.pza);
+  const dx = rx + g * v.pxa, dy = ry + g * v.pya, dz = rz + g * v.pza;
+  const L = Math.hypot(dx, dy, dz);
   if (L === 0) return false;
-  const ux = rx / L, uy = ry / L, uz = dz / L;
+  const ux = dx / L, uy = dy / L, uz = dz / L;
   const b = ux * v.x + uy * v.y + uz * v.z;
   if (b <= 0) return false; // looking away from the centre
   const cx = uy * v.z - uz * v.y, cy = uz * v.x - ux * v.z, cz = ux * v.y - uy * v.x;
@@ -159,7 +173,7 @@ export class OccluderSet {
       if (!(dist > 0) || !(radius > 0)) continue;
       const ang = radius / dist; // angular radius, rad (tan of it is the pixel ratio below, near enough for a cutoff)
       if (!(ang * focalPx >= minPx)) continue;
-      setSphereView(s, x, y, z, radius, b.flattening ?? 0, marginKm);
+      setSphereView(s, x, y, z, radius, b.flattening ?? 0, marginKm, b.pole);
       if (s.c2 <= 0) continue; // the camera is inside it
       let pos: number;
       if (count < MAX_OCCLUDERS) pos = count++;
@@ -169,7 +183,7 @@ export class OccluderSet {
         pos = MAX_OCCLUDERS - 1; // replaces the smallest in use
       }
       const t = slots[pos];
-      t.x = s.x; t.y = s.y; t.z = s.z; t.r = s.r; t.c2 = s.c2; t.k = s.k;
+      t.x = s.x; t.y = s.y; t.z = s.z; t.r = s.r; t.c2 = s.c2; t.k = s.k; t.pxa = s.pxa; t.pya = s.pya; t.pza = s.pza;
       sky[pos] = ang;
       // keep the slots sorted by angular radius, largest first (insertion: swap the objects, no allocation)
       while (pos > 0 && sky[pos - 1] < ang) {

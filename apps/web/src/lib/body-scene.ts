@@ -18,6 +18,8 @@ export interface DrawnBody {
   k: number;
   /** flattening (0 or absent: a sphere; the Earth's: the ellipsoid), as lib/occlusion.ts `SceneBody` */
   flattening?: number;
+  /** unit pole axis the flattening squashes (default +z), as `SceneBody.pole` */
+  pole?: V3;
 }
 
 export interface BodyPickContext {
@@ -50,7 +52,7 @@ export function bodyPickScan(bodies: readonly DrawnBody[], ctx: BodyPickContext)
     let hidden = false;
     for (const o of bodies) {
       if (o === b) continue;
-      setSphereView(view, o.c[0] - ctx.origin[0], o.c[1] - ctx.origin[1], o.c[2] - ctx.origin[2], o.radiusKm * o.k, o.flattening);
+      setSphereView(view, o.c[0] - ctx.origin[0], o.c[1] - ctx.origin[1], o.c[2] - ctx.origin[2], o.radiusKm * o.k, o.flattening, undefined, o.pole);
       if (sphereOccludes(view, rel[0], rel[1], rel[2])) {
         hidden = true;
         break;

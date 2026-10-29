@@ -24,9 +24,17 @@ import type { V3 } from './camera';
 import { BODY_MIN_HIT_PX, GROUP_DISC_PX, bodyDiscRadiusPx } from './pick';
 
 /**
- * Cone slots in the point shader. The cones are made from the same body list as the occluders (`SceneBody` in lib/occlusion.ts,
- * `CelestialLayer.bodies()`), in the layer's order: the first `GROUP_SLOTS` bodies get one (Earth, Moon, Sun, Mars and the
- * planets to come; a body past the last slot has no cone, the objects over its disc stay drawn).
+ * Cone slots in the point shader (one vec4 + one float + one vec2 each). The cones are made from the same body list as the
+ * occluders (`SceneBody` in lib/occlusion.ts, `CelestialLayer.bodies()`), but not "the first bodies in the list": with 35 bodies
+ * that would starve Jupiter and Saturn. The rule, applied every frame by `discGroups`:
+ *  - a body is a candidate when its disc radius is at most `maxDiscPx` (`GROUP_DISC_PX`) and the camera is outside it; a larger
+ *    disc is drawn apart and needs no cone, a body the camera is inside has none;
+ *  - candidates are ranked by apparent disc radius, largest first (the pick hit area, `max(BODY_MIN_HIT_PX, disc + 3)`, grows
+ *    with it, so the largest discs are where a click and a smear of objects can actually land), ties broken by the body's
+ *    place in the list (the registry order), so the choice is deterministic and does not flicker when two ranks swap;
+ *  - the first `GROUP_SLOTS` get a cone, the rest are counted in `GroupStats.overflow` and their objects stay drawn.
+ * There is no per-body "has clutter" flag: the apparent size is the proxy (the Earth's satellite cloud, a planet's moons).
+ * The slots are in rank order, not list order. Uniform budget: see `POINT_UNIFORM_VECTORS` in scene/materials.ts.
  */
 export const GROUP_SLOTS = 8;
 
@@ -74,27 +82,43 @@ export const GROUP_OFF = 2;
 
 export const offGroup = (): DiscGroup => ({ x: 0, y: 0, z: 1, sinR: GROUP_OFF, dist: 0, shell: 0, back: 0 });
 
+/** Debug counters of one `discGroups` call (pass an object to receive them). */
+export interface GroupStats {
+  /** slots with a cone */
+  used: number;
+  /** candidates (disc radius <= maxDiscPx, camera outside) that did not get a slot */
+  overflow: number;
+}
+
 /**
- * The slots for this frame: a body whose disc radius is at most `maxDiscPx` gets a cone of its pick hit radius and a shell, the
- * others (and a camera inside a sphere) are off. `fovDeg` is the vertical field of view and `viewportPx` the viewport height,
- * the same two numbers `bodyPickExtra` uses. Always `slots` entries.
+ * The slots for this frame: the candidates (see `GROUP_SLOTS`) ranked by disc radius, largest first, registry order on ties,
+ * each a cone of its pick hit radius and a shell; unused slots are off. `fovDeg` is the vertical field of view and
+ * `viewportPx` the viewport height, the same two numbers `bodyPickExtra` uses. Always `slots` entries.
  */
-export function discGroups(bodies: readonly GroupBody[], fovDeg: number, viewportPx: number, maxDiscPx = GROUP_DISC_PX, slots = GROUP_SLOTS): DiscGroup[] {
-  const out: DiscGroup[] = [];
+export function discGroups(bodies: readonly GroupBody[], fovDeg: number, viewportPx: number, maxDiscPx = GROUP_DISC_PX, slots = GROUP_SLOTS, stats?: GroupStats): DiscGroup[] {
   const focalPx = viewportPx / (2 * Math.tan((fovDeg * Math.PI) / 360));
-  for (const b of bodies) {
+  const cand: { i: number; disc: number; dist: number }[] = [];
+  if (focalPx > 0) {
+    bodies.forEach((b, i) => {
+      const dist = Math.hypot(b.rel[0], b.rel[1], b.rel[2]);
+      const disc = bodyDiscRadiusPx(b.radiusKm, b.k, dist, fovDeg, viewportPx);
+      if (disc <= maxDiscPx && dist > 0) cand.push({ i, disc, dist });
+    });
+  }
+  cand.sort((p, q) => q.disc - p.disc || p.i - q.i);
+  const out: DiscGroup[] = [];
+  for (const { i, disc, dist } of cand) {
     if (out.length >= slots) break;
+    const b = bodies[i];
     const [x, y, z] = b.rel;
-    const dist = Math.hypot(x, y, z);
-    const disc = bodyDiscRadiusPx(b.radiusKm, b.k, dist, fovDeg, viewportPx);
-    if (!(disc <= maxDiscPx) || !(dist > 0) || !(focalPx > 0)) {
-      out.push(offGroup());
-      continue;
-    }
     const hitPx = Math.max(BODY_MIN_HIT_PX, disc + GROUP_MARGIN_PX);
     // the shell, in km at the body's own depth: its drawn radius, the system's reach and the screen margin
     const shell = b.radiusKm * b.k + (b.reachKm ?? 0) + (GROUP_MARGIN_PX * dist) / focalPx;
     out.push({ x: x / dist, y: y / dist, z: z / dist, sinR: hitPx / Math.hypot(hitPx, focalPx), dist, shell, back: b.depthKm ?? 0 });
+  }
+  if (stats) {
+    stats.used = out.length;
+    stats.overflow = Math.max(0, cand.length - out.length);
   }
   while (out.length < slots) out.push(offGroup());
   return out;

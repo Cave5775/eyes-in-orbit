@@ -222,13 +222,12 @@ describe('adding a body needs nothing beyond the layer exposing it (a Jupiter at
   it('from Earth it is a 0.09 px dot: no shader slot (too small to hide anything) but a disc cone, so the objects over it are hidden and a click finds it', () => {
     layer.update(T, new THREE.Vector3(0, 0, 0));
     const bodies = layer.bodies();
-    const jupIndex = bodies.findIndex((b) => b.entityId === 'body-jupiter');
-    const jup = bodies[jupIndex];
+    const jup = bodies.find((b) => b.entityId === 'body-jupiter')!;
     expect((jup.radiusKm / norm(jup.rel)) * FOCAL).toBeLessThan(MIN_OCCLUDER_PX);
     const set = build(bodies);
     expect(set.slots.slice(0, set.count).some((s) => s.r > 7e4)).toBe(false);
     const groups = discGroups(bodies, FOV, VP);
-    const g = groups[jupIndex];
+    const g = groups.find((s) => s.sinR < 1 && Math.abs(s.dist - norm(jup.rel)) < 1e-3 * s.dist)!; // slots are in size order, not list order
     expect(g.sinR).toBeLessThan(1);
     expect(g.dist).toBeCloseTo(norm(jup.rel), 3);
     expect(hiddenByDisc(jup.rel[0] * 0.5, jup.rel[1] * 0.5, jup.rel[2] * 0.5, groups)).toBe(true); // in front of it, on its cone
@@ -254,6 +253,6 @@ describe('adding a body needs nothing beyond the layer exposing it (a Jupiter at
     expect((u.uOccS.value as THREE.Vector4[])[0].w).toBeCloseTo(jupSlot.r, 4);
     // and the cone for the same frame comes from the same list: its disc is 3 px, so it is on
     const groups = discGroups(layer.bodies(), FOV, VP);
-    expect(groups[layer.bodies().findIndex((b) => b.entityId === 'body-jupiter')].sinR).toBeLessThan(1);
+    expect(groups.some((s) => s.sinR < 1 && Math.abs(s.dist - 2e7) < 1)).toBe(true);
   });
 });

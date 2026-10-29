@@ -184,7 +184,7 @@ describe('hiddenByDisc', () => {
   it('checks every slot: a Moon dot hides what is over it though the Earth cone is off', () => {
     const moon: GroupBody = { rel: [0, 384_400, 0], radiusKm: R_MOON, k: 1 };
     const both = groups(earthAt(60_000), moon);
-    expect(both[0].sinR).toBeGreaterThan(1);
+    expect(both.filter((s) => s.sinR < 1)).toHaveLength(1); // only the Moon: the slots are in size order, an off body takes none
     expect(hiddenByDisc(1000, 900, 0, both)).toBe(false); // elsewhere on the sky
     expect(hiddenByDisc(0, 100_000, 0, both)).toBe(true); // between the camera and the Moon, on its line of sight
     expect(hiddenByDisc(0, 500_000, 0, both)).toBe(false); // behind it

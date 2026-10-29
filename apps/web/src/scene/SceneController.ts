@@ -19,7 +19,7 @@ import { NO_CTX, NO_QUERY, classify, isDrawn, queryActive, type Class, type Ctx,
 import { OccluderSet } from '../lib/occlusion';
 import { liftNearSurface } from '../lib/paths';
 import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
-import { discGroups, hiddenByDisc, type DiscGroup } from '../lib/disc-hide';
+import { discGroups, hiddenByDisc, type DiscGroup, type GroupStats } from '../lib/disc-hide';
 import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
 import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
@@ -186,6 +186,8 @@ export class SceneController {
   private readonly occ = this.occluders.hides;
   /** cones of the small, far bodies that hide the non-exempt points over them (lib/disc-hide.ts), rebuilt every frame in `prepareRender` */
   private discCones: DiscGroup[] = discGroups([], 45, 1);
+  /** cone slots in use and candidates without a slot in the last frame (debug; the occluders' are `occluders.count` / `overflow`) */
+  readonly coneStats: GroupStats = { used: 0, overflow: 0 };
   private rig: OrbitRig;
   private palette: Palette;
   private sun = new THREE.Vector3(1, 0, 0);
@@ -370,6 +372,7 @@ export class SceneController {
     this.celestial = new CelestialLayer(this.scene, this.sun, {
       maxTextureSize: () => this.renderer.capabilities.maxTextureSize,
       maxAnisotropy: () => this.renderer.capabilities.getMaxAnisotropy(),
+      pointMaterial: this.pointMat,
     });
 
     this.sats = makePointSet(0, this.pointMat);
@@ -1520,13 +1523,14 @@ export class SceneController {
     this.occluders.build(bodies, this.camera.fov, this.container.clientHeight);
     setOccluderUniforms(u, this.occluders);
     // small, far bodies hide the non-exempt points over their disc: one cone per drawn body
-    this.discCones = discGroups(bodies, this.camera.fov, this.container.clientHeight);
+    this.discCones = discGroups(bodies, this.camera.fov, this.container.clientHeight, undefined, undefined, this.coneStats);
     this.discCones.forEach((g, i) => {
       u.uGroup.value[i].set(g.x, g.y, g.z, g.sinR);
       u.uGroupD.value[i] = g.dist;
       u.uGroupE.value[i].set(g.shell, g.back);
     });
 
+    this.celestial.updateMarkers(this.camera.fov, this.container.clientHeight); // glyphs of the bodies too small to see
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);
     this.pads.pos.upload(f);
