@@ -182,10 +182,16 @@ describe('recorded Horizons responses (2026-10-29)', () => {
     const tIo = io[5][0];
     const rel = bodyStateEci('IO', tIo, reg).r.map((x, k) => x - bodyStateEci('JUPITER', tIo, reg).r[k]);
     expect(dist(rel, io[5].slice(1))).toBeLessThan(1e-3);
-    // outside the window: the registered orbit again (continuous existence, no NaN, no null)
-    const far = jup[4][0] + 400 * 86_400_000;
+    // outside the window: the registered orbit shifted by the edge difference, fading out over a quarter period (3 y for Jupiter)
+    const fresh = new BodyRegistry();
+    const kep = (t: number) => bodyStateInParent(fresh.get('JUPITER'), t, fresh)!.r;
+    const far = jup[jup.length - 1][0] + 400 * 86_400_000;
     const out = bodyStateInParent(reg.get('JUPITER'), far, reg)!.r;
-    expect(dist(out, bodyStateInParent(new BodyRegistry().get('JUPITER'), far, new BodyRegistry())!.r)).toBe(0);
+    expect(out.every(Number.isFinite)).toBe(true);
+    expect(dist(out, kep(far))).toBeGreaterThan(0); // still inside the fade
+    expect(dist(out, kep(far))).toBeLessThan(dist(before, after) * 1.01);
+    const gone = jup[jup.length - 1][0] + 4 * 365.25 * 86_400_000;
+    expect(dist(bodyStateInParent(reg.get('JUPITER'), gone, reg)!.r, kep(gone))).toBe(0); // 3 y later the plain orbit
     // removing the stream restores it
     setBodyStream('JUPITER', undefined, reg);
     expect(dist(bodyStateEci('JUPITER', t0, reg).r, before)).toBe(0);

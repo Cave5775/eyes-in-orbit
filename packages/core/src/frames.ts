@@ -1,4 +1,4 @@
-import { Body, BodyEphemerisData, BodyRegistry, defaultBodies } from './bodies';
+import { Body, BodyEphemerisData, BodyRegistry, bodyPeriodSec, defaultBodies } from './bodies';
 import { SampledProvider } from './providers/sampled';
 import { eclipticToEquatorial, moonStateEci, sunPositionEci } from './ephemeris';
 import { keplerState } from './kepler';
@@ -68,9 +68,22 @@ export function equatorToInertialMatrix(rot: Extract<Body['rotation'], { kind: '
 }
 
 /**
+ * How long the correction after the end of a sample window takes to fade out, as a fraction of the body's orbital period
+ * (a quarter: the orbit is back on the plain Kepler curve a quarter of a revolution from the joint). The streamed data and
+ * the Kepler fallback disagree by up to 3e5 km (Mars) to 6e6 km (Ceres) at the window edge; outside the window the fallback
+ * is shifted by that difference, weighted by `1 - smoothstep(dt / fade)`, so the orbit line is continuous through the joint
+ * in position AND velocity (the smoothstep has zero slope at both ends, so the velocity at the edge is the streamed one),
+ * and far from the window the error tends to the plain Kepler error.
+ */
+export const STREAM_FADE_PERIOD_FRACTION = 0.25;
+/** Fade length, s, for a body without a Kepler period (nothing to take a fraction of): one Julian year. */
+export const STREAM_FADE_FALLBACK_SEC = 365.25 * 86400;
+
+/**
  * Feed a body a sample stream (JPL Horizons states relative to its parent, `<PARENT>:inertial`, km and km/s): the registry
  * body's `ephemeris` becomes Hermite interpolation of the samples inside their window and the body's registered ephemeris or
- * Kepler orbit outside it, so the body, the objects that orbit it and every frame hop through it agree. Returns false (and
+ * Kepler orbit outside it, shifted by the streamed-minus-Kepler difference at the nearest window edge and fading to the plain
+ * orbit over `STREAM_FADE_PERIOD_FRACTION` of a period (`STREAM_FADE_PERIOD_FRACTION`: no kink in the orbit line at the joint), so the body, the objects that orbit it and every frame hop through it agree. Returns false (and
  * changes nothing) for a body without a parent, a frame that is not the parent's inertial frame, or fewer than two samples.
  * `data === undefined` removes the stream.
  */
@@ -83,10 +96,27 @@ export function setBodyStream(id: string, data: BodyEphemerisData | undefined, b
   if (!body.parentId || data.frame !== `${body.parentId}:inertial` || data.samples.length < 2) return false;
   const sampled = new SampledProvider(data.frame, data.samples);
   const base = { ...body, ephemeris: bodies.baseEphemerisOf(id) };
+  const fallback = (tMs: number) => bodyStateInParent(base, tMs, bodies) ?? { r: [0, 0, 0] as Vec3, v: [0, 0, 0] as Vec3 };
+  const range = sampled.validRange as [number, number];
+  const period = bodyPeriodSec(base, bodies);
+  const fadeMs = (period && period > 0 ? period * STREAM_FADE_PERIOD_FRACTION : STREAM_FADE_FALLBACK_SEC) * 1000;
+  // streamed minus fallback at each window edge: [start, end] x [dr, dv]
+  const edge = range.map((te) => {
+    const s = sampled.stateAt(te), k = fallback(te);
+    return s && s.v ? { dr: sub(s.r, k.r), dv: sub(s.v, k.v) } : { dr: [0, 0, 0] as Vec3, dv: [0, 0, 0] as Vec3 };
+  });
   bodies.setEphemeris(id, (tMs) => {
     const s = sampled.stateAt(tMs);
     if (s && s.v) return { r: s.r, v: s.v };
-    return bodyStateInParent(base, tMs, bodies) ?? { r: [0, 0, 0], v: [0, 0, 0] };
+    const k = fallback(tMs);
+    const before = tMs < range[0];
+    const e = before ? edge[0] : edge[1];
+    const x = Math.abs(tMs - range[before ? 0 : 1]) / fadeMs; // 0 at the edge, 1 where the correction is gone
+    if (!(x < 1)) return k;
+    // w = 1 - smoothstep(x); dw/dt has the sign of the direction away from the window, per second
+    const w = 1 - x * x * (3 - 2 * x);
+    const dw = ((before ? 1 : -1) * 6 * x * (1 - x)) / (fadeMs / 1000);
+    return { r: add(k.r, [e.dr[0] * w, e.dr[1] * w, e.dr[2] * w]), v: add(k.v, [e.dv[0] * w + e.dr[0] * dw, e.dv[1] * w + e.dr[1] * dw, e.dv[2] * w + e.dr[2] * dw]) };
   }, data);
   return true;
 }
