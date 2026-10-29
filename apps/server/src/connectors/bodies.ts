@@ -9,7 +9,7 @@ function sync(ctx: ConnectorContext): number {
 }
 
 /**
- * The body registry (Sun, Earth, Mars, Moon) as entities with a `body` provider, so bodies are searchable, selectable and
+ * The body registry (35 bodies: Sun, planets, dwarf planets, major moons) as entities with a `body` provider, so bodies are searchable, selectable and
  * have trajectories like any other object. Offline, no polling: registered once at startup (before the first request is
  * served) and a single `run` marks the connector healthy. `/api/bodies` still serves the raw registry.
  */

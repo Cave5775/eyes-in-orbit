@@ -316,7 +316,7 @@ describe('frame persistence', () => {
   });
 
   it('a stale entity or an unknown body falls back to the Earth and the stored value is replaced', () => {
-    for (const stale of [serialiseFrame('gone'), '{"kind":"body","id":"PLUTO"}']) {
+    for (const stale of [serialiseFrame('gone'), '{"kind":"body","id":"XENA"}']) {
       const m = mem({ 'eio.frame': stale });
       useStore.setState({ ...HOME, entities: new Map() });
       install(m);

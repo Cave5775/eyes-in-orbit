@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { bodyEntityRecords, defaultBodies } from '@eio/core';
+import { BodyRegistry, ORIGINAL_BODIES, bodyEntityRecords as allBodyEntityRecords, defaultBodies } from '@eio/core';
+
+/** the original Sun, Earth, Moon, Mars hierarchy (the tree's BODIES below) */
+const bodyEntityRecords = () => allBodyEntityRecords(new BodyRegistry(ORIGINAL_BODIES));
 import { bodyKey, bodyPathKeys, buildTreeRows, entityKey, groupKey, revealKeys, revealRowIndex, scrollTopToReveal, stickyAncestors, centredScrollTop, type TreeBody, type TreeItem, type TreeRow } from '../src/lib/entity-tree';
 
 const BODIES: TreeBody[] = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId }));
@@ -93,9 +96,9 @@ describe('entity tree rows', () => {
   });
 
   it('uses bodyOf for search hits and hangs unknown bodies off the root', () => {
-    const hits = [{ id: 'x', kind: 'probe' }, { id: 'y', kind: 'probe', bodyId: 'CERES' }];
+    const hits = [{ id: 'x', kind: 'probe' }, { id: 'y', kind: 'probe', bodyId: 'XENA' }];
     const rows = buildTreeRows(hits, { ...base, openAll: true, bodyOf: (h) => (h.id === 'x' ? 'MOON' : undefined) });
-    expect(types(rows)).toEqual(['B:SUN', 'B:EARTH', 'B:MOON', 'E:x', 'B:CERES', 'E:y']);
+    expect(types(rows)).toEqual(['B:SUN', 'B:EARTH', 'B:MOON', 'E:x', 'B:XENA', 'E:y']);
   });
 
   describe('body entities as nodes', () => {
@@ -148,9 +151,9 @@ describe('entity tree rows', () => {
     });
 
     it('an entity whose body the registry lacks hangs a node off the root', () => {
-      const ceres = { id: 'body-ceres', kind: 'planet', bodyId: 'SUN', provider: { type: 'body', bodyId: 'CERES' } };
+      const ceres = { id: 'body-xena', kind: 'planet', bodyId: 'SUN', provider: { type: 'body', bodyId: 'XENA' } };
       const rows = buildTreeRows([ceres], { ...base, openAll: true });
-      expect(types(rows)).toEqual(['B:SUN', 'B:CERES']);
+      expect(types(rows)).toEqual(['B:SUN', 'B:XENA']);
     });
   });
 
@@ -209,7 +212,7 @@ describe('reveal a selected entity', () => {
 
   it('uses bodyOf for search hits and hangs an unknown body off the root', () => {
     expect(revealKeys({ id: 'x', kind: 'probe' }, { ...opts, bodyOf: () => 'MOON' }).slice(0, 3)).toEqual([bodyKey('SUN'), bodyKey('EARTH'), bodyKey('MOON')]);
-    expect(revealKeys({ id: 'y', kind: 'probe', bodyId: 'CERES' }, opts)).toEqual([bodyKey('SUN'), bodyKey('CERES'), groupKey('CERES', 'probe')]);
+    expect(revealKeys({ id: 'y', kind: 'probe', bodyId: 'XENA' }, opts)).toEqual([bodyKey('SUN'), bodyKey('XENA'), groupKey('XENA', 'probe')]);
     expect(revealKeys({ id: 'z', kind: 'probe' }, opts).slice(0, 2)).toEqual([bodyKey('SUN'), bodyKey('EARTH')]);
   });
 

@@ -23,7 +23,7 @@ export function providerFromSpec(spec: ProviderSpec): StateProvider {
     case 'composite':
       return new CompositeProvider(spec.segments);
     case 'body':
-      return new BodyProvider(spec.bodyId);
+      return new BodyProvider(spec.bodyId, undefined, spec.ephemeris);
   }
 }
 

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { bodyEntityRecords, type EntityRecord } from '@eio/core';
+import { BodyRegistry, ORIGINAL_BODIES, bodyEntityRecords as allBodyEntityRecords, type EntityRecord } from '@eio/core';
 import { DIM, dimmed } from '../src/lib/dim';
 import { CHILD_ORBIT_LIMIT, orbitLines, type OrbitLineSpec } from '../src/lib/orbit-lines';
 
+/** these tests describe the original Sun, Earth, Moon, Mars hierarchy */
+const bodyEntityRecords = () => allBodyEntityRecords(new BodyRegistry(ORIGINAL_BODIES));
 const sgp4 = { type: 'sgp4' as const, omm: {} as never };
 const sampled = (frame: 'EARTH:inertial' | 'MOON:inertial') => ({ type: 'sampled' as const, frame, samples: [] });
 const obj = (id: string, bodyId: string, extra: Partial<EntityRecord> = {}): EntityRecord => ({

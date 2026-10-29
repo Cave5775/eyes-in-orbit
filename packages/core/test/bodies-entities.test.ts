@@ -57,9 +57,10 @@ describe('bodyEntityRecords', () => {
   const r = byId(recs);
 
   it('has one record per registry body with the documented ids and kinds', () => {
-    expect(recs.map((x) => x.id)).toEqual(['body-sun', 'body-earth', 'body-moon', 'body-mars']);
-    expect(recs.map((x) => x.kind)).toEqual(['star', 'planet', 'moon', 'planet']);
-    expect(recs.map((x) => x.name)).toEqual(['Sun', 'Earth', 'Moon', 'Mars']);
+    // the original four keep their ids and order (rank regression); the rest of the solar system follows (bodies-solar-system.test.ts)
+    expect(recs.slice(0, 4).map((x) => x.id)).toEqual(['body-sun', 'body-earth', 'body-moon', 'body-mars']);
+    expect(recs.slice(0, 4).map((x) => x.kind)).toEqual(['star', 'planet', 'moon', 'planet']);
+    expect(recs.slice(0, 4).map((x) => x.name)).toEqual(['Sun', 'Earth', 'Moon', 'Mars']);
     for (const x of recs) {
       expect(x.group).toBe('bodies');
       expect(x.aliases.body).toBe(x.id.slice(5).toUpperCase());
@@ -151,7 +152,7 @@ describe('hierarchy', () => {
   });
 
   it('ranks an unknown primary body last', () => {
-    expect(entityRank(obj('x', 'PLUTO'))).toBeGreaterThan(entityRank(obj('y', 'MOON')));
+    expect(entityRank(obj('x', 'PLANET-X'))).toBeGreaterThan(entityRank(obj('y', 'CHARON')));
   });
 
   it('bodyOf is the one converter from a body entity to its registry id', () => {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { bodyEntityRecords, entityRank } from '@eio/core';
+import { BodyRegistry, ORIGINAL_BODIES, bodyEntityRecords as allBodyEntityRecords, entityRank } from '@eio/core';
+
+/** the original Sun, Earth, Moon, Mars hierarchy */
+const bodyEntityRecords = () => allBodyEntityRecords(new BodyRegistry(ORIGINAL_BODIES));
 import {
   CLUSTER_PX, GROUP_DISC_PX, bodyDiscRadiusPx, bodyHitRadiusPx, bodyPickExtra, gatherCandidates, moveIndex, pickMeta, popupPlacement,
   SHOW_EXEMPT, rankMap, resolvePick, wheelSteps, type PickHit, type PickSource,

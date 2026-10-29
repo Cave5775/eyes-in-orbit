@@ -50,7 +50,7 @@ describe('frame persistence helpers', () => {
     const look = (id: string) => cat.get(id);
     expect(resolveFrame('body-moon', look)).toBe('body-moon');
     expect(resolveFrame(parseFrame('{"kind":"body","id":"MARS"}'), look)).toBe('body-mars');
-    expect(resolveFrame(parseFrame('{"kind":"body","id":"PLUTO"}'), look)).toBe(EARTH_CENTRE);
+    expect(resolveFrame(parseFrame('{"kind":"body","id":"XENA"}'), look)).toBe(EARTH_CENTRE);
     expect(resolveFrame('iss', look)).toBe('iss');
     expect(resolveFrame('removed', look)).toBe(EARTH_CENTRE);
     expect(resolveFrame(null, look)).toBe(EARTH_CENTRE);

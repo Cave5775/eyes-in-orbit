@@ -84,8 +84,14 @@ export type ProviderSpec =
       samples?: Sample[];
     }
   | { type: 'composite'; segments: CompositeSegment[] }
-  /** A celestial body of the registry (`bodies.ts`): its position comes from the ephemeris, state in `EARTH:inertial`. */
-  | { type: 'body'; bodyId: string };
+  /**
+   * A celestial body of the registry (`bodies.ts`): its position comes from the ephemeris, state in `EARTH:inertial`.
+   * `ephemeris` (optional, set by the `horizons-bodies` connector) is a real data stream: samples
+   * `[tMs, x, y, z, vx, vy, vz]` (km, km/s) of the body relative to its parent in `<PARENT>:inertial`; the provider
+   * (`BodyProvider`) installs it in the registry so it replaces the approximate Kepler orbit while the clock is inside the
+   * sampled window. Without it the body is purely analytic (offline, mock).
+   */
+  | { type: 'body'; bodyId: string; ephemeris?: { frame: FrameId; samples: Sample[] } };
 
 export interface CompositeSegment {
   fromMs: number;

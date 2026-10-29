@@ -6,7 +6,11 @@ const UNKNOWN_DEPTH = 99;
 /** Ranks below this are body entities, from this up objects (satellites, probes, ...). */
 const OBJECT_BASE = 1_000_000;
 
-const ALT_NAMES: Record<string, string> = { SUN: 'Sol', EARTH: 'Terra', MOON: 'Luna' };
+const ALT_NAMES: Record<string, string> = {
+  SUN: 'Sol', EARTH: 'Terra', MOON: 'Luna',
+  // minor-planet designations of the dwarf planets, so "134340" or "1 Ceres" finds them
+  CERES: '1 Ceres', PLUTO: '134340 Pluto', ERIS: '136199 Eris', HAUMEA: '136108 Haumea', MAKEMAKE: '136472 Makemake',
+};
 
 /** Entity id of a registry body: `body-` + lowercase registry id (`body-earth`). */
 export const bodyEntityId = (bodyId: string): string => `body-${bodyId.toLowerCase()}`;
@@ -15,7 +19,9 @@ export const bodyEntityId = (bodyId: string): string => `body-${bodyId.toLowerCa
  * One entity record per registry body (Sun, Earth, Moon, Mars by default), so bodies are positional objects like any
  * other: `provider: { type: 'body', bodyId }` (state in `EARTH:inertial`, see `bodyStateEci`).
  *
- * - `kind`: `star` (no parent), `planet` (parent is the root), `moon` (deeper).
+ * - `kind`: `star` (no parent), `planet` (parent is the root), `dwarf_planet` (parent is the root, `Body.dwarf`: Ceres, Pluto,
+ *   Eris, Haumea, Makemake), `moon` (deeper). The default registry has 35 bodies: Sun, Earth, Moon, Mars, the other six planets,
+ *   five dwarf planets and 20 moons (see `DEFAULT_BODY_LIST`).
  * - `bodyId`: the registry id of the body it ORBITS (Moon -> `EARTH`). The field is required, so the Sun, which orbits
  *   nothing, names itself (`SUN`). `parentId` is the entity id of the parent body (`body-earth`), unset for the Sun.
  * - `aliases.body` is the registry id; `aliases.alt` an alternative name (Sol, Terra, Luna) for search.
@@ -34,7 +40,7 @@ export function bodyEntityRecords(registry: BodyRegistry = defaultBodies, update
     const rec: EntityRecord = {
       id: bodyEntityId(b.id),
       name: b.name,
-      kind: !parent ? 'star' : parent.parentId ? 'moon' : 'planet',
+      kind: !parent ? 'star' : parent.parentId ? 'moon' : b.dwarf ? 'dwarf_planet' : 'planet',
       bodyId: parent ? parent.id : b.id,
       aliases,
       group: 'bodies',
@@ -68,7 +74,7 @@ export function isOrbitable(rec: Pick<EntityRecord, 'provider' | 'attrs'>): bool
   return rec.provider?.type === 'body' || rec.attrs?.orbitable === true;
 }
 
-/** Number of ancestors of a registry body: lineage length minus 1 (Sun 0, Earth and Mars 1, Moon 2). */
+/** Number of ancestors of a registry body: lineage length minus 1 (Sun 0, the planets and dwarf planets 1, their moons 2). */
 export function bodyDepth(id: string, registry: BodyRegistry = defaultBodies): number {
   return registry.lineage(id).length - 1;
 }

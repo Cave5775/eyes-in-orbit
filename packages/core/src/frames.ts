@@ -1,4 +1,5 @@
-import { Body, BodyRegistry, defaultBodies } from './bodies';
+import { Body, BodyEphemerisData, BodyRegistry, defaultBodies } from './bodies';
+import { SampledProvider } from './providers/sampled';
 import { eclipticToEquatorial, moonStateEci, sunPositionEci } from './ephemeris';
 import { keplerState } from './kepler';
 import {
@@ -46,9 +47,48 @@ export function bodyStateInParent(
   if (!body.parentId) return null;
   if (body.ephemeris) return body.ephemeris(tMs);
   if (!body.orbit) return null;
-  const s = keplerState(body.orbit, bodies.get(body.parentId).gm, tMs);
+  const parent = bodies.get(body.parentId);
+  const s = keplerState(body.orbit, parent.gm, tMs);
   // heliocentric elements are ecliptic; all inertial frames use the equatorial axes (what `sunDirectionEci` is expressed in)
-  return body.orbitPlane === 'ecliptic' ? { r: eclipticToEquatorial(s.r), v: eclipticToEquatorial(s.v) } : s;
+  if (body.orbitPlane === 'ecliptic') return { r: eclipticToEquatorial(s.r), v: eclipticToEquatorial(s.v) };
+  // a moon's elements are referred to its planet's equator: rotate them into the shared equatorial axes
+  if (body.orbitPlane === 'equator' && parent.rotation.kind === 'linear') {
+    const m = equatorToInertialMatrix(parent.rotation);
+    return { r: mulMV(m, s.r), v: mulMV(m, s.v) };
+  }
+  return s;
+}
+
+/**
+ * Matrix taking vectors in the equatorial axes of a body (z along its IAU pole, x along the node of its equator on the ICRF
+ * equator) to the shared inertial axes: the transpose of the pole part of `inertialToFixedMatrix`, `Rx(90deg - dec) Rz(ra + 90deg)`.
+ */
+export function equatorToInertialMatrix(rot: Extract<Body['rotation'], { kind: 'linear' }>): Mat3 {
+  return transpose(mulMM(rotX((90 - rot.poleDecDeg) * DEG), rotZ((rot.poleRaDeg + 90) * DEG)));
+}
+
+/**
+ * Feed a body a sample stream (JPL Horizons states relative to its parent, `<PARENT>:inertial`, km and km/s): the registry
+ * body's `ephemeris` becomes Hermite interpolation of the samples inside their window and the body's registered ephemeris or
+ * Kepler orbit outside it, so the body, the objects that orbit it and every frame hop through it agree. Returns false (and
+ * changes nothing) for a body without a parent, a frame that is not the parent's inertial frame, or fewer than two samples.
+ * `data === undefined` removes the stream.
+ */
+export function setBodyStream(id: string, data: BodyEphemerisData | undefined, bodies: BodyRegistry = defaultBodies): boolean {
+  if (!data) {
+    bodies.setEphemeris(id, undefined);
+    return true;
+  }
+  const body = bodies.get(id);
+  if (!body.parentId || data.frame !== `${body.parentId}:inertial` || data.samples.length < 2) return false;
+  const sampled = new SampledProvider(data.frame, data.samples);
+  const base = { ...body, ephemeris: bodies.baseEphemerisOf(id) };
+  bodies.setEphemeris(id, (tMs) => {
+    const s = sampled.stateAt(tMs);
+    if (s && s.v) return { r: s.r, v: s.v };
+    return bodyStateInParent(base, tMs, bodies) ?? { r: [0, 0, 0], v: [0, 0, 0] };
+  }, data);
+  return true;
 }
 
 /** Convert a state into `to`. Handles inertial<->fixed and hops across body inertial frames. */

@@ -42,7 +42,7 @@ describe('reference bodies', () => {
 describe('reference bodies from the registry (Mars)', () => {
   it('takes any registry body, with the old names unchanged', () => {
     expect(isRegistryBody('MARS')).toBe(true);
-    expect(isRegistryBody('CERES')).toBe(false);
+    expect(isRegistryBody('XENA')).toBe(false);
     expect(REF_RADIUS_KM.MARS).toBe(3396.19);
     expect(REF_LABEL.MARS).toBe('Mars');
     expect(refRadiusKm('MOON')).toBe(1737.4);

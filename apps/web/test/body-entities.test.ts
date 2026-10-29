@@ -34,6 +34,6 @@ describe('body entities in the web app', () => {
     const partial = withBodyEntities([probe, moon], NOW);
     expect(ids(partial)).toEqual(ids([probe, ...server]));
     expect(partial.find((e) => e.id === 'body-moon')).toBe(moon);
-    expect(withBodyEntities([], NOW)).toHaveLength(4);
+    expect(withBodyEntities([], NOW)).toHaveLength(35);
   });
 });
