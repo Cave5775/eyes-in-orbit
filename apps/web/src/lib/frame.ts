@@ -43,6 +43,15 @@ export function centrePositionEci(centre: Centre, tMs: number, lookup: EntityLoo
   return lookup(centre, tMs)?.r ?? null;
 }
 
+/**
+ * The distance the HUD reads as `CAM d FROM <frame>`: the camera to the frame centre. The camera's own target is the selection
+ * (a locked frame leaves it free), so `targetDistKm` (camera to target) is only right where target and centre coincide; it
+ * stays the answer when the centre has no position.
+ */
+export function distanceFromCentre(camera: Vec3, centre: Vec3 | null, targetDistKm: number): number {
+  return centre ? Math.hypot(camera[0] - centre[0], camera[1] - centre[1], camera[2] - centre[2]) : targetDistKm;
+}
+
 /** Position and (when known) velocity of the centre in Earth-inertial coordinates. */
 export function centreStateEci(centre: Centre, tMs: number, lookup: EntityLookup): { r: Vec3; v?: Vec3 } | null {
   if (isEarthCentre(centre)) return { r: [0, 0, 0], v: [0, 0, 0] };

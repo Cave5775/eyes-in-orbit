@@ -10,7 +10,7 @@ import { orbitPeriodSec } from '../lib/orbit';
 import { orbitLines, type OrbitRole } from '../lib/orbit-lines';
 import { focusTarget } from '../lib/focus-target';
 import { viewClass } from '../lib/view-class';
-import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
+import { EARTH_CENTRE, centreLabel, distanceFromCentre, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
@@ -285,10 +285,10 @@ export class SceneController {
   private issFix: IssFix | undefined;
   /** world position of the followed thing at sim time `t` */
   private followFn: ((out: THREE.Vector3, t: number) => boolean) | null = null;
-  private follow = false;
-  private freeTarget = new THREE.Vector3();
   /** the selected entity that has no position at the sim time, while the camera shows its parent instead (null: none) */
   private untrackedId: string | null = null;
+  private follow = false;
+  private freeTarget = new THREE.Vector3();
   private anchor = new THREE.Vector3();
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
@@ -450,6 +450,7 @@ export class SceneController {
     this.models.setEntities(this.recs.values());
     for (const rec of this.recs.values()) if (this.models.has(rec.id)) graph.upsert(rec);
     if (dynChanged) this.rebuildDyn();
+    this.ensureCentreInGraph(); // an SGP4 record that was just replaced left the graph above; the frame centre must stay in it
     this.refreshOrbitLines();
     this.applyAppearance();
   }
@@ -551,9 +552,12 @@ export class SceneController {
    * Independent of the camera; `focus({centre})` moves the camera. The overlays rebuild when the centre changes.
    */
   setFrame(centre: Centre, locked = false): void {
+    const wasEarth = isEarthCentre(this.frameCentre);
     this.frameCentre = centre;
     this.frameLocked = locked;
     this.ensureCentreInGraph();
+    // an object on the ground has a path only in a frame that moves (the selected path's eligibility depends on it)
+    if (wasEarth !== isEarthCentre(centre)) this.refreshOrbitLines();
   }
 
   /** The centre entity needs a live provider in the graph to be looked up (the selection and hints are put there too). */
@@ -591,13 +595,13 @@ export class SceneController {
    */
   focus(req: FocusRequest): void {
     this.groundLock = null;
+    this.untrackedId = null;
     if (req.id) {
       const rec = this.recs.get(req.id);
       if (rec) this.focusEntity(rec, req);
     } else if (req.lat !== undefined && req.lon !== undefined) {
       const lat = req.lat * DEG, lon = req.lon * DEG;
       this.followId = null;
-    this.untrackedId = null;
       this.focusLatLon = { lat, lon };
       this.followFn = (out, t) => {
         this.fixedToWorld(geodeticToFixed({ lat, lon, alt: 0 }, EARTH), out, t);
@@ -952,12 +956,20 @@ export class SceneController {
     return true;
   }
 
+  /** The HUD's `CAM d`: from the frame centre when the HUD names a frame (`FROM <frame>`), else to the camera's target. */
+  private hudDistanceKm(): number {
+    if (isEarthCentre(this.frameCentre) && !this.frameLocked) return this.rig.dist;
+    const c = this.worldPos(this.frameCentre, clock.now(), this.tmp) ? ([this.tmp.x, this.tmp.y, this.tmp.z] as V3) : null;
+    const p = this.camera.position;
+    return distanceFromCentre([p.x, p.y, p.z], c, this.rig.dist);
+  }
+
   getStats(): SceneStats {
     const plan = this.pathStatus.plan;
     const now = clock.now();
     return {
       fps: this.fps,
-      distKm: this.rig.dist,
+      distKm: this.hudDistanceKm(),
       altKm: this.rig.altitudeKm,
       satCount: this.propagator.ids.length,
       dynCount: this.dynIds.length,
@@ -1176,7 +1188,7 @@ export class SceneController {
     this.overlayRoles = want;
 
     // trajectory path for a selected entity that has no SGP4 orbit of its own
-    const pathId = sel && !isSgp4(sel) && sel.provider && sel.provider.type !== 'geodetic' && !this.bodyIds.has(sel.id) ? sel.id : null;
+    const pathId = sel && !isSgp4(sel) && sel.provider && (sel.provider.type !== 'geodetic' || !isEarthCentre(this.frameCentre)) && !this.bodyIds.has(sel.id) ? sel.id : null;
     if (pathId !== this.pathOverlayId) {
       this.pathOverlay?.dispose();
       this.pathOverlay = null;
@@ -1437,6 +1449,12 @@ export class SceneController {
       const src = this.surfaceSrc;
       this.rig.minDist = src?.kind === 'entity' ? this.models.defOf(src.id)?.minViewKm ?? MIN_TARGET_DIST_KM : MIN_ALT_KM;
     } else {
+      if (this.untrackedId && this.untrackedId === this.selectedId && this.follow && this.worldPos(this.untrackedId, t, this.tmp)) {
+        // the untracked entity gained a position (the clock reached its data): follow it for real
+        const r = this.recs.get(this.untrackedId);
+        this.untrackedId = null;
+        if (r) this.focusEntity(r);
+      }
       anchored = this.follow && this.followFn ? this.followFn(this.anchor, t) : false;
       if (!anchored && this.groundLock) this.fixedToWorld(this.groundLock, this.freeTarget, t);
       // orbiting the Earth's centre: stop MIN_ALT_KM above the ground; orbiting an object: nearly touching it is fine
@@ -1451,12 +1469,6 @@ export class SceneController {
     this.prepareRender(gmst, t);
     this.updateModels(t);
     this.refreshScope(wall);
-      if (this.untrackedId && this.untrackedId === this.selectedId && this.follow && this.worldPos(this.untrackedId, t, this.tmp)) {
-        // the untracked entity gained a position (the clock reached its data): follow it for real
-        const r = this.recs.get(this.untrackedId);
-        this.untrackedId = null;
-        if (r) this.focusEntity(r);
-      }
 
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
       this.lastPickAt = wall;
@@ -1688,7 +1700,6 @@ export class SceneController {
 
   private updateOverlays(t: number, wall: number): void {
     const centre = this.frameCentre;
-    this.ensureCentreInGraph(); // the record may have been replaced by a refresh
     for (const [id, o] of this.overlays) {
       const rec = this.recs.get(id);
       if (rec) o.update(graph, rec, t, wall, this.overlayRoles.get(id) ?? 'child', centre);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { EntityGraph, EntityRecord, Vec3 } from '@eio/core';
 import { fixedToInertial, type Spin } from '../lib/floating-origin';
-import { EARTH_CENTRE, centrePositionEci, frameForRec, frameSampler, graphLookup, type Centre } from '../lib/frame';
+import { EARTH_CENTRE, centrePositionEci, frameForRec, frameSampler, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
 import {
   PATH_MAX_PHASES, makePathBuffers, nowIndex, pathStale, planPathWindow, samplePath, type PathPlan, type PathResult,
 } from '../lib/paths';
@@ -105,10 +105,13 @@ export class PathOverlay {
     centre = frameForRec(centre, rec);
     const provider = graph.provider(rec.id);
     const key = rec.provider;
-    const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds });
+    const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds, framed: !isEarthCentre(centre) });
     if (!plan) return this.hide();
 
-    if (key !== this.recKey || centre !== this.builtCentre || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
+    // a path built while its centre had no position is empty (nothing can be drawn relative to nothing): rebuild it when the
+    // centre gets one (the clock moved into the centre's data), an anchored flight is never rebuilt by the clock itself
+    const centreArrived = !isEarthCentre(centre) && this.res?.centreRef === null && !!centrePositionEci(centre, t, graphLookup(graph));
+    if (key !== this.recKey || centre !== this.builtCentre || centreArrived || (pathStale(this.builtAt, t, this.res?.plan ?? plan) && wall - this.builtWall > MIN_REBUILD_WALL_MS)) {
       const lookup = graphLookup(graph);
       this.res = samplePath(graph, rec.id, plan, rec.provider, this.buf, frameSampler(centre, t, lookup));
       this.recKey = key;

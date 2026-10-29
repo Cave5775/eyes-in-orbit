@@ -191,6 +191,33 @@ describe('the focus in the store: selectedId, frame, lock, follow', () => {
     });
   });
 
+  describe('a locked frame through a whole session (the lock matrix at the store level)', () => {
+    const sequences: [string, string, string][] = [['iss', 'lro', 'plain on plain'], ['lro', 'iss', 'plain on plain, the other way'], ['body-moon', 'iss', 'a body, then a plain object'], ['iss', 'body-mars', 'a plain object, then a body'], ['ceres', 'body-moon', 'an orbitable asteroid, then a body']];
+    for (const [lock, other, what] of sequences) {
+      it(`${what}: lock ${lock}, select ${other}, deselect, select it again: the frame never moves, the selection and camera do`, () => {
+        st().selectObject(lock);
+        st().setFrame(lock, true);
+        st().selectObject(other);
+        expect(focusState()).toEqual({ selectedId: other, frame: lock, frameLocked: true, follow: true });
+        st().selectObject(null);
+        expect(focusState()).toMatchObject({ selectedId: null, frame: lock, frameLocked: true });
+        st().selectObject(other);
+        st().upsertEntities(catalog(), true); // a refreshed full catalog that still has both
+        expect(focusState()).toMatchObject({ selectedId: other, frame: lock, frameLocked: true });
+        st().setFrameLocked(false);
+        expect(st().frame).toBe(lock); // unlocking does not move it by itself
+        st().resetView();
+        expect(focusState()).toEqual({ selectedId: null, frame: EARTH_CENTRE, frameLocked: false, follow: false });
+      });
+    }
+
+    it('locking the Earth (the default frame) locks it: selecting a body then keeps the Earth', () => {
+      st().setFrameLocked(true);
+      st().selectObject('body-moon');
+      expect(focusState()).toMatchObject({ selectedId: 'body-moon', frame: EARTH_CENTRE, frameLocked: true });
+    });
+  });
+
   describe('focusLaunch', () => {
     const launch = (extra: Partial<Launch>): Launch => ({ id: 'l1', name: 'L', entityId: 'nope', net: '2026-11-01T00:00:00Z', ...extra }) as Launch;
 
