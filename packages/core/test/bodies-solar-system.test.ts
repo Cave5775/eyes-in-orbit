@@ -232,3 +232,12 @@ describe('a Horizons stream on a body provider', () => {
     expect(dist(bodyStateInParent(reg.get('NEPTUNE'), T, reg)!.r, bodyStateInParent(fresh.get('NEPTUNE'), T, fresh)!.r)).toBeLessThan(5);
   });
 });
+
+describe('constants verified against external sources (2026-10-29)', () => {
+  it('pins the rotation constants corrected against NAIF pck00011.tpc (constant terms of the IAU WGCCRE 2015 series)', () => {
+    const rot = (id: string) => defaultBodies.get(id).rotation as { poleRaDeg: number; poleDecDeg: number; w0Deg: number; rateDegPerDay: number };
+    expect(rot('DIONE').w0Deg).toBe(357.6); // BODY604_PM = ( 357.6 131.5349316 0. )
+    expect(rot('PHOBOS')).toMatchObject({ poleRaDeg: 317.67071657, poleDecDeg: 52.88627266, w0Deg: 35.1877444, rateDegPerDay: 1128.84475928 });
+    expect(rot('DEIMOS')).toMatchObject({ poleRaDeg: 316.65705808, poleDecDeg: 53.50992033, w0Deg: 79.39932954, rateDegPerDay: 285.16188899 });
+  });
+});

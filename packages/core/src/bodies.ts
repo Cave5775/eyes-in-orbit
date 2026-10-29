@@ -99,7 +99,8 @@ export const MARS: Body = {
 // The rest of the solar system. Sources, all low precision by design (they are the OFFLINE FALLBACK; the `horizons-bodies`
 // server connector replaces the positions with JPL Horizons ephemerides while it is online):
 //  - radius, flattening, GM, pole and prime meridian: IAU WGCCRE 2015 report (Archinal et al. 2018, Celest Mech Dyn Astr
-//    130:22) and the NASA Planetary Fact Sheets / JPL "Planetary Satellite Physical Parameters" and "Solar System Dynamics
+//    130:22; pole, W0 and rate verified 2026-10-29 against NAIF pck00011.tpc, constant terms only: Dione W0 corrected to 357.6,
+//    Phobos and Deimos take the pck00011 (2022) values) and the NASA Planetary Fact Sheets / JPL "Planetary Satellite Physical Parameters" and "Solar System Dynamics
 //    constants" pages, as remembered (rounded to the digits given here). The periodic libration terms of the IAU series
 //    (for example Neptune's sin N terms, the Phobos libration) are left out: sub-degree effects.
 //  - planet orbits: Standish, "Keplerian Elements for Approximate Positions of the Major Planets", table 1 (1800-2050 AD,
@@ -173,8 +174,8 @@ function moon(id: string, name: string, parentId: string, a: number, e: number, 
   };
 }
 
-export const PHOBOS = moon('PHOBOS', 'Phobos', 'MARS', 9376, 0.0151, 1.08, 11.1, 7.087e-4, linear(317.68, 52.90, 35.06, 1128.8445850));
-export const DEIMOS = moon('DEIMOS', 'Deimos', 'MARS', 23_463, 0.0005, 1.79, 6.2, 9.615e-5, linear(316.65, 53.52, 79.41, 285.1618970));
+export const PHOBOS = moon('PHOBOS', 'Phobos', 'MARS', 9376, 0.0151, 1.08, 11.1, 7.087e-4, linear(317.67071657, 52.88627266, 35.1877444, 1128.84475928));
+export const DEIMOS = moon('DEIMOS', 'Deimos', 'MARS', 23_463, 0.0005, 1.79, 6.2, 9.615e-5, linear(316.65705808, 53.50992033, 79.39932954, 285.16188899));
 
 export const IO = moon('IO', 'Io', 'JUPITER', 421_800, 0.0041, 0.04, 1821.6, 5959.916, linear(268.05, 64.50, 200.39, 203.4889538));
 export const EUROPA = moon('EUROPA', 'Europa', 'JUPITER', 671_100, 0.0094, 0.47, 1560.8, 3202.739, linear(268.08, 64.51, 36.022, 101.3747235));
@@ -184,7 +185,7 @@ export const CALLISTO = moon('CALLISTO', 'Callisto', 'JUPITER', 1_882_700, 0.007
 export const MIMAS = moon('MIMAS', 'Mimas', 'SATURN', 185_540, 0.0196, 1.57, 198.2, 2.5026, linear(40.66, 83.52, 333.46, 381.9945550));
 export const ENCELADUS = moon('ENCELADUS', 'Enceladus', 'SATURN', 238_040, 0.0047, 0.01, 252.1, 7.2027, linear(40.66, 83.52, 6.32, 262.7318996));
 export const TETHYS = moon('TETHYS', 'Tethys', 'SATURN', 294_670, 0.0001, 1.09, 531.1, 41.21, linear(40.66, 83.52, 8.95, 190.6979085));
-export const DIONE = moon('DIONE', 'Dione', 'SATURN', 377_420, 0.0022, 0.02, 561.4, 73.12, linear(40.66, 83.52, 357.00, 131.5349316));
+export const DIONE = moon('DIONE', 'Dione', 'SATURN', 377_420, 0.0022, 0.02, 561.4, 73.12, linear(40.66, 83.52, 357.60, 131.5349316));
 export const RHEA = moon('RHEA', 'Rhea', 'SATURN', 527_070, 0.0010, 0.35, 763.8, 153.94, linear(40.38, 83.55, 235.16, 79.6900478));
 export const TITAN = moon('TITAN', 'Titan', 'SATURN', 1_221_870, 0.0288, 0.33, 2574.7, 8978.14, linear(39.4827, 83.4279, 186.5855, 22.5769768));
 export const IAPETUS = moon('IAPETUS', 'Iapetus', 'SATURN', 3_560_840, 0.0286, 15.47, 734.5, 120.51, linear(318.16, 75.03, 355.20, 4.5379572));
