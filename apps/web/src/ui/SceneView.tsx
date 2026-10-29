@@ -65,7 +65,6 @@ export function SceneView() {
   const follow = useStore((s) => s.follow);
   const highlight = useStore((s) => s.highlight);
   const setHighlight = useStore((s) => s.setHighlight);
-  const resetView = useStore((s) => s.resetView);
   const setFollow = useStore((s) => s.setFollow);
 
   /** FIT: the selection plus related objects (parent/children, pad, linked probes or stations) and its drawn path. */
@@ -290,7 +289,6 @@ export function SceneView() {
         <button className={surface ? 'btn active' : 'btn'} onClick={toggleSurface} aria-pressed={surface} title="Surface-aligned camera: centred on the selected object, level horizon, north-up. On by default near the Earth; turn it off for the globe view, the choice is remembered (S)">
           SURFACE
         </button>
-        <button className="btn" onClick={resetView} title="Deselect and return to the Earth view (Esc)">EARTH VIEW</button>
         <button className={scopeAll ? 'btn active' : 'btn'} onClick={toggleScope} aria-pressed={scopeAll} title="Scope: AUTO draws only what is relevant to the camera focus (nearby objects, the selection and what is related to it, everything the search lets through); ALL draws everything the search allows">
           SCOPE {scopeAll ? 'ALL' : 'AUTO'}
         </button>
