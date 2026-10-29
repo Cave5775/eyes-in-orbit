@@ -4,7 +4,7 @@ import {
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
 import { modelViewDirection } from '../lib/attitude';
-import { bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
+import { bodyPickScan, gatherWithBodies } from '../lib/body-scene';
 import { DIM } from '../lib/dim';
 import { orbitPeriodSec } from '../lib/orbit';
 import { orbitLines, type OrbitRole } from '../lib/orbit-lines';
@@ -1274,13 +1274,16 @@ export class SceneController {
     }
     // the drawn bodies (Earth, Moon, Sun, Mars) are listed only where no object is (lib/pick.ts `resolvePick`): the Earth's
     // disc must not turn a click on a satellite drawn over it into a choice popup when zoomed in
-    const bodies = () => bodyPickExtras(this.celestial.bodies(), { origin: this.frameInfo.originV3, m, w, h, px, py, fovDeg: this.camera.fov });
+    // one precedence rule between bodies and objects (lib/pick.ts `pickPrecedence`): the cursor in a body's disc belongs to it; a
+    // moon's or an object's wider hit area does not reach into a planet's disc
+    const scan = bodyPickScan(this.celestial.bodies(), { origin: this.frameInfo.originV3, m, w, h, px, py, fovDeg: this.camera.fov });
+    const bodies = () => scan.extras;
     const cones = this.discCones;
     const r = gatherWithBodies(
       [source(this.sats, this.propagator.ids, 0), source(this.dyn, this.dynIds, 60)], extras, bodies, m, w, h, px, py,
       {
         max, wantTotal, nearestFirst, ranks: meta.ranks, created: meta.created, occluded: (x, y, z) => this.occludedRel(x, y, z),
-        discHidden: (x, y, z) => hiddenByDisc(x, y, z, cones),
+        covers: scan.covers, discHidden: (x, y, z) => hiddenByDisc(x, y, z, cones),
       },
     );
     return { ids: r.items.map((i) => i.id), total: r.total };
@@ -1880,21 +1883,26 @@ export class SceneController {
   /** One body for the label pass (a bound arrow function: no closure per frame). Only bodies whose entity says `render.label`. */
   private readonly labelBody = (entityId: string, c: readonly [number, number, number], radiusKm: number, k: number): void => {
     const rec = this.recs.get(entityId);
-    if (rec?.render?.label !== true) return;
     const o = this.frameInfo.origin;
     const x = c[0] - o.x, y = c[1] - o.y, z = c[2] - o.z; // camera-relative, float64
     const dist = Math.hypot(x, y, z), r = radiusKm * k;
+    if (dist <= r * 1.02) return;
     const rpx = apparentRadiusPx(dist, r, this.camera.fov, this.labelH);
-    const opacity = bodyLabelOpacity(rpx);
-    if (opacity <= 0 || dist <= r * 1.02) return;
     // the centre is inside the body's own occluder sphere: test a point just in front of its near surface instead
     const s = 1 - (r * 1.02) / dist;
     if (this.occ(x * s, y * s, z * s)) return;
     const m = this.labelM.elements;
     const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if (cw <= 0) return;
     const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
-    if (!inView(cx, cy, cw)) return;
+    const sx = (cx / cw * 0.5 + 0.5) * this.labelW, sy = (0.5 - cy / cw * 0.5) * this.labelH;
+    // every drawn body's disc, labelled or not: the planner keeps smaller labels off it (lib/labels.ts)
+    this.labelPlan.addDisc(entityId, sx, sy, rpx);
+    const opacity = bodyLabelOpacity(rpx);
+    if (!rec || rec.render?.label !== true || opacity <= 0 || !inView(cx, cy, cw)) return;
     const cls: LabelClass = entityId === this.selectedId ? 'selected' : entityId === this.hoverId ? 'hover' : 'body';
-    this.labelPlan.add(entityId, rec.name, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, Math.min(rpx, 120) + 7, opacity);
+    const parent = rec.parentId && this.recs.get(rec.parentId)?.parentId ? rec.parentId : ''; // a moon: its label waits until it clears the planet
+    const rank = (this.pickMetaCache ??= pickMeta(this.recs.values())).ranks.get(entityId) ?? 0;
+    this.labelPlan.add(entityId, rec.name, cls, sx, sy, Math.min(rpx, 120) + 7, opacity, rpx, rank, parent);
   };
 }

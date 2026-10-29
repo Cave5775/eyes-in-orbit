@@ -5,7 +5,7 @@
  */
 import type { V3 } from './camera';
 import { newSphereView, setSphereView, sphereOccludes } from './occlusion';
-import { gatherCandidates, bodyPickExtra, resolvePick, type PickExtra, type PickOptions, type PickResolution, type PickSource } from './pick';
+import { gatherCandidates, pickPrecedence, probeBody, probeExtra, resolvePick, type BodyProbe, type CoverDisc, type PickExtra, type PickOptions, type PickResolution, type PickSource } from './pick';
 
 /** A body as the scene draws it this frame (true position and radius). */
 export interface DrawnBody {
@@ -34,17 +34,19 @@ export interface BodyPickContext {
 }
 
 /**
- * One pick extra per drawn body under the cursor (`bodyPickExtra`: hit radius at least 14 px, the disc's angular radius plus
- * 3 px). No ranks. A body behind another body (the Earth included, one test for all: `sphereOccludes`) is dropped here, with
- * its own sphere left out of its own test (the centre of a body is inside it, which `sphereOccludes` takes for hidden).
+ * The drawn bodies under the cursor, by the one precedence rule (`pickPrecedence`, lib/pick.ts): `extras` are the pick
+ * extras (no ranks of their own; the hierarchy comes from `PickOptions.ranks`) and `covers` the discs holding the cursor,
+ * for `PickOptions.covers`. A body behind another body (the Earth included, one test for all: `sphereOccludes`) is dropped
+ * first, with its own sphere left out of its own test (the centre of a body is inside it, which `sphereOccludes` takes for
+ * hidden).
  */
-export function bodyPickExtras(bodies: readonly DrawnBody[], ctx: BodyPickContext): PickExtra[] {
-  const out: PickExtra[] = [];
+export function bodyPickScan(bodies: readonly DrawnBody[], ctx: BodyPickContext): { extras: PickExtra[]; covers: CoverDisc[] } {
+  const probes: BodyProbe[] = [];
   const view = newSphereView();
   for (const b of bodies) {
     const rel: V3 = [b.c[0] - ctx.origin[0], b.c[1] - ctx.origin[1], b.c[2] - ctx.origin[2]];
-    const extra = bodyPickExtra({ id: b.entityId, rel, radiusKm: b.radiusKm, k: b.k, fovDeg: ctx.fovDeg, m: ctx.m, w: ctx.w, h: ctx.h, px: ctx.px, py: ctx.py });
-    if (!extra) continue;
+    const p = probeBody({ id: b.entityId, rel, radiusKm: b.radiusKm, k: b.k, fovDeg: ctx.fovDeg, m: ctx.m, w: ctx.w, h: ctx.h, px: ctx.px, py: ctx.py });
+    if (!p) continue;
     let hidden = false;
     for (const o of bodies) {
       if (o === b) continue;
@@ -54,9 +56,15 @@ export function bodyPickExtras(bodies: readonly DrawnBody[], ctx: BodyPickContex
         break;
       }
     }
-    if (!hidden) out.push(extra);
+    if (!hidden) probes.push(p);
   }
-  return out;
+  const { hits, covers } = pickPrecedence(probes);
+  return { extras: hits.map(probeExtra), covers };
+}
+
+/** The pick extras of `bodyPickScan`. */
+export function bodyPickExtras(bodies: readonly DrawnBody[], ctx: BodyPickContext): PickExtra[] {
+  return bodyPickScan(bodies, ctx).extras;
 }
 
 /**
@@ -81,5 +89,5 @@ export function gatherWithBodies(
   // an object is aimed at, whatever is behind it: the body lookup is skipped
   if (objects.total > 0) return resolvePick(objects, null);
   const list = bodyExtras();
-  return resolvePick(objects, list.length ? gatherCandidates([], list, m, w, h, px, py, opts) : { items: [], total: 0 });
+  return resolvePick(objects, list.length ? gatherCandidates([], list, m, w, h, px, py, { ...opts, covers: undefined }) : { items: [], total: 0 });
 }

@@ -82,6 +82,25 @@ export interface PickOptions {
   created?: ReadonlyMap<string, number>;
   /** list purely by distance to the cursor (hover: the object under the pointer, not the newest one near it) */
   nearestFirst?: boolean;
+  /**
+   * the discs of the drawn bodies that hold the cursor (`bodyPickScan`): a point (or an extra with a position) whose centre is
+   * not inside one of them is not a candidate, so an object beside a planet cannot take a click aimed at the planet's disc.
+   * Empty or absent: no restriction.
+   */
+  covers?: readonly CoverDisc[];
+}
+
+/** A drawn body's disc on screen, CSS px (see `pickPrecedence`). */
+export interface CoverDisc {
+  sx: number;
+  sy: number;
+  r: number;
+}
+
+/** Is the screen point inside one of the discs? */
+export function inCover(covers: readonly CoverDisc[], sx: number, sy: number): boolean {
+  for (const c of covers) if (Math.hypot(sx - c.sx, sy - c.sy) <= c.r) return true;
+  return false;
 }
 
 interface Raw {
@@ -132,6 +151,7 @@ export function gatherCandidates(
       const r = Math.max(cluster, MIN_HIT_PX, size[i] * 0.5 + 4);
       const d2 = dx * dx + dy * dy;
       if (d2 <= r * r) {
+        if (opts.covers?.length && !inCover(opts.covers, sx, sy)) continue; // beside the body whose disc holds the cursor
         if (opts.discHidden && show[i] < SHOW_EXEMPT_MIN && opts.discHidden(x, y, z)) continue;
         const hier = src.rank?.[i] ?? opts.ranks?.get(ids[i]) ?? DEFAULT_RANK;
         raws.push({ hier, created: opts.created?.get(ids[i]) ?? 0, rank: d2 - src.bias, d2, id: ids[i], x, y, z, checkOcc: true });
@@ -139,6 +159,11 @@ export function gatherCandidates(
     }
   }
   for (const e of extras) {
+    if (opts.covers?.length && e.rel) {
+      const [x, y, z] = e.rel;
+      const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+      if (cw > 0 && !inCover(opts.covers, ((m[0] * x + m[4] * y + m[8] * z + m[12]) / cw * 0.5 + 0.5) * w, (1 - ((m[1] * x + m[5] * y + m[9] * z + m[13]) / cw * 0.5 + 0.5)) * h)) continue;
+    }
     const hier = e.rank ?? opts.ranks?.get(e.id) ?? DEFAULT_RANK;
     raws.push({
       hier, created: e.created ?? opts.created?.get(e.id) ?? 0, discPx: e.discPx, rank: e.d2, d2: e.d2, id: e.id,
@@ -147,7 +172,7 @@ export function gatherCandidates(
   }
   // highest in the hierarchy first, then the most recently created, then the nearest to the cursor
   if (opts.nearestFirst) raws.sort((a, b) => a.rank - b.rank);
-  else raws.sort((a, b) => a.hier - b.hier || b.created - a.created || a.rank - b.rank);
+  else raws.sort((a, b) => a.hier - b.hier || Math.min(b.discPx ?? 0, 1e9) - Math.min(a.discPx ?? 0, 1e9) || b.created - a.created || a.rank - b.rank);
 
   const items: PickHit[] = [];
   const seen = new Set<string>();
@@ -208,11 +233,30 @@ export interface BodyPickInput {
   checkOcclusion?: boolean;
 }
 
-/**
- * The pick extra for a drawn body (Earth, Moon, Sun, Mars), or null when the cursor is not on it or it is behind the
- * camera. `d2` is the squared px distance from the cursor to the disc's centre; the hit area is `bodyHitRadiusPx`.
- */
-export function bodyPickExtra(b: BodyPickInput): PickExtra | null {
+/** Radius of the marker a body keeps however small its disc is, px: where a body in front of a larger one can still be hit. */
+export const BODY_MARKER_PX = 5;
+
+/** A drawn body measured against the cursor (`probeBody`): the input of `pickPrecedence`. */
+export interface BodyProbe {
+  id: string;
+  /** squared px from the cursor to the disc's centre */
+  d2: number;
+  /** screen position of the centre, px */
+  sx: number;
+  sy: number;
+  /** distance from the camera to the centre (any unit, only compared) */
+  dist: number;
+  /** projected radius of the disc, px (Infinity inside the sphere) */
+  discPx: number;
+  /** extended hit radius, px (`bodyHitRadiusPx`) */
+  hitPx: number;
+  rel: readonly [number, number, number];
+  rank?: number;
+  checkOcclusion?: boolean;
+}
+
+/** Measures a drawn body against the cursor; null when it is behind the camera. No hit test: see `pickPrecedence`. */
+export function probeBody(b: BodyPickInput): BodyProbe | null {
   const [x, y, z] = b.rel;
   const m = b.m;
   const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
@@ -220,13 +264,65 @@ export function bodyPickExtra(b: BodyPickInput): PickExtra | null {
   const sx = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / cw * 0.5 + 0.5) * b.w;
   const sy = (1 - ((m[1] * x + m[5] * y + m[9] * z + m[13]) / cw * 0.5 + 0.5)) * b.h;
   const dx = sx - b.px, dy = sy - b.py;
-  const d2 = dx * dx + dy * dy;
-  const R = bodyHitRadiusPx(b.radiusKm, b.k, Math.hypot(x, y, z), b.fovDeg, b.h, b.minPx);
-  if (d2 > R * R) return null;
-  const extra: PickExtra = { id: b.id, d2, discPx: bodyDiscRadiusPx(b.radiusKm, b.k, Math.hypot(x, y, z), b.fovDeg, b.h) };
-  if (b.rank !== undefined) extra.rank = b.rank;
-  if (b.checkOcclusion) extra.rel = [x, y, z];
+  const dist = Math.hypot(x, y, z);
+  const p: BodyProbe = {
+    id: b.id, d2: dx * dx + dy * dy, sx, sy, dist, rel: [x, y, z],
+    discPx: bodyDiscRadiusPx(b.radiusKm, b.k, dist, b.fovDeg, b.h),
+    hitPx: bodyHitRadiusPx(b.radiusKm, b.k, dist, b.fovDeg, b.h, b.minPx),
+  };
+  if (b.rank !== undefined) p.rank = b.rank;
+  if (b.checkOcclusion) p.checkOcclusion = true;
+  return p;
+}
+
+/** The pick extra of a probed body. */
+export function probeExtra(p: BodyProbe): PickExtra {
+  const extra: PickExtra = { id: p.id, d2: p.d2, discPx: p.discPx };
+  if (p.rank !== undefined) extra.rank = p.rank;
+  if (p.checkOcclusion) extra.rel = [p.rel[0], p.rel[1], p.rel[2]];
   return extra;
+}
+
+/**
+ * The pick extra for a drawn body (Earth, Moon, Sun, Mars), or null when the cursor is not on it or it is behind the
+ * camera. `d2` is the squared px distance from the cursor to the disc's centre; the hit area is `bodyHitRadiusPx`. One body
+ * on its own: with several, `pickPrecedence` decides which hit areas count.
+ */
+export function bodyPickExtra(b: BodyPickInput): PickExtra | null {
+  const p = probeBody(b);
+  return p && p.d2 <= p.hitPx * p.hitPx ? probeExtra(p) : null;
+}
+
+/**
+ * THE precedence rule between drawn bodies under one cursor, for picks and hover (the labels' twin is
+ * `LabelPlanner`'s disc test, lib/labels.ts):
+ *
+ * - the cursor inside a body's disc (its marker, `BODY_MARKER_PX`, when the disc is smaller) belongs to that body, unless
+ *   another body whose disc also holds the cursor is nearer the camera and at least as big (it covers it). A smaller body in
+ *   front of a larger one keeps its hit, and then both are listed (the choice popup, larger first);
+ * - the extended hit area of a body (14 px minimum, disc + 3 px) applies only where no body's disc holds the cursor: a moon's
+ *   margin never takes a click from inside its planet's disc, and the planet's own 3 px margin does not take one from a
+ *   moon beside its limb.
+ *
+ * Returns the bodies hit (input order) and the discs of those that hold the cursor (`PickOptions.covers`): objects beside
+ * them are not candidates there. Occlusion by other bodies is the caller's (a body behind another is not passed in).
+ */
+export function pickPrecedence(probes: readonly BodyProbe[]): { hits: BodyProbe[]; covers: CoverDisc[] } {
+  const core = (p: BodyProbe) => Math.max(p.discPx, BODY_MARKER_PX);
+  const holding = probes.filter((p) => p.d2 <= core(p) ** 2);
+  const hits: BodyProbe[] = [];
+  const covers: CoverDisc[] = [];
+  for (const p of probes) {
+    if (holding.length === 0) {
+      if (p.d2 <= p.hitPx * p.hitPx) hits.push(p);
+      continue;
+    }
+    if (!holding.includes(p)) continue;
+    if (holding.some((o) => o !== p && o.dist < p.dist && core(o) >= core(p))) continue; // covered by a nearer, larger disc
+    hits.push(p);
+    if (p.d2 <= p.discPx * p.discPx) covers.push({ sx: p.sx, sy: p.sy, r: p.discPx });
+  }
+  return { hits, covers };
 }
 
 /** Hierarchy rank of every entity by id (core `entityRank`), computed once per catalog change for `PickOptions.ranks`. */

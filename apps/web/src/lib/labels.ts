@@ -7,8 +7,14 @@
  * - a body label fades with the body's apparent size: full while it is a small disc, gone once it fills the view (so
  *   labels appear when zoomed out and the default Earth view stays clean);
  * - priority: the selection, then the hovered object, then bodies, then entities marked `render.label`, then the
- *   satellites a search (text or tags) lets through; inside a class the one nearest the screen centre wins. A label that was shown last frame gets a small
- *   bonus so a declutter decision does not flicker as the camera moves;
+ *   satellites a search (text or tags) lets through; inside a class the one nearest the screen centre wins, except among
+ *   bodies, where the bigger disc wins and then the higher in the hierarchy (a planet before its moons). A label that was
+ *   shown last frame gets a small bonus so a declutter decision does not flicker as the camera moves;
+ * - the disc rule: a label never sits on a larger body's disc. A candidate (not the selection or the hovered object) whose
+ *   anchor is inside the disc of a larger body (`addDisc`) is dropped: a moon in front of its planet, a probe over a
+ *   planet. (A backdrop over `BACKDROP_DISC_PX`, the Earth seen from low orbit, still carries the labels of the objects
+ *   in front of it; bodies are held to the rule whatever the size.) A moon's label also fades in only as it clears its
+ *   parent: nothing within `MOON_SEP_MIN` of the parent's limb, full from `MOON_SEP_FULL`;
  * - at most `MAX_LABELS` are shown, and a label whose box would overlap one already accepted is dropped (the selection
  *   and the hovered object are never dropped for overlap);
  * - the planner owns pooled storage: nothing is allocated per frame once it has grown to its working size.
@@ -29,6 +35,12 @@ export const BODY_FADE_FULL_PX = 50;
 export const BODY_FADE_NONE_PX = 220;
 /** Candidates a scan keeps per point set when a search is active (the planner then picks at most `MAX_LABELS`). */
 export const LABEL_SCAN_KEEP = 96;
+/** A disc bigger than this (px radius) is a backdrop: objects drawn in front of it keep their labels, bodies do not. */
+export const BACKDROP_DISC_PX = 120;
+/** A moon's label is hidden while its anchor is closer than this to its parent's limb (a few label heights), px ... */
+export const MOON_SEP_MIN = 2 * LABEL_H;
+/** ... and full from this far, px. */
+export const MOON_SEP_FULL = 4 * LABEL_H;
 /** A label whose opacity is below this is not drawn. */
 const MIN_OPACITY = 0.03;
 
@@ -37,6 +49,10 @@ export type LabelClass = 'selected' | 'hover' | 'body' | 'featured' | 'satellite
 /** Lower = more important. */
 const RANK: Record<LabelClass, number> = { selected: 0, hover: 1, body: 2, featured: 3, satellite: 4 };
 
+/** Apparent sizes are compared to this many px, so near-equal discs fall back on the hierarchy rank. */
+const SIZE_QUANT = 0.5;
+/** Largest apparent size the sort key distinguishes, px. */
+const SIZE_CAP = 1e5;
 /** Px per rank step in the sort key: far above any screen distance. */
 const RANK_STEP = 1e6;
 /** A label shown last frame ranks as if this much nearer the centre. */
@@ -111,6 +127,20 @@ export interface LabelCandidate {
   dx: number;
   /** 0..1 from the caller (body fade) */
   opacity: number;
+  /** a body: its apparent radius, px (0 for anything else); orders the bodies and decides which discs are larger */
+  size: number;
+  /** a body: hierarchy rank (`entityRank`, smaller = higher), the tie-break between equal sizes */
+  rank: number;
+  /** a moon: the entity id of its parent body ('' for the rest); its label waits until it clears the parent (`addDisc`) */
+  parent: string;
+}
+
+/** The disc of a drawn body on screen, px. */
+interface Disc {
+  id: string;
+  x: number;
+  y: number;
+  r: number;
 }
 
 /** A label the planner accepted: `x`/`y` are the top-left of its box. */
@@ -127,26 +157,63 @@ export class LabelPlanner {
   private cands: LabelCandidate[] = [];
   private n = 0;
   private keys = new Float64Array(64);
+  private sub = new Float64Array(64);
   private order: number[] = [];
+  private discs: Disc[] = [];
+  private nDiscs = 0;
   private boxes = new Float64Array(4 * (MAX_LABELS + 8));
   private shown = new Set<string>();
   private prev = new Set<string>();
   /** the accepted labels of the last `plan`, first `count` entries valid (pooled objects, reused by the next call) */
   readonly out: PlannedLabel[] = [];
   count = 0;
-  private readonly byKey = (a: number, b: number): number => this.keys[a] - this.keys[b] || a - b;
+  private readonly byKey = (a: number, b: number): number => this.keys[a] - this.keys[b] || this.sub[a] - this.sub[b] || a - b;
 
   constructor(private readonly max: number = MAX_LABELS) {}
 
   /** Start a frame's candidate list. */
   begin(): void {
     this.n = 0;
+    this.nDiscs = 0;
   }
 
-  add(id: string, text: string, cls: LabelClass, x: number, y: number, dx: number, opacity = 1): void {
+  /** A drawn body's disc this frame (whether or not it has a label), centre in px: the disc rule and the moons' separation read them. */
+  addDisc(id: string, x: number, y: number, r: number): void {
+    let d = this.discs[this.nDiscs];
+    if (!d) d = this.discs[this.nDiscs] = { id: '', x: 0, y: 0, r: 0 };
+    d.id = id;
+    d.x = x;
+    d.y = y;
+    d.r = r;
+    this.nDiscs++;
+  }
+
+  /** Is the point inside the disc of a body bigger than `size` (other than `id` itself)? Objects (size 0) ignore backdrops. */
+  private underLargerDisc(id: string, x: number, y: number, size: number): boolean {
+    for (let i = 0; i < this.nDiscs; i++) {
+      const d = this.discs[i];
+      if (d.id === id || !(d.r > size)) continue;
+      if (size === 0 && d.r > BACKDROP_DISC_PX) continue;
+      if (Math.hypot(x - d.x, y - d.y) <= d.r) return true;
+    }
+    return false;
+  }
+
+  /** How far a moon's label has faded in, 0..1, from its anchor's distance to the parent's limb (1 without a parent disc). */
+  private moonFade(parent: string, x: number, y: number): number {
+    if (parent === '') return 1;
+    for (let i = 0; i < this.nDiscs; i++) {
+      const d = this.discs[i];
+      if (d.id !== parent) continue;
+      return Math.min(1, Math.max(0, (Math.hypot(x - d.x, y - d.y) - d.r - MOON_SEP_MIN) / (MOON_SEP_FULL - MOON_SEP_MIN)));
+    }
+    return 1;
+  }
+
+  add(id: string, text: string, cls: LabelClass, x: number, y: number, dx: number, opacity = 1, size = 0, rank = 0, parent = ''): void {
     if (!(opacity >= MIN_OPACITY)) return;
     let c = this.cands[this.n];
-    if (!c) c = this.cands[this.n] = { id: '', text: '', cls: 'body', x: 0, y: 0, dx: 0, opacity: 1 };
+    if (!c) c = this.cands[this.n] = { id: '', text: '', cls: 'body', x: 0, y: 0, dx: 0, opacity: 1, size: 0, rank: 0, parent: '' };
     c.id = id;
     c.text = text;
     c.cls = cls;
@@ -154,6 +221,9 @@ export class LabelPlanner {
     c.y = y;
     c.dx = dx;
     c.opacity = opacity;
+    c.size = size;
+    c.rank = rank;
+    c.parent = parent;
     this.n++;
   }
 
@@ -163,7 +233,10 @@ export class LabelPlanner {
    */
   plan(vw: number, vh: number): number {
     const n = this.n;
-    if (this.keys.length < n) this.keys = new Float64Array(Math.max(n, this.keys.length * 2));
+    if (this.keys.length < n) {
+      this.keys = new Float64Array(Math.max(n, this.keys.length * 2));
+      this.sub = new Float64Array(this.keys.length);
+    }
     const prev = this.shown;
     this.shown = this.prev;
     this.prev = prev;
@@ -175,8 +248,20 @@ export class LabelPlanner {
       const c = this.cands[i];
       const left = c.x + c.dx, top = c.y - LABEL_H / 2;
       if (left > vw || left + labelWidth(c.text) < 0 || top > vh || top + LABEL_H < 0) continue;
-      const d = Math.hypot(c.x - cx, c.y - cy) * (prev.has(c.id) ? STICKY : 1);
-      this.keys[i] = RANK[c.cls] * RANK_STEP + d;
+      const shown = prev.has(c.id);
+      if (c.cls !== 'selected' && c.cls !== 'hover') {
+        if (this.underLargerDisc(c.id, c.x, c.y, c.size)) continue;
+        if (this.moonFade(c.parent, c.x, c.y) * c.opacity < MIN_OPACITY) continue;
+      }
+      if (c.cls === 'body') {
+        // the bigger disc first, the higher in the hierarchy among equals (a planet before its moons)
+        const size = Math.min(SIZE_CAP, c.size * (shown ? 1.1 : 1));
+        this.keys[i] = RANK.body * RANK_STEP + (SIZE_CAP - Math.round(size / SIZE_QUANT) * SIZE_QUANT);
+        this.sub[i] = c.rank;
+      } else {
+        this.keys[i] = RANK[c.cls] * RANK_STEP + Math.hypot(c.x - cx, c.y - cy) * (shown ? STICKY : 1);
+        this.sub[i] = 0;
+      }
       this.order.push(i);
     }
     this.order.sort(this.byKey);
@@ -202,7 +287,7 @@ export class LabelPlanner {
       o.cls = c.cls;
       o.x = left;
       o.y = top;
-      o.opacity = c.opacity;
+      o.opacity = c.cls === 'selected' || c.cls === 'hover' ? c.opacity : c.opacity * this.moonFade(c.parent, c.x, c.y);
       this.shown.add(c.id);
       count++;
     }
