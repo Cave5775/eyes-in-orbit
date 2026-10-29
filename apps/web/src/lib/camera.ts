@@ -17,6 +17,18 @@ export function settleDistance(rKm: number): number {
   return rKm < 20000 ? 3200 : rKm < 2e6 ? rKm * 0.6 : rKm * 0.45;
 }
 
+/**
+ * Fly-to view of a target at `p`, measured from `centre` (default the Earth's centre): the settle distance of its radius from
+ * that centre and the angles that look at it from outside. An orbiter of another body passes its primary's position, so a
+ * Mars orbiter at 3,800 km from Mars is viewed at 3,200 km, not at the 1e8 km of its geocentric radius.
+ */
+export function settleView(p: V3, centre: V3 = [0, 0, 0]): { dist: number; az: number; el: number } {
+  const d: V3 = [p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]];
+  const r = Math.hypot(d[0], d[1], d[2]);
+  const el = Math.max(-1.2, Math.min(1.2, Math.asin(r > 0 ? d[2] / r : 0) + 0.3));
+  return { dist: settleDistance(r), az: Math.atan2(d[1], d[0]), el };
+}
+
 /** Camera distance that frames a sphere of `radius`, never beyond the zoom limit. */
 export function fitDistanceClamped(radius: number, fovDeg: number, aspect: number, margin: number, minDist: number): number {
   return Math.min(MAX_DIST_KM, Math.max(minDist, fitDistance(radius, fovDeg, aspect, margin)));

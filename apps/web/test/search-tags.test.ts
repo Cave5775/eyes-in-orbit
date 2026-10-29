@@ -86,7 +86,7 @@ describe('matchesTag', () => {
     expect(ids('launch:1997')).toEqual(['sat-24876']);
     expect(ids('launch:199')).toEqual([]); // a year, not a prefix of digits
     expect(ids('type:navigation')).toEqual(['sat-24876']);
-    expect(ids('type:satellites')).toEqual(['sat-44713']); // the category: the navigation satellite is in its own
+    expect(ids('type:satellites')).toEqual(['sat-44713', 'dsn-LRO']); // the category: the navigation satellite is in its own; LRO is an orbiter of the Moon, a satellite of it (lib/view-class.ts)
     expect(ids('type:satellite')).toEqual(['sat-44713', 'sat-24876']); // the kind
     expect(ids('type:moon')).toEqual(['body-moon']);
   });

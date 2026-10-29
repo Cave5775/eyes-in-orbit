@@ -1,5 +1,6 @@
 import { defaultBodies, type EntityRecord } from '@eio/core';
 import { fmtDays, fmtKm, fmtNum } from './format';
+import { viewClass } from './view-class';
 
 /** Pure parts of the detail panel's body facts and the EntityBrowser's category chips. */
 
@@ -60,7 +61,7 @@ export const CATEGORIES: readonly Category[] = [
   { id: 'satellites', label: 'Satellites', color: '#90bef1', hint: 'Satellites that are not navigation, stations or debris (Starlink, active, amateur...)' },
   { id: 'stations', label: 'Stations', color: '#f9f684', hint: 'Space stations (ISS, Tiangong)' },
   { id: 'navigation', label: 'Navigation', color: '#ff58a6', hint: 'GNSS satellites (GPS, GLONASS, Galileo, BeiDou)' },
-  { id: 'probes', label: 'Probes', color: '#7781f2', hint: 'Probes, landers and rovers' },
+  { id: 'probes', label: 'Probes', color: '#7781f2', hint: 'Deep-space probes, landers and rovers (orbiters of other bodies are satellites)' },
   { id: 'launch-vehicles', label: 'Launch vehicles', color: '#fb9f21', hint: 'Launch vehicles, stages and capsules' },
   { id: 'debris', label: 'Debris', color: '#777d7f', hint: 'Debris and spent rocket bodies' },
   { id: 'ground', label: 'Ground', color: '#40b272', hint: 'Ground stations and launch pads' },
@@ -80,12 +81,14 @@ const NAV_GROUP_NAMES: ReadonlySet<string> = new Set(['gps-ops', 'glo-ops', 'gal
  * in entity.ts, the palette, the legend, the lists): `render.colorKey` is only an advisory hint from the feed, and the old
  * per-constellation `starlink` key is just a satellite here.
  */
-export function categoryOf(rec: { kind: string; group?: string; render?: { colorKey?: string } }): CategoryId {
+export function categoryOf(rec: { kind: string; group?: string; bodyId?: string; provider?: { type: string }; render?: { colorKey?: string } }): CategoryId {
   const k = rec.kind;
   const ck = rec.render?.colorKey;
   if (BODY_CATEGORY_KINDS.has(k) || ck === 'body') return 'bodies';
   if (k === 'station' || ck === 'station') return 'stations';
   if (k === 'debris' || ck === 'debris') return 'debris';
+  // an orbiter of another body (MRO, LRO) is a satellite of that body, not a deep-space probe (lib/view-class.ts)
+  if (rec.bodyId !== undefined && viewClass({ kind: k, bodyId: rec.bodyId, provider: rec.provider as EntityRecord['provider'] }) === 'orbiter') return 'satellites';
   if (k === 'probe' || k === 'rover' || k === 'lander' || ck === 'probe' || ck === 'rover') return 'probes';
   if (k === 'launch_vehicle' || k === 'stage' || k === 'capsule' || ck === 'vehicle') return 'launch-vehicles';
   if (k === 'ground_station' || k === 'pad' || ck === 'ground') return 'ground';

@@ -32,7 +32,7 @@ Open <http://localhost:5173>. Run the tests with `npm test`.
 |---|---|
 | Left drag / wheel | Orbit / zoom |
 | Right drag | Pan |
-| Click | Select an object |
+| Click | Select an object (an orbiter of another body, like MRO round Mars or LRO round the Moon, is a satellite of that body and is framed from it; an object with no position now shows its parent or primary body) |
 | `F` | Frame the selection |
 | `S` | Toggle the surface-aligned view |
 | `Esc` | Deselect and return to Earth view |

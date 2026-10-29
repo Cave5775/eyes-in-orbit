@@ -133,6 +133,12 @@ One universal rule decides which orbit lines are drawn, from one pure function (
 
 ## Work split and file ownership (phase 1, parallel)
 
+## Entity classes and untracked selection
+
+- **One rule** (`viewClass`, `lib/view-class.ts`) classifies by primary body and trajectory, never by name: `body`; `orbiter` (a spacecraft on a closed orbit round a body other than the Earth and the Sun: `bodyId` is that registry body and the track is not a surface point, e.g. MRO, LRO); `satellite` (Earth-bound satellite, station, capsule, or an Earth-bound probe under `NEAR_ORBIT_KM` = 100,000 km); `probe` (Sun-bound, an Earth-bound probe beyond that, rovers and landers: Voyager, JWST at L2, New Horizons); `other`.
+- **Uses**: the fly-to distance of an orbiter is `settleDistance` of its radius from its primary (`settleView`, `lib/camera.ts`), as an Earth satellite uses its geocentric radius, so MRO is framed at 3,200 km round Mars, not at the 1e8 km of Mars from the Earth; `categoryOf` puts an orbiter in `satellites` (the kind stays `probe`, so `kind:probe` still lists it and `type:probes` does not); the surface view stays Earth-only.
+- **Untracked selection** (`focusTarget`, `lib/focus-target.ts`): an entity with no state at the sim time keeps the selection and the detail panel, but the camera frames the nearest ancestor with a position: its `parentId` entity, else its primary body entity, upward, the Earth last. The telemetry tab says "Untracked: showing <name>". When the clock reaches the entity's data, `SceneController` re-focuses it and follows it.
+
 | Agent | Scope | Owns |
 |---|---|---|
 | DATA | per-target centre/frame/body/step in the Horizons connector; LRO Moon-centred and the Mars orbiters (MRO, ODY, MVN, TGO, MEX) Mars-centred (`500@499`, `MARS:inertial`); `bodyId` MOON / MARS; core helpers (orbitable bodies, `relativeState`) and tests | `apps/server/src/connectors/{horizons,dsn-targets}.ts` (+tests, fixtures), `packages/core/src/{bodies,entity-graph,frames}.ts` additions, `apps/web/src/mock/generators.ts` (a mock LRO around the mock Moon, a mock MRO around Mars) |

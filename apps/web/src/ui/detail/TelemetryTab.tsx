@@ -1,4 +1,5 @@
 import { isBodyEntity, type EntityRecord } from '@eio/core';
+import { focusTarget } from '../../lib/focus-target';
 import { BODY_ATTR_KEYS, bodyFacts } from '../../lib/browser-ui';
 import { isIss } from '../../lib/entity';
 import {
@@ -29,6 +30,15 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
   const tel = computeTelemetry(graph, rec, now, frame.centre);
   const range = tel ? undefined : graph.provider(rec.id)?.validRange;
   const conf = confidenceLabel(tel?.confidence);
+  // untracked: the camera shows the parent (or primary body) instead; the same fallback as the scene's focus
+  const shown = tel ? null : focusTarget(rec, (id) => useStore.getState().entities.get(id), (id) => {
+    const r = useStore.getState().entities.get(id);
+    if (!r) return false;
+    if (isBodyEntity(r)) return true;
+    ensureInGraph(r);
+    return !!graph.stateIn(id, now, 'EARTH:inertial');
+  });
+  const shownName = shown && shown.id !== rec.id ? useStore.getState().entities.get(shown.id)?.name : undefined;
   const code = rec.aliases.dsn;
   const link = code ? dsn?.links.find((l) => l.spacecraft.includes(code)) : undefined;
   const showIss = isIss(rec);
@@ -44,6 +54,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
       {!tel ? (
         <div className="empty">
           No state available at this time (outside the provider's valid range).
+          {shownName && <div className="mono dim">Untracked: showing {shownName}</div>}
           {range && <div className="mono dim">Data covers {fmtShortUtc(range[0])} to {fmtShortUtc(range[1])}</div>}
         </div>
       ) : (

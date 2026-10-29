@@ -8,9 +8,11 @@ import { bodyPickExtras, gatherWithBodies } from '../lib/body-scene';
 import { DIM } from '../lib/dim';
 import { orbitPeriodSec } from '../lib/orbit';
 import { orbitLines, type OrbitRole } from '../lib/orbit-lines';
+import { focusTarget } from '../lib/focus-target';
+import { viewClass } from '../lib/view-class';
 import { EARTH_CENTRE, centreLabel, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleDistance, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_CTX, NO_QUERY, classify, isDrawn, queryActive, type Class, type Ctx, type Query } from '../lib/query';
@@ -166,11 +168,8 @@ function makePointSet(n: number, material: THREE.Material, world?: Float64Array,
 }
 
 /** Distance (km) and angles at which a fly-to settles for a target at world position `p`. */
-function viewFor(p: THREE.Vector3): { dist: number; az: number; el: number } {
-  const r = p.length();
-  const dist = settleDistance(r);
-  const el = Math.max(-1.2, Math.min(1.2, Math.asin(r > 0 ? p.z / r : 0) + 0.3));
-  return { dist, az: Math.atan2(p.y, p.x), el };
+function viewFor(p: THREE.Vector3, centre?: V3): { dist: number; az: number; el: number } {
+  return settleView([p.x, p.y, p.z], centre);
 }
 
 export class SceneController {
@@ -288,6 +287,8 @@ export class SceneController {
   private followFn: ((out: THREE.Vector3, t: number) => boolean) | null = null;
   private follow = false;
   private freeTarget = new THREE.Vector3();
+  /** the selected entity that has no position at the sim time, while the camera shows its parent instead (null: none) */
+  private untrackedId: string | null = null;
   private anchor = new THREE.Vector3();
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
@@ -596,6 +597,7 @@ export class SceneController {
     } else if (req.lat !== undefined && req.lon !== undefined) {
       const lat = req.lat * DEG, lon = req.lon * DEG;
       this.followId = null;
+    this.untrackedId = null;
       this.focusLatLon = { lat, lon };
       this.followFn = (out, t) => {
         this.fixedToWorld(geodeticToFixed({ lat, lon, alt: 0 }, EARTH), out, t);
@@ -622,6 +624,26 @@ export class SceneController {
    * surface orientation (`applyAutoSurface`, skipped for the internal refocuses that pass no request).
    */
   private focusEntity(rec: EntityRecord, req?: FocusRequest): void {
+    // an untracked entity (no state at the sim time) shows its parent / primary body instead of dropping to the Earth view
+    const tgt = focusTarget(rec, (i) => this.recs.get(i), (i) => this.worldPos(i, clock.now(), this.tmp));
+    this.untrackedId = tgt.untracked ? rec.id : null;
+    if (tgt.untracked) {
+      const shown = this.recs.get(tgt.id);
+      if (shown) {
+        this.focusTracked(shown, req && { ...req, id: shown.id });
+        return;
+      }
+    }
+    this.focusTracked(rec, req);
+  }
+
+  /** The fly-to view of a tracked entity: an orbiter of another body is measured from its primary (lib/view-class.ts). */
+  private viewOf(rec: EntityRecord, p: THREE.Vector3): { dist: number; az: number; el: number } {
+    const cls = viewClass(rec, p.length());
+    return cls === 'orbiter' ? viewFor(p, refDisplay(rec.bodyId, clock.now()).r) : viewFor(p);
+  }
+
+  private focusTracked(rec: EntityRecord, req?: FocusRequest): void {
     const id = rec.id;
     if (graph.get(id) !== rec) graph.upsert(rec);
     this.followId = id;
@@ -636,7 +658,7 @@ export class SceneController {
       return;
     }
     if (this.surfaceOn) this.surfaceSrc = { kind: 'entity', id };
-    else if (this.followFn(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+    else if (this.followFn(this.tmp, clock.now())) this.rig.flyTo(this.viewOf(rec, this.tmp));
     if (req) this.applyAutoSurface(req);
   }
 
@@ -874,7 +896,8 @@ export class SceneController {
       this.rig.flyTo({ dist: this.surfaceDist(this.surfaceSrc), az: this.rig.az, el: this.rig.el });
     } else {
       this.setSurfaceMode(false);
-      if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(viewFor(this.tmp));
+      const fr = this.followedRec();
+      if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(fr ? this.viewOf(fr, this.tmp) : viewFor(this.tmp));
     }
   }
 
@@ -1428,6 +1451,12 @@ export class SceneController {
     this.prepareRender(gmst, t);
     this.updateModels(t);
     this.refreshScope(wall);
+      if (this.untrackedId && this.untrackedId === this.selectedId && this.follow && this.worldPos(this.untrackedId, t, this.tmp)) {
+        // the untracked entity gained a position (the clock reached its data): follow it for real
+        const r = this.recs.get(this.untrackedId);
+        this.untrackedId = null;
+        if (r) this.focusEntity(r);
+      }
 
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
       this.lastPickAt = wall;
