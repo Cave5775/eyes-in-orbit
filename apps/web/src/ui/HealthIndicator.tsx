@@ -5,11 +5,11 @@ import { useStore, type ConnState } from '../state/store';
 import { useWallNow } from './hooks';
 
 const CONN_LABEL: Record<ConnState, [string, string]> = {
-  connecting: ['CONNECTING', 'warn'],
-  live: ['LINK UP', 'ok'],
-  reconnecting: ['RECONNECTING', 'warn'],
-  offline: ['OFFLINE', 'bad'],
-  mock: ['MOCK DATA', 'accent'],
+  connecting: ['Connecting', 'warn'],
+  live: ['Link up', 'ok'],
+  reconnecting: ['Reconnecting', 'warn'],
+  offline: ['Offline', 'bad'],
+  mock: ['Mock data', 'accent'],
 };
 
 /** Connection state plus per-connector freshness from `/api/health`; the dot colour of each connector comes from `lib/feed-health.ts`. */
@@ -26,12 +26,12 @@ export function HealthIndicator() {
       <button className="btn health-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <i className={`dot ${tone}`} />
         <span>{label}</span>
-        {red > 0 && <span className="chip bad" title={`${red} data connector${red === 1 ? '' : 's'} failing`}>{red} FAIL</span>}
-        {orange > 0 && <span className="chip orange" title={`${orange} data connector${orange === 1 ? '' : 's'} degraded`}>{orange} WARN</span>}
+        {red > 0 && <span className="chip bad" title={`${red} data connector${red === 1 ? '' : 's'} failing`}>{red} failing</span>}
+        {orange > 0 && <span className="chip orange" title={`${orange} data connector${orange === 1 ? '' : 's'} degraded`}>{orange} degraded</span>}
       </button>
       {open && (
         <div className="popover health-pop">
-          <div className="pop-title">DATA CONNECTORS</div>
+          <div className="pop-title">Data connectors</div>
           {health.length === 0 && <div className="dim">No health data yet.</div>}
           {sortFeeds(health).map((h) => {
             const v = feedView(h);

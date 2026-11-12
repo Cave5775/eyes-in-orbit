@@ -17,7 +17,7 @@ export function FrameBar() {
   const last = frame.crumbs.length - 1;
   return (
     <div className={frame.locked ? 'frame-bar locked' : 'frame-bar'} role="navigation" aria-label="Frame of reference">
-      <span className="frame-label" title="Frame of reference: trails, paths and range / speed readouts are relative to this centre (orbit lines are always round what the object orbits)">FRAME</span>
+      <span className="frame-label" title="Frame of reference: trails, paths and range / speed readouts are relative to this centre (orbit lines are always round what the object orbits)">Frame</span>
       <ol className="frame-crumbs">
         {frame.crumbs.map((c, i) => {
           const usable = entities.has(c.id);
@@ -28,7 +28,7 @@ export function FrameBar() {
                 className={i === last ? 'frame-crumb cur' : 'frame-crumb'} disabled={!usable} aria-current={i === last ? 'location' : undefined}
                 onClick={() => selectObject(c.id)}
                 title={usable ? `Select ${c.label} and fly there (it becomes the frame of reference unless the frame is locked)` : `${c.label} is not in the catalog`}>
-                {c.label.toUpperCase()}
+                {c.label}
               </button>
             </li>
           );
@@ -43,11 +43,11 @@ export function FrameBar() {
           <rect x="1" y="5" width="8" height="5.5" rx="1" fill="currentColor" />
           <path d={frame.locked ? 'M2.8 5V3.4a2.2 2.2 0 0 1 4.4 0V5' : 'M2.8 5V3.4a2.2 2.2 0 0 1 4.2-.9'} fill="none" stroke="currentColor" strokeWidth="1.3" />
         </svg>
-        {frame.locked ? 'LOCKED' : 'LOCK'}
+        {frame.locked ? 'Locked' : 'Lock'}
       </button>
       {noState && (
         <span className="frame-hint" role="status" title={`${frame.label} has no state at the simulation time (outside its data range), so trails and paths relative to it cannot be drawn. Move the time, or pick another frame.`}>
-          NO STATE FOR {frame.label.toUpperCase()} AT THIS TIME: PATHS HIDDEN
+          No state for {frame.label} at this time: paths hidden
         </span>
       )}
     </div>

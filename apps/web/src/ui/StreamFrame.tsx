@@ -57,8 +57,8 @@ export const StreamFrame = memo(function StreamFrame({ url, className = '' }: { 
       {/* transparent: the picture stays unobstructed; a click on it reveals the strip */}
       <div className="stream-cover" onMouseEnter={() => setHot(true)} onClick={() => setHot(true)} />
       <div className="stream-strip">
-        <button className="btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>{playing ? 'PAUSE' : 'PLAY'}</button>
-        <button className="btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>{muted ? 'UNMUTE' : 'MUTE'}</button>
+        <button className="btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>{playing ? 'Pause' : 'Play'}</button>
+        <button className="btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>{muted ? 'Unmute' : 'Mute'}</button>
       </div>
     </div>
   );

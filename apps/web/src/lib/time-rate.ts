@@ -18,9 +18,9 @@ export function splitRate(rate: number, fallback: RatePref = { speed: 1, reverse
   return rate === 0 || !Number.isFinite(rate) ? fallback : { speed: Math.abs(rate), reverse: rate < 0 };
 }
 
-/** Mode chip text: LIVE, PAUSED, or the direction symbol and speed (`◀ x60` while rewinding). */
+/** Clock mode text: Live, Paused, or the direction symbol and speed (`◀ ×60` while rewinding). */
 export function fmtRateLabel(mode: ClockMode, rate: number): string {
-  if (mode === 'live') return 'LIVE';
-  if (mode === 'paused') return 'PAUSED';
+  if (mode === 'live') return 'Live';
+  if (mode === 'paused') return 'Paused';
   return `${rate < 0 ? '◀' : '▶'} ×${Math.abs(rate)}`;
 }

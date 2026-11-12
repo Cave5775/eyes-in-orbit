@@ -8,10 +8,10 @@ export const PANEL_IDS: readonly PanelId[] = ['dsn', 'board', 'ticker', 'legend'
 
 /** What the menu shows for each panel (label, one-line hint). */
 export const PANEL_INFO: Record<PanelId, { label: string; hint: string }> = {
-  dsn: { label: 'DSN', hint: 'Deep Space Network: dishes, links and ranges' },
-  board: { label: 'LAUNCH BOARD', hint: 'Upcoming launches with countdowns' },
-  ticker: { label: 'NEWS TICKER', hint: 'Scrolling spaceflight headlines' },
-  legend: { label: 'COLOUR LEGEND', hint: 'Colour key for the scene, top left under the frame bar' },
+  dsn: { label: 'Deep Space Network', hint: 'Dishes, links and ranges' },
+  board: { label: 'Launches', hint: 'Upcoming launches with countdowns' },
+  ticker: { label: 'News ticker', hint: 'Scrolling spaceflight headlines' },
+  legend: { label: 'Colour legend', hint: 'Category colours, bottom left of the scene' },
 };
 
 /** The DSN panel starts hidden; the rest start shown. */

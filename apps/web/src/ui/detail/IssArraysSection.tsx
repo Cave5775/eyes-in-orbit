@@ -29,7 +29,7 @@ export function IssArraysSection({ rec, now, wall }: { rec: EntityRecord; now: n
 
   return (
     <>
-      <div className="section-title">ARRAYS</div>
+      <div className="section-title">Arrays</div>
       <div className="chips tight">
         <span className={`chip ${tone}`} title={`${SOURCE_HELP[sources.sarj]}  BGA: ${SOURCE_HELP[sources.bga]}`}>{label}</span>
         <span className="chip" title="SARJ readings are verified against live data; BGA angles are shown as the feed reports them but are not verified, so the model uses the computed tilt">

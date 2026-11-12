@@ -9,7 +9,7 @@ import { useStore } from '../state/store';
 import { CredentialsPanel } from './CredentialsPanel';
 import { HealthIndicator } from './HealthIndicator';
 import { useSimNow } from './hooks';
-import { PanelsMenu } from './PanelsMenu';
+import { ViewMenu } from './ViewMenu';
 
 type FieldKey = 'days' | 'hours' | 'minutes' | 'seconds';
 const FIELDS: { key: FieldKey; label: string; ph: string; max: number }[] = [
@@ -92,69 +92,81 @@ export function TopBar() {
 
   const modeLabel = fmtRateLabel(snap.mode, snap.rate);
   const rewinding = !live && cur.reverse;
+  const [utcDate, utcTime] = fmtUtc(now).split(' ');
 
   return (
     <header className="topbar">
-      <div className="brand">
-        <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.4" /><circle cx="8" cy="8" r="2" fill="currentColor" /></svg>
-        <span className="brand-text"><b>EYES</b>IN<b>ORBIT</b></span>
+      <div className="brand" title="EyesInOrbit">
+        <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.2" /><circle cx="8" cy="8" r="2" fill="currentColor" /></svg>
+        <span className="brand-text">EyesInOrbit</span>
       </div>
 
-      <div className="clock">
-        <span className={`mode ${live ? 'ok' : paused ? 'warn' : 'accent'}`} title={live ? 'Real time' : paused ? 'Time is stopped' : rewinding ? 'Time runs backwards' : 'Time runs forwards'}>{modeLabel}</span>
-        <span className="utc mono">{fmtUtc(now)}<small> UTC</small></span>
+      <div className="clock" aria-label="Simulation time, UTC">
+        <span className="utc"><span className="utc-time">{utcTime}</span><small className="utc-zone">UTC</small></span>
+        <span className="utc-date">{utcDate}</span>
       </div>
 
-      <div className="controls">
-        <button className={live ? 'btn active' : 'btn'} onClick={goLive} title="Real time at x1">LIVE</button>
-        <button className="btn" onClick={choosePlay} title={paused ? 'Resume at the chosen speed and direction' : 'Stop time'}>
-          {paused ? 'PLAY' : 'PAUSE'}
+      {/* offset from now: T+dd:hh:mm:ss, editable in place */}
+      <div
+        className={edit ? 'offset editing' : 'offset'} role="group" aria-label="Offset from now"
+        title="Simulation time relative to now, +/-dd:hh:mm:ss. Type a value and press Enter (or leave the field) to jump there"
+        onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) commit(); }}>
+        <span className="offset-t" aria-hidden="true">T</span>
+        <button className="sign" type="button" onClick={flipSign} aria-label={shown.sign < 0 ? 'Behind now (click for ahead)' : 'Ahead of now (click for behind)'}>
+          {shown.sign < 0 ? '−' : '+'}
+        </button>
+        {FIELDS.map((f, i) => (
+          <span key={f.key} className="tf-wrap">
+            {i > 0 && <i>{i === 1 ? 'd' : ':'}</i>}
+            <input
+              className={`tf tf-${f.key}`} type="text" inputMode="numeric" autoComplete="off" spellCheck={false}
+              value={shown[f.key]} placeholder={f.ph} aria-label={`Offset from now, ${f.label}`} title={f.label}
+              onFocus={(e) => {
+                // freeze the display for as long as a field has focus
+                if (!editRef.current) setEdit({ ...offsetFields(offsetMs(clock.now(), Date.now())), dirty: false });
+                e.target.select();
+              }}
+              onChange={(e) => onField(f.key, f.max, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { commit(); e.currentTarget.blur(); }
+                else if (e.key === 'Escape') { setEdit(null); e.currentTarget.blur(); }
+              }}
+            />
+          </span>
+        ))}
+      </div>
+
+      <div className="transport" role="group" aria-label="Time">
+        <button className={live ? 'key on live' : 'key'} onClick={goLive} aria-pressed={live} title="Real time at ×1">
+          <i className="live-dot" aria-hidden="true" />{live ? 'Live' : 'Go live'}
+        </button>
+        <span className={`mode ${live ? 'ok' : paused ? 'warn' : ''}`} title={live ? 'Real time' : paused ? 'Time is stopped' : rewinding ? 'Time runs backwards' : 'Time runs forwards'}>
+          {live ? '' : modeLabel}
+        </span>
+        <button className="key" onClick={choosePlay} aria-label={paused ? 'Play' : 'Pause'} title={paused ? 'Resume at the chosen speed and direction' : 'Stop time'}>
+          {paused
+            ? <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1v8l7-4z" fill="currentColor" /></svg>
+            : <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1h2v8H2zM6 1h2v8H6z" fill="currentColor" /></svg>}
         </button>
         <button
-          className={rewinding ? 'btn rew active' : 'btn rew'} aria-pressed={rewinding} onClick={toggleRewind}
+          className={rewinding ? 'key on warn' : 'key'} aria-pressed={rewinding} onClick={toggleRewind} aria-label="Rewind"
           title="Rewind: run time backwards at the selected speed (click again for forwards)">
-          &#9664;&#9664;<span className="rew-text"> REW</span>
+          <svg width="12" height="10" viewBox="0 0 12 10" aria-hidden="true"><path d="M6 1v8L1 5zM11 1v8L6 5z" fill="currentColor" /></svg>
         </button>
         <div className="speeds" role="group" aria-label="Speed">
           {SPEEDS.map((r) => (
-            <button key={r} className={!live && cur.speed === r ? 'btn active' : 'btn'} onClick={() => chooseSpeed(r)} title={`${r} s of simulation time per real second`}>
-              &times;{r}
+            <button key={r} className={!live && cur.speed === r ? 'key on' : 'key'} aria-pressed={!live && cur.speed === r} onClick={() => chooseSpeed(r)} title={`${r} s of simulation time per real second`}>
+              ×{r}
             </button>
-          ))}
-        </div>
-
-        <div
-          className={edit ? 'offset editing' : 'offset'} role="group"
-          title="Simulation time relative to now, +/-dd:hh:mm:ss. Type a value and press Enter (or leave the field) to jump there"
-          onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) commit(); }}>
-          <button className="sign" type="button" onClick={flipSign} aria-label={shown.sign < 0 ? 'Behind now (click for ahead)' : 'Ahead of now (click for behind)'}>
-            {shown.sign < 0 ? '−' : '+'}
-          </button>
-          {FIELDS.map((f, i) => (
-            <span key={f.key} className="tf-wrap">
-              {i > 0 && <i>:</i>}
-              <input
-                className={`tf tf-${f.key}`} type="text" inputMode="numeric" autoComplete="off" spellCheck={false}
-                value={shown[f.key]} placeholder={f.ph} aria-label={`Offset from now, ${f.label}`} title={f.label}
-                onFocus={(e) => {
-                  // freeze the display for as long as a field has focus
-                  if (!editRef.current) setEdit({ ...offsetFields(offsetMs(clock.now(), Date.now())), dirty: false });
-                  e.target.select();
-                }}
-                onChange={(e) => onField(f.key, f.max, e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { commit(); e.currentTarget.blur(); }
-                  else if (e.key === 'Escape') { setEdit(null); e.currentTarget.blur(); }
-                }}
-              />
-            </span>
           ))}
         </div>
       </div>
 
-      <PanelsMenu />
-      <CredentialsPanel />
-      <HealthIndicator />
+      <div className="topbar-end">
+        <ViewMenu />
+        <CredentialsPanel />
+        <HealthIndicator />
+      </div>
     </header>
   );
 }

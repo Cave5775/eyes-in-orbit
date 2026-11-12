@@ -93,7 +93,7 @@ export function PickPopup({ items, more, x, y, onSelect, onClose, onHighlight }:
       aria-label="Objects under the cursor"
       style={{ left: pos?.left ?? x + 12, top: pos?.top ?? y + 12, visibility: pos ? 'visible' : 'hidden' }}
     >
-      <div className="pop-title">{items.length + more} OBJECTS HERE</div>
+      <div className="pop-title">{items.length + more} objects here</div>
       {items.map((it, i) => (
         <button
           key={it.id}
@@ -109,7 +109,7 @@ export function PickPopup({ items, more, x, y, onSelect, onClose, onHighlight }:
         </button>
       ))}
       {more > 0 && <div className="pick-more">+ {more} more, zoom in to separate them</div>}
-      <div className="pick-hint">WHEEL / ARROWS CHOOSE · CLICK OR ENTER SELECT · ESC CLOSE</div>
+      <div className="pick-hint">Wheel / arrows choose · click or Enter select · Esc close</div>
     </div>
   );
 }

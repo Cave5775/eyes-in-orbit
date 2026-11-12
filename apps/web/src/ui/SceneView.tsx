@@ -9,9 +9,10 @@ import { modelDef } from '../scene/models/registry';
 import { LabelLayer, type LabelItem } from '../scene/LabelLayer';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { usePanels } from '../state/panels';
-import { clock, runtime } from '../state/runtime';
+import { clock, runtime, type CameraCommands } from '../state/runtime';
 import { jumpToSimTime } from '../state/seek';
 import { useStore } from '../state/store';
+import { useView } from '../state/view';
 import { FrameBar } from './FrameBar';
 import { PickPopup, type PickItem } from './PickPopup';
 
@@ -26,12 +27,13 @@ const HELP: [string, string][] = [
   ['Click a launch path', 'With a launch (or its booster) selected, clicking its drawn trajectory jumps the simulation clock to the moment at that point of the flight (T+ shown while hovering), at the current rate. Objects, the choice list and the Earth always take the click first'],
   ['F', 'Fit the selection and its related objects'],
   ['Shift+F', 'Fit everything visible (respects the search and the hidden groups)'],
-  ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or SURFACE switches to the globe view, and that choice is remembered until you press S again'],
+  ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or Surface switches to the globe view, and that choice is remembered until you press S again'],
   ['Esc', 'Deselect and return to the Earth view'],
-  ['MODEL', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or MODEL on such a selection flies to it'],
-  ['LABELS', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
-  ['HIGHLIGHT', 'Dims everything but the selection, the objects related to it and what the search matches (smaller, fainter points) instead of hiding what the search leaves out. Hidden groups stay hidden. Off by default, remembered'],
-  ['PANELS (top bar)', 'Show or hide the DSN panel (hidden by default), the launch board, the news ticker and the colour legend (top left of the scene); a hidden panel gives its space back to the globe and the choice is remembered'],
+  ['Follow, Fit, Model', 'Camera actions for the selection, in the selection panel on the right. Follow keeps the camera on the object; Fit is the same as F'],
+  ['Model', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or Model on such a selection flies to it'],
+  ['View: Labels', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
+  ['View: Highlight', 'Dims everything but the selection, the objects related to it and what the search matches (smaller, fainter points) instead of hiding what the search leaves out. Hidden groups stay hidden. Off by default, remembered'],
+  ['View menu (top bar)', 'Labels, highlight, close-up Earth imagery, scope (draw everything, or only what is near the camera focus) and the colour legend; and show or hide the DSN panel (hidden by default), the launch board, the news ticker and the colour legend; a hidden panel gives its space back to the globe and the choice is remembered'],
   ['H', 'Show / hide this help'],
 ];
 
@@ -49,9 +51,8 @@ export function SceneView() {
   const labelHost = useRef<HTMLDivElement>(null);
   const scene = useRef<SceneController | null>(null);
   const [stats, setStats] = useState<SceneStats | null>(null);
-  const [surface, setSurface] = useState(false);
-  const [help, setHelp] = useState(false);
-  const [scopeAll, setScopeAll] = useState(false);
+  const surface = useView((s) => s.surface);
+  const help = useView((s) => s.help);
   /** open choice popup for a click on overlapping objects */
   const [pick, setPick] = useState<{ items: PickItem[]; more: number; x: number; y: number } | null>(null);
   const closePick = useCallback(() => setPick(null), []);
@@ -62,70 +63,9 @@ export function SceneView() {
   const highlightPick = useCallback((id: string | null) => scene.current?.setPreview(id), []);
   const showLegend = usePanels((s) => s.visible.legend);
   const selectedId = useStore((s) => s.selectedId);
-  const follow = useStore((s) => s.follow);
-  const highlight = useStore((s) => s.highlight);
-  const setHighlight = useStore((s) => s.setHighlight);
-  const setFollow = useStore((s) => s.setFollow);
 
-  /** FIT: the selection plus related objects (parent/children, pad, linked probes or stations) and its drawn path. */
-  const fitSelected = useCallback(() => {
-    const s = useStore.getState();
-    const rec = s.selectedId ? s.entities.get(s.selectedId) : undefined;
-    if (!rec) return;
-    const rel = relatedFor(rec, { entities: s.entities, launches: s.launches, dsn: s.dsn });
-    scene.current?.fitEntities(rel.ids, { points: rel.points });
-  }, []);
-  const fitVisible = useCallback(() => {
-    scene.current?.fitVisible();
-  }, []);
-  const toggleSurface = useCallback(() => scene.current?.toggleSurface(), []);
   // the popup describes where objects were under the cursor: any selection change (a list click, the browser, a hotkey) retires it
   useEffect(() => setPick(null), [selectedId]);
-  const selModel = useStore((s) => modelDef(s.selectedId ? s.entities.get(s.selectedId)?.render?.model : undefined));
-  const showModel = useCallback(() => {
-    const id = useStore.getState().selectedId;
-    if (id) scene.current?.viewModel(id);
-  }, []);
-  // streamed close-up imagery is on unless the user turned it off (remembered per browser)
-  const [detailOn, setDetailOn] = useState(() => {
-    try {
-      return localStorage.getItem('eio.detail') !== 'off';
-    } catch {
-      return true;
-    }
-  });
-  const toggleDetail = useCallback(() => {
-    setDetailOn((v) => {
-      try {
-        localStorage.setItem('eio.detail', v ? 'off' : 'on');
-      } catch { /* private window: the choice just is not remembered */ }
-      scene.current?.setDetailEnabled(!v);
-      return !v;
-    });
-  }, []);
-  // object labels are on unless the user turned them off (remembered per browser)
-  const [labelsOn, setLabelsOn] = useState(() => {
-    try {
-      return localStorage.getItem('eio.labels') !== 'off';
-    } catch {
-      return true;
-    }
-  });
-  const toggleLabels = useCallback(() => {
-    setLabelsOn((v) => {
-      try {
-        localStorage.setItem('eio.labels', v ? 'off' : 'on');
-      } catch { /* private window: the choice just is not remembered */ }
-      scene.current?.setLabelsEnabled(!v);
-      return !v;
-    });
-  }, []);
-  const toggleScope = useCallback(() => {
-    setScopeAll((v) => {
-      scene.current?.setScopeMode(v ? 'auto' : 'all');
-      return !v;
-    });
-  }, []);
 
   useEffect(() => {
     const store = useStore;
@@ -190,18 +130,35 @@ export function SceneView() {
       onPathLabels: showPathLabels,
       onLabels: (labels, n) => objectLayer.update(labels, n),
       onFollowChange: (f) => store.getState().setFollow(f),
-      onSurfaceChange: setSurface,
+      onSurfaceChange: (on) => useView.getState().setSurface(on),
     });
     scene.current = ctl;
     runtime.onFitRequest = (ids) => ctl.fitEntities(ids);
+    const camera: CameraCommands = {
+      fitSelected: () => {
+        const s = store.getState();
+        const rec = s.selectedId ? s.entities.get(s.selectedId) : undefined;
+        if (!rec) return;
+        const rel = relatedFor(rec, { entities: s.entities, launches: s.launches, dsn: s.dsn });
+        ctl.fitEntities(rel.ids, { points: rel.points });
+      },
+      fitVisible: () => ctl.fitVisible(),
+      toggleSurface: () => ctl.toggleSurface(),
+      viewModel: (id) => { ctl.viewModel(id); },
+    };
+    runtime.camera = camera;
     if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime, clock };
     const s0 = store.getState();
-    try {
-      ctl.setDetailEnabled(localStorage.getItem('eio.detail') !== 'off');
-    } catch { /* storage blocked: detail stays on */ }
-    try {
-      ctl.setLabelsEnabled(localStorage.getItem('eio.labels') !== 'off');
-    } catch { /* storage blocked: labels stay on */ }
+    // display settings (View menu): apply the remembered ones now, then every change
+    const v0 = useView.getState();
+    ctl.setDetailEnabled(v0.detail);
+    ctl.setLabelsEnabled(v0.labels);
+    ctl.setScopeMode(v0.scopeAll ? 'all' : 'auto');
+    const unsubView = useView.subscribe((v, p) => {
+      if (v.detail !== p.detail) ctl.setDetailEnabled(v.detail);
+      if (v.labels !== p.labels) ctl.setLabelsEnabled(v.labels);
+      if (v.scopeAll !== p.scopeAll) ctl.setScopeMode(v.scopeAll ? 'all' : 'auto');
+    });
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
     // the query, the selection with the objects related to it (never hidden, filtered out nor scoped out; same lookup FIT
@@ -236,7 +193,9 @@ export function SceneView() {
     return () => {
       clearInterval(timer);
       unsub();
+      unsubView();
       if (runtime.onFitRequest) runtime.onFitRequest = undefined;
+      if (runtime.camera === camera) runtime.camera = undefined; // StrictMode remounts: only clear our own
       ctl.dispose();
       pathLayer.dispose();
       objectLayer.dispose();
@@ -251,19 +210,20 @@ export function SceneView() {
       const k = e.key.toLowerCase();
       if (k === 'f') {
         e.preventDefault();
-        if (e.shiftKey || !useStore.getState().selectedId) fitVisible();
-        else fitSelected();
+        if (e.shiftKey || !useStore.getState().selectedId) runtime.camera?.fitVisible();
+        else runtime.camera?.fitSelected();
       } else if (k === 's' && !e.shiftKey) {
         e.preventDefault();
-        toggleSurface();
-      } else if (k === 'h' || e.key === '?') setHelp((v) => !v);
-      else if (e.key === 'Escape') setHelp(false);
+        runtime.camera?.toggleSurface();
+      } else if (k === 'h' || e.key === '?') useView.getState().toggleHelp();
+      else if (e.key === 'Escape') useView.getState().setHelp(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [fitSelected, fitVisible, toggleSurface]);
+  }, []);
 
   const path = stats?.path;
+  const fromFrame = stats && (!stats.frame.isDefault || stats.frame.locked) ? ` from ${stats.frame.label}` : '';
   return (
     <div className="scene">
       <div ref={host} className="scene-host" />
@@ -272,80 +232,66 @@ export function SceneView() {
       <div ref={pathTip} className="scene-tip" />
       <div ref={pathDot} className="path-dot" />
       {pick && <PickPopup items={pick.items} more={pick.more} x={pick.x} y={pick.y} onSelect={choosePick} onClose={closePick} onHighlight={highlightPick} />}
+      {/* top left: where you are (frame of reference). Top right: the camera. Display settings live in the View menu (top bar),
+          the selection's own camera actions (follow, fit, model) in the selection panel. */}
       <div className="scene-top">
-      <div className="scene-actions">
-        {selectedId && (
-          <button className={follow ? 'btn active' : 'btn'} onClick={() => setFollow(!follow)} title="Keep the camera locked on the selected object">
-            {follow ? 'FOLLOWING' : 'FOLLOW'}
-          </button>
-        )}
-        {selectedId && (
-          <button className="btn" onClick={fitSelected} title="Frame the selection and its related objects (F)">FIT</button>
-        )}
-        {selModel && (
-          <button className="btn" onClick={showModel} title={`Fly to the 3D model (${selModel.label}) and follow it. It replaces the point sprite within ${selModel.lodKm} km.`}>MODEL</button>
-        )}
-        <button className="btn" onClick={fitVisible} title="Frame everything currently visible, respecting the search and the hidden groups (Shift+F)">FIT VISIBLE</button>
-        <button className={surface ? 'btn active' : 'btn'} onClick={toggleSurface} aria-pressed={surface} title="Surface-aligned camera: centred on the selected object, level horizon, north-up. On by default near the Earth; turn it off for the globe view, the choice is remembered (S)">
-          SURFACE
-        </button>
-        <button className={scopeAll ? 'btn active' : 'btn'} onClick={toggleScope} aria-pressed={scopeAll} title="Scope: AUTO draws only what is relevant to the camera focus (nearby objects, the selection and what is related to it, everything the search lets through); ALL draws everything the search allows">
-          SCOPE {scopeAll ? 'ALL' : 'AUTO'}
-        </button>
-        <button className={detailOn ? 'btn active' : 'btn'} onClick={toggleDetail} aria-pressed={detailOn} title="Close-up detail: below about 2,600 km, finer Earth imagery (NASA Blue Marble, up to 0.6 km per pixel) is streamed through the local server and laid over the base map. Off keeps the base map only.">
-          DETAIL
-        </button>
-        <button className={labelsOn ? 'btn active' : 'btn'} onClick={toggleLabels} aria-pressed={labelsOn} title="Labels: names next to the Sun, planets and moons when zoomed out, next to the selection, and next to the satellites a search lets through (at most 48, the ones nearest the screen centre first). Off hides all of them. Remembered.">
-          LABELS
-        </button>
-        <button className={highlight ? 'btn active' : 'btn'} onClick={() => setHighlight(!highlight)} aria-pressed={highlight} title="Highlight: dim everything except the selection, the objects related to it and what the search matches, instead of hiding what the search leaves out. Hidden groups stay hidden. Remembered.">
-          HIGHLIGHT
-        </button>
-        <button className={help ? 'btn icon active' : 'btn icon'} onClick={() => setHelp((v) => !v)} aria-pressed={help} title="Controls (H)">?</button>
+        <FrameBar />
       </div>
-      <FrameBar />
-      {showLegend && (
-        <div className="scene-legend" aria-label="Colour legend">
-          {LEGEND.map(([k, label]) => (
-            <span key={k}><i style={{ background: `var(--c-${k})` }} />{label}</span>
-          ))}
-        </div>
-      )}
+      <div className="scene-tools" role="toolbar" aria-label="Camera">
+        <button className={surface ? 'key on' : 'key'} onClick={() => runtime.camera?.toggleSurface()} aria-pressed={surface}
+          title="Surface-aligned camera: centred on the selected object, level horizon, north-up. On by default near the Earth; turn it off for the globe view, the choice is remembered (S)">
+          Surface<kbd>S</kbd>
+        </button>
+        <button className="key" onClick={() => runtime.camera?.fitVisible()} title="Frame everything currently visible, respecting the search and the hidden groups (Shift+F)">
+          Fit all<kbd>⇧F</kbd>
+        </button>
+        <button className={help ? 'key on' : 'key'} onClick={() => useView.getState().toggleHelp()} aria-pressed={help} aria-label="Scene controls" title="Scene controls (H)">?</button>
       </div>
       {help && (
         <div className="popover scene-help" role="dialog" aria-label="Scene controls">
-          <div className="pop-title">SCENE CONTROLS</div>
-          {HELP.map(([key, text]) => (
-            <div key={key} className="help-row"><kbd>{key}</kbd><span>{text}</span></div>
-          ))}
+          <div className="pop-title">Scene controls</div>
+          <div className="help-scroll">
+            {HELP.map(([key, text]) => (
+              <div key={key} className="help-row"><kbd>{key}</kbd><span>{text}</span></div>
+            ))}
+          </div>
         </div>
       )}
-      <div className="scene-hud mono">
-        {stats && (
-          <>
-            <span>CAM {fmtDist(stats.distKm)}{!stats.frame.isDefault || stats.frame.locked ? ` FROM ${stats.frame.label.toUpperCase()}` : ''}{stats.frame.locked ? ' [LOCKED]' : ''}</span>
-            <span>{stats.satCount.toLocaleString('en-US')} SGP4 + {stats.dynCount} PROP</span>
-            {stats.detail && (
-              <span className="accent" title="Streamed close-up imagery over the base map: tile level (0.6 km per pixel at 6) and tiles received of the 4 x 4 window. Missing tiles show the base map.">
-                DETAIL Z{stats.detail.z} {stats.detail.ready}/{stats.detail.total}
-              </span>
-            )}
-            <span style={{ minWidth: '7ch' }}>{Math.round(stats.fps)} FPS</span>
-            <span style={{ minWidth: '24ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">
-              RENDERED {stats.scope.rendered.toLocaleString('en-US')} / {stats.scope.total.toLocaleString('en-US')}
-            </span>
-            {stats.surface && <span className="accent">SURFACE VIEW ALT {fmtDist(stats.altKm)}</span>}
-            {stats.models.length > 0 && (
-              <span className="accent" title="3D model drawn at true size (the point sprite is replaced once the model is larger than it)">
-                MODEL {stats.models.map((id) => modelDef(useStore.getState().entities.get(id)?.render?.model)?.key.toUpperCase() ?? id).join(', ')}
-                {stats.arrays ? ` · ARRAYS ${sourceLabel(stats.arrays.sources)}` : ''}
-              </span>
-            )}
-            {path && (
-              <span>PATH {fmtPathWindow(path.pastMs, path.futureMs)}</span>
-            )}
-          </>
+      <div className="scene-foot">
+        {showLegend && (
+          <div className="scene-legend" aria-label="Colour legend">
+            {LEGEND.map(([k, label]) => (
+              <span key={k}><i style={{ background: `var(--c-${k})` }} />{label}</span>
+            ))}
+          </div>
         )}
+        <div className="scene-hud mono">
+          {stats && (
+            <>
+              <span>Camera {fmtDist(stats.distKm)}{fromFrame}{stats.frame.locked ? ' (locked)' : ''}</span>
+              <span style={{ minWidth: '22ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">
+                {stats.scope.rendered.toLocaleString('en-US')} of {stats.scope.total.toLocaleString('en-US')} drawn
+              </span>
+              <span title="Satellites propagated with SGP4 in the worker, plus objects propagated on the main thread">
+                {stats.satCount.toLocaleString('en-US')} SGP4, {stats.dynCount} other
+              </span>
+              <span style={{ minWidth: '6ch' }}>{Math.round(stats.fps)} fps</span>
+              {stats.detail && (
+                <span className="lit" title="Streamed close-up imagery over the base map: tile level (0.6 km per pixel at 6) and tiles received of the 4 x 4 window. Missing tiles show the base map.">
+                  Close-up z{stats.detail.z} {stats.detail.ready}/{stats.detail.total}
+                </span>
+              )}
+              {stats.surface && <span className="lit">Surface view, altitude {fmtDist(stats.altKm)}</span>}
+              {stats.models.length > 0 && (
+                <span className="lit" title="3D model drawn at true size (the point sprite is replaced once the model is larger than it)">
+                  Model {stats.models.map((id) => modelDef(useStore.getState().entities.get(id)?.render?.model)?.label ?? id).join(', ')}
+                  {stats.arrays ? `, arrays ${sourceLabel(stats.arrays.sources)}` : ''}
+                </span>
+              )}
+              {path && <span>Path {fmtPathWindow(path.pastMs, path.futureMs)}</span>}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

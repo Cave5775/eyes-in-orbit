@@ -31,18 +31,18 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
       {embedUrl && popped ? (
         <div className="stream-fallback">
           <div className="dim">{link.title} is playing in a pop-out window.</div>
-          <button className="btn active" onClick={() => closeFloat(embedUrl)}>DOCK BACK</button>
+          <button className="btn active" onClick={() => closeFloat(embedUrl)}>Dock back</button>
         </div>
       ) : embedUrl ? (
         <StreamFrame key={embedUrl} url={embedUrl} />
       ) : (
         <div className="stream-fallback">
           <div className="dim">{link.title} cannot be embedded (the provider blocks framing).</div>
-          <a className="btn active" href={href} target="_blank" rel="noopener noreferrer">OPEN {link.kind === 'nasa-tv' ? 'NASA TV' : 'STREAM'}</a>
+          <a className="btn active" href={href} target="_blank" rel="noopener noreferrer">Open {link.kind === 'nasa-tv' ? 'NASA TV' : 'stream'}</a>
         </div>
       )}
       <div className="stream-meta">
-        <span className="mono dim">{link.kind.toUpperCase()}{link.live ? ' / LIVE' : ''}</span>
+        <span className="mono dim">{link.kind === 'nasa-tv' ? 'NASA TV' : 'Stream'}{link.live ? ', live' : ''}</span>
         <span className="stream-actions">
           {embedUrl && !popped && (
             <button
@@ -51,7 +51,7 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
               disabled={full}
               title={full ? `At most ${MAX_FLOATS} pop-out windows: close or dock one first` : 'Open this stream in a floating window'}
             >
-              POP OUT
+              Pop out
             </button>
           )}
           <a href={href} target="_blank" rel="noopener noreferrer">Open in new tab</a>

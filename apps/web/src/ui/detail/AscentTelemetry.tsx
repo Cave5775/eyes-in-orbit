@@ -19,7 +19,7 @@ const X0 = PLOT.left, X1 = W - PLOT.right;
 
 const SERIES_CLASS: Record<SeriesId, string> = { modeled: 'at-modeled', live: 'at-live', file: 'at-file' };
 const SOURCE_TEXT: Record<Reading['source'], string> = {
-  live: 'MEASURED', extrapolated: 'EXTRAPOLATED (modeled shape)', modeled: 'MODELED', file: 'FILE',
+  live: 'Measured', extrapolated: 'Extrapolated (modeled shape)', modeled: 'Modeled', file: 'File',
 };
 
 const fmtValue = (metric: Metric, v: number | undefined): string => (metric === 'speedKmS' ? fmtSpeedKmS(v) : fmtKm(v));
@@ -54,11 +54,11 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
     return () => { clearInterval(id); cancel?.(); };
   }, [flying, load]);
 
-  if (series === undefined) return <div className="at"><div className="section-title">ASCENT TELEMETRY</div><div className="at-note dim">Loading…</div></div>;
+  if (series === undefined) return <div className="at"><div className="section-title">Ascent telemetry</div><div className="at-note dim">Loading…</div></div>;
   if (series === null || (!series.modeled && !series.live && !series.file)) {
     return (
       <div className="at">
-        <div className="section-title">ASCENT TELEMETRY</div>
+        <div className="section-title">Ascent telemetry</div>
         <p className="at-note dim">
           No ascent profile for this vehicle: modeled ascents cover Falcon 9. Measured rows can be posted to
           <span className="mono"> POST /api/telemetry/{launch.id}</span>.
@@ -72,16 +72,16 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
   const reading = readingAt(series, Math.max(0, tSec));
   const inFlight = tSec >= 0 && tSec <= tMax;
   const onOrbit = liveMission(launch, now).phase === 'ON_ORBIT';
-  const phaseLabel = tSec < 0 ? 'PRE-LAUNCH' : phase?.label ?? (tSec > tMax ? postAscentLabel(series, tSec, onOrbit) : 'IN FLIGHT');
+  const phaseLabel = tSec < 0 ? 'Pre-launch' : phase?.label ?? (tSec > tMax ? postAscentLabel(series, tSec, onOrbit) : 'In flight');
   const m = series.modeled;
 
   return (
     <div className="at">
-      <div className="section-title">ASCENT TELEMETRY</div>
+      <div className="section-title">Ascent telemetry</div>
       <div className="chips tight at-chips">
-        {series.source === 'live' && <span className="chip ok">LIVE · MEASURED</span>}
-        {series.source === 'file' && <span className="chip">TRAJECTORY FILE{series.file ? ` · ${series.file.id}` : ''}</span>}
-        {series.source === 'modeled' && <span className="chip warn">MODELED · NOMINAL</span>}
+        {series.source === 'live' && <span className="chip ok">Live · measured</span>}
+        {series.source === 'file' && <span className="chip">Trajectory file{series.file ? ` · ${series.file.id}` : ''}</span>}
+        {series.source === 'modeled' && <span className="chip warn">Modeled · nominal</span>}
         <span className={inFlight ? 'chip on' : 'chip dim'} data-testid="at-phase">{phaseLabel}</span>
       </div>
 
@@ -123,10 +123,10 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
 function Readouts({ reading, tSec }: { reading: Reading | null; tSec: number }) {
   return (
     <div className="at-readouts" role="group" aria-label="Current values at the simulation time">
-      <Cell label="SIM TIME" value={fmtTPlus(tSec)} />
-      <Cell label="ALTITUDE" value={fmtKm(reading?.altKm)} />
-      <Cell label="SPEED" value={fmtSpeedKmS(reading?.speedKmS)} />
-      <Cell label="DOWNRANGE" value={fmtKm(reading?.downrangeKm)} />
+      <Cell label="Sim time" value={fmtTPlus(tSec)} />
+      <Cell label="Altitude" value={fmtKm(reading?.altKm)} />
+      <Cell label="Speed" value={fmtSpeedKmS(reading?.speedKmS)} />
+      <Cell label="Downrange" value={fmtKm(reading?.downrangeKm)} />
       <div className="at-src dim">{reading ? SOURCE_TEXT[reading.source] : ''}</div>
     </div>
   );
@@ -141,7 +141,7 @@ function PlanReadouts({ series, tMs }: { series: AscentSeries; tMs: number }) {
   const picks = ['MAX_Q', 'MECO', 'SECO'].map((n) => timelineEvents(series).find((e) => e.name === n)).filter((e): e is AscentEvent => !!e);
   return (
     <div className="at-readouts plan" role="group" aria-label="Launch plan">
-      <Cell label="LIFTOFF" value={formatCountdown(tMs)} />
+      <Cell label="Liftoff" value={formatCountdown(tMs)} />
       {picks.map((e) => (
         <div className="at-cell" key={e.name}>
           <span className="at-lab">{e.label} · {fmtTPlus(e.tSec)}</span>
@@ -246,7 +246,7 @@ function Timeline({ series, events, tMax, tSec, onOrbit, hoverT, onHover, onJump
 
   return (
     <figure className="at-chart at-timeline">
-      <figcaption><span>EVENTS</span><span className="dim"> T+ · {current ? current.label : tSec < 0 ? 'pre-launch' : postAscentLabel(series, tSec, onOrbit).toLowerCase()}</span></figcaption>
+      <figcaption><span>Events</span><span className="dim"> T+ · {current ? current.label : tSec < 0 ? 'pre-launch' : postAscentLabel(series, tSec, onOrbit).toLowerCase()}</span></figcaption>
       <svg className="at-jumpable" viewBox={`0 0 ${W} ${TL.h}`} role="img" aria-label="Ascent event timeline"
         onPointerMove={(e) => onHover(plotTimeAt(svgX(e), X0, X1, tMax))}
         onPointerLeave={() => onHover(null)}

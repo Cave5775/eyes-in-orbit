@@ -19,7 +19,7 @@ export function LaunchBoard() {
   return (
     <section className="panel board">
       <div className="panel-head">
-        <span>LAUNCH BOARD</span>
+        <span>Launches</span>
         <span className="mono dim">{board.length} upcoming</span>
       </div>
       {board.length === 0 ? (
@@ -43,7 +43,7 @@ export function LaunchBoard() {
                 </button>
                 {Number.isFinite(net) && (
                   <button className="card-skip" onClick={() => skipToLaunch(l)} title={skipTitle(l.status.id, `${fmtUtc(net)} UTC`)} aria-label={`Skip to launch: ${l.mission?.name ?? l.name}`}>
-                    SKIP
+                    Skip
                   </button>
                 )}
               </div>

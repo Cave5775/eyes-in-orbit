@@ -283,7 +283,7 @@ export function EntityBrowser() {
         onClick={() => pick(id)}>
         <i className="swatch" style={{ background: `var(--c-${rec ? colorKeyOf(rec) : 'satellites'}, var(--c-satellites))` }} />
         <span className="row-name">{name}</span>
-        {isFrame && <span className="row-frame" title="The frame of reference is centred on this object">FRAME</span>}
+        {isFrame && <span className="row-frame" title="The frame of reference is centred on this object">Frame</span>}
         <span className="row-kind">{kindLabel(kind)}</span>
       </button>
     );
@@ -330,7 +330,7 @@ export function EntityBrowser() {
         <button
           className="tree-body-name" onClick={() => chooseBody(r.key, r.entityId)}
           title={`Select the ${r.name} (it becomes the frame of reference unless the frame is locked) and fly there`}>
-          {r.name.toUpperCase()}
+          {r.name}
         </button>
         <span className="tree-count mono">{r.count.toLocaleString('en-US')}</span>
         {eyeButton(['body', r.bodyId.toLowerCase()], `everything under the ${r.name} (its moons too)`)}
@@ -362,10 +362,10 @@ export function EntityBrowser() {
   return (
     <aside className="panel left">
       <div className="panel-head">
-        <span>ENTITIES</span>
+        <span>Objects</span>
         <span className="seg" role="group" aria-label="Entity view">
-          <button className={mode === 'tree' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'tree'} onClick={() => setMode('tree')} title="Group objects under the body they orbit (Sun, Earth, Moon, Mars)">TREE</button>
-          <button className={mode === 'list' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'list'} onClick={() => setMode('list')} title="One flat list">LIST</button>
+          <button className={mode === 'tree' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'tree'} onClick={() => setMode('tree')} title="Group objects under the body they orbit (Sun, Earth, Moon, Mars)">Tree</button>
+          <button className={mode === 'list' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'list'} onClick={() => setMode('list')} title="One flat list">List</button>
         </span>
         <span className="mono dim">{rows.length.toLocaleString('en-US')}{query.terms.length ? '' : ` / ${entities.size.toLocaleString('en-US')}`}</span>
       </div>
@@ -407,7 +407,7 @@ export function EntityBrowser() {
                 <div key={t}><dt className="mono">{t}</dt><dd>{d}</dd></div>
               ))}
             </dl>
-            <div>Type <span className="mono">group:</span>, <span className="mono">#</span> or <span className="mono">launch:</span> to list the groups or launches. The eye on a category, a tag chip or a tree header hides it: not drawn, not listed. The search and the tags also thin the scene; HIGHLIGHT dims instead.</div>
+            <div>Type <span className="mono">group:</span>, <span className="mono">#</span> or <span className="mono">launch:</span> to list the groups or launches. The eye on a category, a tag chip or a tree header hides it: not drawn, not listed. The search and the tags also thin the scene; highlight dims instead.</div>
           </div>
         )}
       </div>
@@ -437,8 +437,8 @@ export function EntityBrowser() {
               </span>
             );
           })}
-          {hasHidden && <button className="chip more" onClick={showAll} title="Show every hidden group again">SHOW ALL</button>}
-          {(filtering || input !== '') && <button className="chip clear" onClick={clearAll} title="Clear the search: the chips and the typed text (hidden groups stay)">CLEAR</button>}
+          {hasHidden && <button className="chip more" onClick={showAll} title="Show every hidden group again">Show all</button>}
+          {(filtering || input !== '') && <button className="chip clear" onClick={clearAll} title="Clear the search: the chips and the typed text (hidden groups stay)">Clear</button>}
         </div>
       </div>
       {rows.length === 0 ? (

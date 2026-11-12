@@ -36,6 +36,7 @@ Open <http://localhost:5173>. Run the tests with `npm test`.
 | `F` | Frame the selection |
 | `S` | Toggle the surface-aligned view |
 | `Esc` | Deselect and return to Earth view |
+| View menu (top bar) | Labels, highlight, scope, legend and which panels are shown |
 | `H` or `?` | Show all controls in the app |
 
 ## Where the data comes from

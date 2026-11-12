@@ -50,7 +50,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
 
   return (
     <div>
-      <div className="section-title">STATE @ SIM TIME</div>
+      <div className="section-title">State @ sim time</div>
       {!tel ? (
         <div className="empty">
           No state available at this time (outside the provider's valid range).
@@ -75,7 +75,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
 
       {facts.length > 0 && (
         <>
-          <div className="section-title">BODY</div>
+          <div className="section-title">Body</div>
           <dl className="kv">
             {facts.map((f) => <Field key={f.label} label={f.label} value={f.value} mono />)}
           </dl>
@@ -84,7 +84,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
 
       {showIss && (
         <>
-          <div className="section-title">ISS LIVE FIX</div>
+          <div className="section-title">ISS live fix</div>
           {iss.fix ? (
             <dl className="kv">
               <Field label="Latitude" value={fmtLat(iss.fix.latitude)} mono />
@@ -117,7 +117,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
 
       {(link || code) && (
         <>
-          <div className="section-title">DEEP SPACE NETWORK LINK</div>
+          <div className="section-title">Deep Space Network link</div>
           {link ? (
             <dl className="kv">
               <Field label="Dish" value={`${link.dish} (${link.complex})`} />
@@ -135,7 +135,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
 
       {attrs.length > 0 && (
         <>
-          <div className="section-title">ATTRIBUTES</div>
+          <div className="section-title">Attributes</div>
           <dl className="kv">
             {attrs.map(([k, v]) => (
               <Field key={k} label={humanize(k)} value={fmtAttr(k, v as string | number | boolean)} mono={typeof v === 'number'} />
@@ -146,7 +146,7 @@ export function TelemetryTab({ rec }: { rec: EntityRecord }) {
 
       {Object.keys(rec.aliases).length > 0 && (
         <>
-          <div className="section-title">IDENTIFIERS</div>
+          <div className="section-title">Identifiers</div>
           <dl className="kv">
             <Field label="id" value={rec.id} mono wrap />
             {Object.entries(rec.aliases).map(([k, v]) => <Field key={k} label={k} value={v} mono wrap />)}

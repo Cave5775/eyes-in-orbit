@@ -16,7 +16,7 @@ export function DsnPanel() {
   return (
     <section className="panel dsn">
       <div className="panel-head">
-        <span>DEEP SPACE NETWORK</span>
+        <span>Deep Space Network</span>
         <span className="mono dim">{dsn ? `${active.length} active · ${fmtAgo(dsn.fetchedAt, wall)}` : 'no data'}</span>
       </div>
       {!dsn ? (
@@ -24,7 +24,7 @@ export function DsnPanel() {
       ) : (
         <table className="dsn-table">
           <thead>
-            <tr><th>DISH</th><th>CRAFT</th><th className="num">RANGE</th><th className="num">RTLT</th><th className="num">DOWN</th></tr>
+            <tr><th>Dish</th><th>Craft</th><th className="num">Range</th><th className="num">RTLT</th><th className="num">Down</th></tr>
           </thead>
           <tbody>
             {[...active, ...idle].map((l) => {

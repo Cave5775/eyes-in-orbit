@@ -18,15 +18,15 @@ export function LaunchTab({ launch }: { launch: Launch }) {
       {Number.isFinite(net) && (
         <div className="skip-row">
           <button className="btn" onClick={() => skipToLaunch(launch)} title={skipTitle(launch.status.id, `${fmtUtc(net)} UTC`)}>
-            SKIP TO LAUNCH
+            Skip to launch
           </button>
         </div>
       )}
       <div className="chips tight">
         <span className={`chip ${statusTone(launch.status.id)}`}>{launch.status.name}</span>
         <span className="chip">{m.phase.replace(/_/g, ' ')}</span>
-        {m.hold && <span className="chip warn">HOLD</span>}
-        {m.inferred && <span className="chip dim">PHASE INFERRED</span>}
+        {m.hold && <span className="chip warn">Hold</span>}
+        {m.inferred && <span className="chip dim">Phase inferred</span>}
       </div>
       <dl className="kv">
         <Field label="NET" value={`${fmtUtc(net)} UTC`} />

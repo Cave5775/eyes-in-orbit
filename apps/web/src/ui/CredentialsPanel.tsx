@@ -52,11 +52,11 @@ export function CredentialsPanel() {
   return (
     <div className="health">
       <button className="btn health-btn keys-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open} title="API keys and logins">
-        KEYS
+        Keys
       </button>
       {open && (
         <div className="popover keys-pop">
-          <div className="pop-title">API KEYS &amp; LOGINS</div>
+          <div className="pop-title">API keys and logins</div>
           <p className="dim keys-note">
             Optional. Saved on this machine only (the local server&rsquo;s cache) and used for its own requests; secrets are never
             shown again. They override the same values from <code>.env</code>.
@@ -103,7 +103,7 @@ export function CredentialsPanel() {
           {error && <div className="keys-error">{error}</div>}
           <div className="keys-actions">
             <button className="btn active" disabled={busy || edited.length === 0} onClick={() => void save(Object.fromEntries(edited))}>
-              {busy ? 'SAVING…' : 'SAVE'}
+              {busy ? 'Saving…' : 'Save'}
             </button>
             {savedAt && <span className="dim keys-saved">saved {fmtAgo(savedAt, now)}; the connector retries now</span>}
           </div>

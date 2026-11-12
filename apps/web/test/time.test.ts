@@ -116,8 +116,8 @@ describe('rate helpers', () => {
   });
 
   it('labels direction', () => {
-    expect(fmtRateLabel('live', 1)).toBe('LIVE');
-    expect(fmtRateLabel('paused', 60)).toBe('PAUSED');
+    expect(fmtRateLabel('live', 1)).toBe('Live');
+    expect(fmtRateLabel('paused', 60)).toBe('Paused');
     expect(fmtRateLabel('scrubbed', 60)).toBe('▶ ×60');
     expect(fmtRateLabel('scrubbed', -60)).toBe('◀ ×60');
   });
