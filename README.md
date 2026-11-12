@@ -2,7 +2,7 @@
 
 A local mission control for spaceflight. It pulls public feeds (satellite orbits, upcoming launches, the Deep Space Network, the ISS, space news), keeps them in a small database on your machine, and shows everything on an interactive 3D globe.
 
-<!-- Add a screenshot here: ![EyesInOrbit](docs/screenshot.png) -->
+<img width="2255" height="1275" alt="image" src="https://github.com/user-attachments/assets/1d3312c5-b37e-4569-99ee-27c462c0ca5e" />
 
 ## What you can do
 
