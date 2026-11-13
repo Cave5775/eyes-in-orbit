@@ -174,7 +174,7 @@ describe('floating windows: open, focus, close, cap', () => {
     expect(focusFloatWindow(list, D)).toBe(list);
   });
 
-  it('close and dock remove the window and nothing else', () => {
+  it('close removes the window and nothing else', () => {
     const list = [win(A, 1), win(B, 2)];
     expect(closeFloatWindow(list, A).map((f) => f.url)).toEqual([B]);
     expect(closeFloatWindow(list, D)).toBe(list);

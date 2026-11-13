@@ -78,7 +78,7 @@ interface State {
   upsertEntities(records: EntityRecord[], replace?: boolean): void;
   /** Pop a stream out into a floating window (no-op at the cap; focuses it when already open). */
   openFloat(url: string, title: string): void;
-  /** Close a floating window, or dock it back to its tab (both remove it from the floating list). */
+  /** Close a floating window (the Stream tab's "Dock back" uses this too; the tab then plays the stream again). */
   closeFloat(url: string): void;
   focusFloat(url: string): void;
   /** Move or resize a floating window; the store clamps it to the viewport and keeps 16:9. */

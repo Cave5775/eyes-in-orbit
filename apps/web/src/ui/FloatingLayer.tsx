@@ -91,7 +91,6 @@ function FloatingWindow({ win, vp }: { win: FloatWindow; vp: Viewport }) {
         title="Drag to move"
       >
         <span className="float-title" title={win.title}>{win.title}</span>
-        <button className="float-btn" onClick={() => close(win.url)} title="Dock back to the Stream tab" aria-label="Dock back to the Stream tab">Dock</button>
         <button className="float-btn" onClick={() => close(win.url)} title="Close this window" aria-label="Close this window">&times;</button>
       </div>
       <div className="float-body">
