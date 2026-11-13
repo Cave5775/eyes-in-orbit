@@ -1,15 +1,37 @@
 import { observatoryOf, type EntityRecord, type ObservatoryMeta } from '@eio/core';
 import { zenithRaDec } from './sky-frame';
 
-/** HiPS surveys the Sky view offers (ids from the CDS MocServer, https://alasky.cds.unistra.fr/MocServer/query). */
-export interface Survey { id: string; label: string; band: string }
+/**
+ * HiPS surveys the Sky view offers. Ids and `urls` come from each survey's CDS MocServer record
+ * (https://alasky.cds.unistra.fr/MocServer/query?ID=<id>&get=record&fmt=json, fields hips_service_url, _1, _2..., read
+ * 2026-11-13), CDS first, then the mirrors that answered. lib/hips-mirror.ts picks the first that works.
+ * Pan-STARRS and ROSAT are only on CDS (alasky, alaskybis), so they are unavailable while CDS is.
+ */
+export interface Survey { id: string; label: string; band: string; urls: readonly string[] }
 export const SURVEYS: readonly Survey[] = [
-  { id: 'CDS/P/DSS2/color', label: 'DSS2 colour', band: 'optical' },
-  { id: 'CDS/P/2MASS/color', label: '2MASS', band: 'near-infrared' },
-  { id: 'CDS/P/PanSTARRS/DR1/color-z-zg-g', label: 'Pan-STARRS DR1', band: 'optical (north of -30 deg)' },
-  { id: 'CDS/P/Fermi/color', label: 'Fermi', band: 'gamma-ray' },
-  { id: 'CDS/P/RASS', label: 'ROSAT all-sky', band: 'x-ray' },
+  {
+    id: 'CDS/P/DSS2/color', label: 'DSS2 colour', band: 'optical',
+    urls: ['https://alasky.cds.unistra.fr/DSS/DSSColor', 'https://irsa.ipac.caltech.edu/data/hips/CDS/DSS2/color', 'https://skies.esac.esa.int/DSSColor', 'https://casda.csiro.au/hips/DSS2/color'],
+  },
+  {
+    id: 'CDS/P/2MASS/color', label: '2MASS', band: 'near-infrared',
+    urls: ['https://alasky.cds.unistra.fr/2MASS/Color', 'https://irsa.ipac.caltech.edu/data/hips/CDS/2MASS/Color'],
+  },
+  {
+    id: 'CDS/P/PanSTARRS/DR1/color-z-zg-g', label: 'Pan-STARRS DR1', band: 'optical (north of -30 deg)',
+    urls: ['https://alasky.cds.unistra.fr/Pan-STARRS/DR1/color-z-zg-g', 'https://alaskybis.cds.unistra.fr/Pan-STARRS/DR1/color-z-zg-g'],
+  },
+  {
+    id: 'CDS/P/Fermi/color', label: 'Fermi', band: 'gamma-ray',
+    urls: ['https://alasky.cds.unistra.fr/Fermi/Color', 'https://skies.esac.esa.int/FermiColor'],
+  },
+  {
+    id: 'CDS/P/RASS', label: 'ROSAT all-sky', band: 'x-ray',
+    urls: ['https://alasky.cds.unistra.fr/RASS', 'https://alaskybis.cds.unistra.fr/RASS'],
+  },
 ];
+
+export const surveyOf = (id: string): Survey | undefined => SURVEYS.find((s) => s.id === id);
 
 export const surveyLabel = (id: string): string => SURVEYS.find((s) => s.id === id)?.label ?? id;
 

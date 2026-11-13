@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_HIPS_SURVEY } from '@eio/core';
 import { ALADIN_VERSION, createSkyView, loadAladin, type SkyView as AladinView } from '../lib/aladin';
-import { SURVEYS, observatoryRows, skyTarget } from '../lib/observatories';
+import { mirrors } from '../lib/hips-mirror';
+import { SURVEYS, observatoryRows, skyTarget, surveyOf } from '../lib/observatories';
 import { zenithStep } from '../lib/sky-frame';
 import { useStore } from '../state/store';
 import { useSimNow } from './hooks';
@@ -21,11 +22,34 @@ export function SkyView({ obsId }: { obsId: string }) {
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [survey, setSurvey] = useState(row?.meta.survey ?? DEFAULT_HIPS_SURVEY);
   const [follow, setFollow] = useState(true);
+  // the working server of the chosen survey (see lib/hips-mirror.ts): undefined while probing, null when none answers
+  const [surveyUrl, setSurveyUrl] = useState<string | null | undefined>(undefined);
+  // true once any survey has a server: the Aladin view then stays up while later surveys are probed or unavailable
+  const [resolvedOnce, setResolvedOnce] = useState(false);
   const step = zenithStep(useSimNow(1000));
 
   const target = useMemo(() => (row ? skyTarget(row, step) : null), [row, step]);
-  const latest = useRef({ target, survey });
-  latest.current = { target, survey };
+  const latest = useRef({ target, surveyUrl });
+  latest.current = { target, surveyUrl };
+
+  // find a server that serves this survey before Aladin is pointed at it
+  useEffect(() => {
+    let cancelled = false;
+    setSurveyUrl(undefined);
+    const s = surveyOf(survey);
+    if (!s) {
+      setSurveyUrl(null);
+      return;
+    }
+    void mirrors.pick(s.id, s.urls).then((url) => {
+      if (cancelled) return;
+      setSurveyUrl(url);
+      if (url) setResolvedOnce(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [survey]);
 
   // another observatory in the same window: its default survey and a fresh follow
   useEffect(() => {
@@ -36,7 +60,8 @@ export function SkyView({ obsId }: { obsId: string }) {
 
   // create the view once the observatory has imagery (the host div is always rendered, so a row that qualifies late still
   // initialises); Aladin has no destroy call, so unmounting empties its element
-  const usable = !!row?.imagery;
+  // (created once the first survey server is known, so Aladin never resolves a survey id itself)
+  const usable = !!row?.imagery && resolvedOnce;
   useEffect(() => {
     if (!usable) return;
     let cancelled = false;
@@ -44,7 +69,8 @@ export function SkyView({ obsId }: { obsId: string }) {
     loadAladin().then(
       (A) => {
         if (cancelled || !el) return;
-        const { target: t, survey: s } = latest.current;
+        const { target: t, surveyUrl: s } = latest.current;
+        if (!s) return;
         view.current = createSkyView(A, el, { survey: s, raDeg: t?.raDeg ?? 0, decDeg: t?.decDeg ?? 0, fovDeg: 60 });
         setLoad({ state: 'ready' });
       },
@@ -69,16 +95,19 @@ export function SkyView({ obsId }: { obsId: string }) {
   }, [obsId, load.state, follow && tracks ? step : 0]);
 
   useEffect(() => {
-    view.current?.setSurvey(survey);
-  }, [survey, load.state]);
+    if (surveyUrl) view.current?.setSurvey(surveyUrl);
+  }, [surveyUrl, load.state]);
 
   const none = !row ? 'This observatory is not in the catalogue.' : !row.imagery ? `${row.name} observes in ${row.meta.bands.join(', ') || 'radio'}: there is no sky imagery to show.` : null;
+  const surveyDown = surveyUrl === null ? `${surveyOf(survey)?.label ?? survey} is unavailable right now: none of its servers answered. Try another survey.` : null;
 
   return (
     <div className="sky">
       <div className="sky-aladin" ref={host} />
       {none && <div className="sky-msg">{none}</div>}
-      {!none && load.state === 'loading' && <div className="sky-msg">Loading Aladin Lite {ALADIN_VERSION}...</div>}
+      {!none && surveyDown && <div className="sky-msg sky-err" role="alert">{surveyDown}</div>}
+      {!none && !surveyDown && surveyUrl === undefined && <div className="sky-msg">Finding a server for {surveyOf(survey)?.label ?? survey}...</div>}
+      {!none && !surveyDown && surveyUrl !== undefined && load.state === 'loading' && <div className="sky-msg">Loading Aladin Lite {ALADIN_VERSION}...</div>}
       {!none && load.state === 'error' && <div className="sky-msg sky-err" role="alert">{load.message}</div>}
       {!none && <div className="sky-bar">
         <span className="sky-note" title={target?.note}>{target?.note}</span>
