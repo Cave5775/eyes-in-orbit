@@ -14,6 +14,7 @@ import {
   closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, viewportNow,
   type FloatWindow,
 } from '../lib/floating';
+import { addRecent, loadRecent, removeRecent, saveRecent, type RecentLink } from '../lib/recent-links';
 import {
   focusSkyWindow, openSkyWindow, setSkyRect, type SkyWindow,
 } from '../lib/sky-window';
@@ -84,6 +85,12 @@ interface State {
   upsertEntities(records: EntityRecord[], replace?: boolean): void;
   /** Pop a stream out into a floating window (no-op at the cap, counting the Sky view; focuses it when already open). False when refused. */
   openFloat(url: string, title: string): boolean;
+  /** "Watch a livestream" history (localStorage 'eio.recent-links.v1'), most recent first. */
+  recentLinks: RecentLink[];
+  /** Remember a link that opened successfully (moves it to the front). */
+  rememberLink(text: string, title: string): void;
+  forgetLink(url: string): void;
+  clearRecentLinks(): void;
   /** Close a floating window (the Stream tab's "Dock back" uses this too; the tab then plays the stream again). */
   closeFloat(url: string): void;
   focusFloat(url: string): void;
@@ -233,6 +240,7 @@ export const useStore = create<State>((set, get) => ({
   conn: 'connecting',
   clock: clock.snapshot(),
   floats: loadFloats(),
+  recentLinks: loadRecent(),
   sky: null,
 
   upsertEntities(records, replace = false) {
@@ -268,6 +276,9 @@ export const useStore = create<State>((set, get) => ({
     if (floats !== s.floats) set({ floats });
     return true;
   },
+  rememberLink: (text, title) => set((s) => ({ recentLinks: addRecent(s.recentLinks, text, title, Date.now()) })),
+  forgetLink: (url) => set((s) => ({ recentLinks: removeRecent(s.recentLinks, url) })),
+  clearRecentLinks: () => set({ recentLinks: [] }),
   openSky(obsId, title) {
     const s = get();
     const sky = openSkyWindow(s.sky, s.floats, obsId, title, viewportNow());
@@ -382,6 +393,7 @@ export function useFrameInfo(): FrameInfo {
 clock.subscribe((snap) => useStore.setState({ clock: snap }));
 useStore.subscribe((s, p) => {
   if (s.floats !== p.floats) saveFloats(s.floats);
+  if (s.recentLinks !== p.recentLinks) saveRecent(s.recentLinks);
   if (s.frame !== p.frame) saveFrame(s.frame); // the lock is not remembered, only the centre
   if (s.query !== p.query && serialiseQuery(s.query) !== serialiseQuery(p.query)) saveQuery(s.query); // the typed text is not remembered
   if (s.highlight !== p.highlight) saveHighlight(s.highlight);

@@ -14,24 +14,34 @@ export function StreamUrlInput({ compact = false, onOpened }: { compact?: boolea
   const floats = useStore((s) => s.floats);
   const sky = useStore((s) => s.sky);
   const openFloat = useStore((s) => s.openFloat);
+  const recent = useStore((s) => s.recentLinks);
+  const rememberLink = useStore((s) => s.rememberLink);
+  const forgetLink = useStore((s) => s.forgetLink);
+  const clearRecentLinks = useStore((s) => s.clearRecentLinks);
   const [text, setText] = useState('');
   const [problem, setProblem] = useState<{ error: string; href: string | null } | null>(null);
 
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const r = watchResult(text, pageOrigin());
+  /** Resolve and open a link; the same checks and 'refused' feedback for the field and for the recent rows. True when it opened. */
+  const open = (link: string): boolean => {
+    const r = watchResult(link, pageOrigin());
     if (!r.ok) {
       setProblem({ error: r.error, href: r.href });
-      return;
+      return false;
     }
     const { embedUrl, title } = r.embed;
     if ((!canOpenStream(floats, sky) && !floats.some((f) => f.url === embedUrl)) || !openFloat(embedUrl, title)) {
       setProblem({ error: `At most ${MAX_FLOATS} floating windows (the Sky view counts): close one first.`, href: null });
-      return;
+      return false;
     }
+    rememberLink(link, title);
     setProblem(null);
-    setText('');
     onOpened?.();
+    return true;
+  };
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (open(text)) setText('');
   };
 
   return (
@@ -48,6 +58,22 @@ export function StreamUrlInput({ compact = false, onOpened }: { compact?: boolea
         <div className="watch-error" role="alert">
           {problem.error}
           {problem.href && <> <a href={problem.href} target="_blank" rel="noopener noreferrer">Open in new tab</a></>}
+        </div>
+      )}
+      {recent.length > 0 && (
+        <div className="watch-recent">
+          <div className="watch-recent-head">
+            <span>Recent links</span>
+            <button type="button" className="watch-recent-clear" title="Forget all recent links" onClick={clearRecentLinks}>Clear</button>
+          </div>
+          <ul className="watch-recent-list">
+            {recent.map((l) => (
+              <li key={l.url} className="watch-recent-row">
+                <button type="button" className="watch-recent-open" title={`Open ${l.url} in a floating window`} onClick={() => open(l.url)}>{l.title}</button>
+                <button type="button" className="watch-recent-x" aria-label={`Remove ${l.title} from recent links`} title="Remove from recent links" onClick={() => forgetLink(l.url)}>×</button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </form>
