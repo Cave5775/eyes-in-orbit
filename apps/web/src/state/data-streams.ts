@@ -6,7 +6,7 @@ interface DataStreamsState {
   feedId: string | null;
   /** open the popup, optionally on one feed (the health indicator does this for the row that was clicked) */
   openOn(feedId?: string): void;
-  select(feedId: string): void;
+  showFeed(feedId: string): void;
   close(): void;
   toggle(): void;
 }
@@ -16,7 +16,7 @@ export const useDataStreams = create<DataStreamsState>((set) => ({
   open: false,
   feedId: null,
   openOn: (feedId) => set((s) => ({ open: true, feedId: feedId ?? s.feedId })),
-  select: (feedId) => set({ feedId }),
+  showFeed: (feedId) => set({ feedId }),
   close: () => set({ open: false }),
   toggle: () => set((s) => ({ open: !s.open })),
 }));

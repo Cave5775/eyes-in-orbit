@@ -10,6 +10,9 @@ const A = 'https://www.youtube.com/embed/aaaaaaaaaaa?autoplay=1';
 const B = 'https://www.youtube.com/embed/bbbbbbbbbbb?autoplay=1';
 const C = 'https://www.youtube.com/embed/ccccccccccc?autoplay=1';
 const D = 'https://www.youtube.com/embed/ddddddddddd?autoplay=1';
+const E = 'https://player.vimeo.com/video/123456789?autoplay=1';
+const T = 'https://player.twitch.tv/?channel=nasa&parent=localhost';
+const V = 'https://cdn.example.com/live/a.m3u8';
 
 /** Full containment in the viewport. */
 function inside(r: { x: number; y: number; w: number; h: number }, vp = VP): boolean {
@@ -137,18 +140,28 @@ describe('floating windows: open, focus, close, cap', () => {
 
   it(`caps at ${MAX_FLOATS} windows`, () => {
     let list: FloatWindow[] = [];
-    for (const u of [A, B, C]) list = openFloatWindow(list, u, 'x', VP);
+    for (const u of [A, B, C, D]) list = openFloatWindow(list, u, 'x', VP);
     expect(list).toHaveLength(MAX_FLOATS);
-    const capped = openFloatWindow(list, D, 'x', VP);
+    const capped = openFloatWindow(list, E, 'x', VP);
     expect(capped).toBe(list);
     // an open one can still be focused at the cap
     expect(openFloatWindow(list, A, 'x', VP)[0].z).toBeGreaterThan(list[0].z);
   });
 
-  it('refuses URLs that are not YouTube embeds', () => {
+  it('opens several streams of different providers at once, each inside the viewport', () => {
+    let list: FloatWindow[] = [];
+    for (const u of [A, E, T, V]) list = openFloatWindow(list, u, 'x', { w: 1000, h: 700 });
+    expect(list.map((f) => f.url)).toEqual([A, E, T, V]);
+    expect(list.every((f) => inside(f, { w: 1000, h: 700 }))).toBe(true);
+  });
+
+  it('refuses URLs that are not stream embeds', () => {
     expect(isFloatableUrl(A)).toBe(true);
     expect(isFloatableUrl('https://www.nasa.gov/nasalive')).toBe(false);
     expect(isFloatableUrl('https://www.youtube.com/embed/')).toBe(false);
+    expect(isFloatableUrl('javascript:alert(1)')).toBe(false);
+    expect(isFloatableUrl('https://player.vimeo.com/video/abc')).toBe(false);
+    for (const u of [E, T, V]) expect(isFloatableUrl(u)).toBe(true);
     expect(openFloatWindow([], 'https://evil.example/embed/x', 'x', VP)).toEqual([]);
   });
 
@@ -206,9 +219,11 @@ describe('floating windows: persistence', () => {
       { url: D, title: 'd', x: 1, y: 2, w: 320 },
       { url: `https://www.youtube.com/embed/eeeeeeeeeee`, title: 'e', x: 1, y: 2, w: 320 },
       { url: `https://www.youtube.com/embed/fffffffffff`, title: 'f', x: 1, y: 2, w: 320 },
+      { url: E, title: 'g', x: 1, y: 2, w: 320 },
     ]);
     const out = parseFloats(raw);
-    expect(out.map((f) => f.url)).toEqual([A, D, 'https://www.youtube.com/embed/eeeeeeeeeee']);
+    expect(out.map((f) => f.url)).toEqual([A, D, 'https://www.youtube.com/embed/eeeeeeeeeee', 'https://www.youtube.com/embed/fffffffffff']);
+    expect(out).toHaveLength(MAX_FLOATS);
     expect(out.every((f) => f.z >= 1)).toBe(true);
   });
 

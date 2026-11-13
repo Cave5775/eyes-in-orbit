@@ -1,9 +1,13 @@
 /**
  * Pure geometry and state rules for the pop-out stream windows. No DOM access except the injected storage.
  * A window is a title bar (FLOAT_HEAD_PX) above a 16:9 frame; its width is the only free size, height follows.
+ * A window's `url` is the embed URL from lib/stream-url.ts (YouTube, Twitch, Vimeo or a direct video file).
  */
 
-export const MAX_FLOATS = 3;
+import { providerOfEmbed, type StreamProvider } from './stream-url';
+
+/** At most this many windows at once (each starts about a third of the viewport wide and cascades, so four fit a 1000 x 700 window). */
+export const MAX_FLOATS = 4;
 /** Narrowest window, measured on the frame, px. */
 export const MIN_FLOAT_W = 240;
 /** Title bar height above the frame, px. */
@@ -11,7 +15,6 @@ export const FLOAT_HEAD_PX = 28;
 export const ASPECT_W = 16;
 export const ASPECT_H = 9;
 export const FLOAT_STORAGE_KEY = 'eio.float.v1';
-const EMBED_PREFIX = 'https://www.youtube.com/embed/';
 
 export interface Viewport {
   w: number;
@@ -91,9 +94,12 @@ export function defaultRect(vp: Viewport, offset = 0): FloatRect {
   return fitRect({ x: vp.w - w - 24 - offset * 32, y: 64 + offset * 32, w }, vp);
 }
 
+/** True for an embed URL the resolver (stream-url.ts) could have produced; anything else is never loaded in a window. */
 export function isFloatableUrl(url: string): boolean {
-  return url.startsWith(EMBED_PREFIX) && url.length > EMBED_PREFIX.length;
+  return providerOfEmbed(url) !== null;
 }
+
+export type { StreamProvider };
 
 export function nextZ(list: readonly FloatWindow[]): number {
   return list.reduce((m, f) => Math.max(m, f.z), 0) + 1;
