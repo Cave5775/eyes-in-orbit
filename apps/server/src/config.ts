@@ -17,6 +17,8 @@ export interface Config {
   spacetrackUser?: string;
   spacetrackPassword?: string;
   satnogsToken?: string;
+  /** ESA DISCOS API token (bearer); without one the About lookup skips DISCOS */
+  discosToken?: string;
   webcastUrl?: string;
 }
 
@@ -44,6 +46,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     spacetrackUser: env.SPACETRACK_USER || undefined,
     spacetrackPassword: env.SPACETRACK_PASSWORD || undefined,
     satnogsToken: env.SATNOGS_TOKEN || undefined,
+    discosToken: env.DISCOS_TOKEN || undefined,
     webcastUrl: env.WEBCAST_URL || undefined,
   };
 }

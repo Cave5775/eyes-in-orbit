@@ -682,3 +682,19 @@ video.stream-frame { background: #000; object-fit: contain; }
 .vlist-pin { position: absolute; left: 0; right: 0; background: var(--panel); }
 .vlist-pin.last { box-shadow: 0 1px 0 var(--line-2), 0 5px 7px -3px rgba(0, 0, 0, 0.6); }
 /* ==== end STICKY TREE ==== */
+
+/* ---- About tab: article summary, small thumbnail, facts table, source links ---- */
+.about { padding: 0 12px 12px; max-width: 68ch; }
+.about-sum { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 6px; }
+.about-thumb { flex: none; max-width: 96px; height: auto; border-radius: 2px; border: 1px solid var(--line); }
+.about-title { font-weight: 500; }
+.about-blurb { font-size: 11px; font-stretch: var(--narrow); }
+.about-text { margin: 6px 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
+.about-facts { display: block; margin: 8px 0; }
+.about-fact { display: flex; gap: 8px; padding: 2px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.about-fact dt { flex: none; width: 9em; color: var(--ink-2); }
+.about-fact dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.about-fallback { margin: 8px 0 4px; font-size: 11px; line-height: 1.5; }
+.about-links { display: flex; gap: 12px; margin: 6px 0; font-size: 12px; }
+.about-links a { color: var(--ink); }
+.about-meta { font-size: 10px; margin-top: 6px; }

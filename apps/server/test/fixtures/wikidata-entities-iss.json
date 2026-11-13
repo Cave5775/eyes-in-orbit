@@ -1,0 +1,88 @@
+{
+ "entities": {
+  "Q25271": {
+   "type": "item",
+   "id": "Q25271",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "International Space Station"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "modular space station in low Earth orbit"
+    }
+   },
+   "claims": {
+    "P377": [
+     {
+      "mainsnak": {
+       "property": "P377",
+       "datavalue": {
+        "value": "25544",
+        "type": "string"
+       }
+      }
+     }
+    ],
+    "P8913": [
+     {
+      "mainsnak": {
+       "property": "P8913",
+       "datavalue": {
+        "value": "1998-067A",
+        "type": "string"
+       }
+      }
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "International Space Station",
+     "badges": []
+    }
+   }
+  },
+  "Q331785": {
+   "type": "item",
+   "id": "Q331785",
+   "labels": {
+    "en": {
+     "language": "en",
+     "value": "Zarya"
+    }
+   },
+   "descriptions": {
+    "en": {
+     "language": "en",
+     "value": "first module of the International Space Station"
+    }
+   },
+   "claims": {
+    "P377": [
+     {
+      "mainsnak": {
+       "property": "P377",
+       "datavalue": {
+        "value": "25544",
+        "type": "string"
+       }
+      }
+     }
+    ]
+   },
+   "sitelinks": {
+    "enwiki": {
+     "site": "enwiki",
+     "title": "Zarya (ISS module)",
+     "badges": []
+    }
+   }
+  }
+ },
+ "success": 1
+}

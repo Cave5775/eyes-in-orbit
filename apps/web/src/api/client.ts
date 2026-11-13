@@ -1,4 +1,4 @@
-import type { Article, AscentSeries, CredentialInfo, Launch, ServerMessage } from '@eio/core';
+import type { Article, AscentSeries, CredentialInfo, Description, Launch, ServerMessage } from '@eio/core';
 import { isIss } from '../lib/entity';
 import { createMockApi } from '../mock/mock-api';
 import { useStore } from '../state/store';
@@ -25,6 +25,7 @@ export const restApi: Api = {
   launches: async () => (await getJson<{ launches: Launch[] }>('/api/launches')).launches,
   news: async (o = {}) => (await getJson<{ articles: Article[] }>(`/api/news${qs({ entity: o.entity, q: o.q, limit: o.limit })}`)).articles,
   dsn: () => getJson('/api/dsn'),
+  describe: (entityId) => getJson<Description>(`/api/describe/${encodeURIComponent(entityId)}`, 30_000),
   iss: () => getJson('/api/iss'),
   health: () => getJson('/api/health', 4_000),
   ascent: (launchId) => getJson<AscentSeries>(`/api/telemetry/${encodeURIComponent(launchId)}`, 8_000).catch(() => null),

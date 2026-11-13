@@ -78,6 +78,18 @@ export const FEED_CATALOG: Record<string, FeedInfo> = {
     source: 'Space-Track.org (US Space Force)',
     link: 'https://www.space-track.org/',
   },
+  wikipedia: {
+    name: 'Wikipedia and Wikidata',
+    provides: 'The About tab of an object: a short article summary with a picture, found through Wikidata by catalogue number. Asked only when you open the About tab, cached for 30 days.',
+    source: 'Wikimedia (Wikidata, Wikipedia)',
+    link: 'https://www.wikidata.org/',
+  },
+  discos: {
+    name: 'ESA DISCOS',
+    provides: 'Mass, size, shape, operator and mission facts for catalogued objects, in the About tab. Needs a free ESA DISCOS token; asked only when you open the About tab.',
+    source: 'ESA Space Debris Office (DISCOS)',
+    link: 'https://discosweb.esoc.esa.int/',
+  },
   bodies: {
     name: 'Solar-system bodies',
     provides: 'The built-in catalog of the Sun, planets and moons: sizes, rotation and appearance. No network needed.',
@@ -125,6 +137,7 @@ const CREDENTIAL_CONNECTOR: Record<string, string> = {
   spacetrack: 'spacetrack',
   launchlibrary: 'launchlibrary',
   'launch-library-2': 'launchlibrary',
+  discos: 'discos',
 };
 export function credentialConnector(feedId: string): string | null {
   return CREDENTIAL_CONNECTOR[feedId] ?? null;

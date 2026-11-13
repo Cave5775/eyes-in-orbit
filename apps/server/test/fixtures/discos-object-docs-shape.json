@@ -1,0 +1,35 @@
+{
+  "_note": "NOT a real response. Hand-written from the shape ESA documents for DISCOS Web API v2 (JSON:API, GET /api/objects?filter=eq(satno,<n>)&include=operators) because no API token was available. Every value is a placeholder chosen only to exercise the parser; it must never be shown as data about a real object outside tests.",
+  "data": [
+    {
+      "type": "objects",
+      "id": "99001",
+      "attributes": {
+        "satno": 99001,
+        "name": "TEST SAT (FIXTURE)",
+        "cosparId": "2099-001A",
+        "objectClass": "Payload",
+        "mass": 1234.5,
+        "shape": "Box + 2 Sol Pnl",
+        "width": 2.0,
+        "height": 3.0,
+        "depth": 1.5,
+        "span": 12.5,
+        "xSectMax": 20.1,
+        "xSectMin": 4.2,
+        "xSectAvg": 9.9,
+        "active": true,
+        "firstEpoch": "2099-01-02T00:00:00+00:00",
+        "predDecayDate": null,
+        "missionType": "Test fixture mission"
+      },
+      "relationships": {
+        "operators": { "data": [{ "type": "operators", "id": "7001" }] }
+      }
+    }
+  ],
+  "included": [
+    { "type": "operators", "id": "7001", "attributes": { "name": "Fixture Space Agency", "country": "Nowhere" } }
+  ],
+  "meta": { "pagination": { "currentPage": 1, "totalPages": 1, "total": 1 } }
+}

@@ -4,12 +4,13 @@ import { kindLabel, launchOf } from '../lib/entity';
 import { modelDef } from '../scene/models/registry';
 import { runtime } from '../state/runtime';
 import { useStore } from '../state/store';
+import { AboutTab } from './detail/AboutTab';
 import { LaunchTab } from './detail/LaunchTab';
 import { NewsTab } from './detail/NewsTab';
 import { StreamTab } from './detail/StreamTab';
 import { TelemetryTab } from './detail/TelemetryTab';
 
-type TabId = 'telemetry' | 'launch' | 'stream' | 'news';
+type TabId = 'telemetry' | 'about' | 'launch' | 'stream' | 'news';
 
 export function DetailPanel() {
   const selectedId = useStore((s) => s.selectedId);
@@ -29,7 +30,7 @@ export function DetailPanel() {
   const streams = rec?.links?.streams?.length ? rec.links.streams : launch?.streams ?? [];
 
   const tabs = useMemo(() => {
-    const t: [TabId, string][] = [['telemetry', 'Telemetry']];
+    const t: [TabId, string][] = [['telemetry', 'Telemetry'], ['about', 'About']];
     if (launch) t.push(['launch', 'Launch']);
     if (streams.length) t.push(['stream', 'Stream']);
     t.push(['news', 'News']);
@@ -95,6 +96,7 @@ export function DetailPanel() {
       </div>
       <div className="tab-body">
         {tab === 'telemetry' && <TelemetryTab rec={rec} />}
+        {tab === 'about' && <AboutTab key={rec.id} rec={rec} />}
         {tab === 'launch' && launch && <LaunchTab launch={launch} />}
         {tab === 'stream' && <StreamTab key={rec.id} streams={streams} />}
         {tab === 'news' && <NewsTab key={rec.id} entityId={rec.id} />}

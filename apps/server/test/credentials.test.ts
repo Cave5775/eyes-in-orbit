@@ -36,6 +36,13 @@ describe('Credentials', () => {
     expect(creds.describe().find((c) => c.key === 'll2Token')!.source).toBe('env');
   });
 
+  it('keeps the ESA DISCOS token as a secret read by the discos feed', () => {
+    const { creds, config } = make({ DISCOS_TOKEN: 'tok' });
+    expect(creds.describe().find((c) => c.key === 'discosToken')).toMatchObject({ connector: 'discos', secret: true, set: true, source: 'env' });
+    expect(creds.update({ discosToken: 'ui-tok' })).toEqual({ changed: ['discosToken'], connectors: ['discos'] });
+    expect(config.discosToken).toBe('ui-tok');
+  });
+
   it('reports nothing changed when the value is the same', () => {
     const { creds } = make();
     creds.update({ ll2Token: 'abc' });
