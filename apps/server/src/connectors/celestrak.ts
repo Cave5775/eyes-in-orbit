@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Omm, StreamLink } from '@eio/core';
+import { HUBBLE_NORAD, observatoryAttrs, type Omm, type StreamLink } from '@eio/core';
 import { clearBackoff, isBackedOff, isBlockError, isConnectError, readBackoff, recordFailure } from '../backoff';
 import type { Connector, ConnectorContext } from '../connector';
 import type { NewEntity } from '../hub';
@@ -105,6 +105,11 @@ export function satelliteEntity(omm: Omm, sourceGroup: SatGroup): NewEntity {
     aliases.common = 'ISS';
     rec.render = { colorKey: 'station', footprint: true, orbitLine: true, trailSeconds: 5400, label: true, model: 'iss' };
     rec.links = { streams: ISS_STREAMS, newsQuery: 'International Space Station' };
+  }
+  if (norad === HUBBLE_NORAD) {
+    // Hubble: an optical/UV/near-infrared observatory (CelesTrak `active` group, NORAD 20580 = 1990-037B)
+    rec.attrs = observatoryAttrs({ site: 'space', bands: ['optical', 'ultraviolet', 'near-infrared'], survey: 'CDS/P/DSS2/color' });
+    rec.links = { newsQuery: 'Hubble Space Telescope' };
   }
   return rec;
 }

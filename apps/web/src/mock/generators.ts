@@ -1,4 +1,5 @@
 import {
+  GROUND_OBSERVATORIES, HUBBLE_NORAD, OBSERVATORY_GROUP, observatoryAttrs,
   DEG, EARTH, LL2_STATUS, classifyFeed, MARS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, deriveMissionState,
   missionTimingFor, modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, orbitSegmentsOf, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
@@ -371,7 +372,7 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
   const out: EntityRecord[] = STATIONS.map((s) => ({
     id: s.id, name: s.name, kind: 'ground_station', bodyId: 'EARTH', aliases: { dsn: s.code }, group: 'dsn',
     provider: { type: 'geodetic', bodyId: 'EARTH', latDeg: s.lat, lonDeg: s.lon, altKm: 0.5 },
-    render: { colorKey: 'ground', glyph: 'square', label: true }, updatedAt: nowMs,
+    render: { colorKey: 'ground', glyph: 'square', label: true }, attrs: observatoryAttrs({ site: 'ground', bands: ['radio'], survey: null }), updatedAt: nowMs,
   }));
 
   const vgr1 = unitFromRaDec(257.9, 12.2);
@@ -386,7 +387,7 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
     id: 'dsn-JWST', name: 'James Webb Space Telescope', kind: 'probe', bodyId: 'EARTH', aliases: { dsn: 'JWST', horizons: '-170' }, group: 'dsn',
     provider: { type: 'sampled', frame: 'EARTH:inertial', samples: probeSamples(nowMs, (t) => sunDirectionEci(t).map((c) => -c * 1.5e6) as Vec3) },
     links: { newsQuery: 'James Webb Space Telescope' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
-    attrs: { rangeKm: 1.5e6, rtltSec: 10, dataRate: 28_000_000, dish: 'DSS-63' }, updatedAt: nowMs,
+    attrs: { rangeKm: 1.5e6, rtltSec: 10, dataRate: 28_000_000, dish: 'DSS-63', ...observatoryAttrs({ site: 'space', bands: ['infrared'], survey: 'CDS/P/2MASS/color' }) }, updatedAt: nowMs,
   });
   const mroOrbit = MRO_ORBIT(nowMs);
   out.push({
@@ -416,6 +417,36 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
     attrs: { trackCentre: 'Moon', trackNote: 'Track is Moon-centred (Horizons 500@301, 5 min steps, -1 d to +3 d), not Earth-centred' },
     updatedAt: nowMs,
   });
+  return out;
+}
+
+/**
+ * Observatories the DSN stations and JWST above do not cover: the ground sites (the same core list the server uses), Hubble
+ * (SGP4, 540 km, 28.5 deg, NORAD 20580), and Chandra and TESS as Kepler orbits about the Earth (illustrative elements, mock only).
+ */
+export function mockObservatories(nowMs: number): EntityRecord[] {
+  const out: EntityRecord[] = GROUND_OBSERVATORIES.map((o) => ({
+    id: o.id, name: o.name, kind: 'ground_station', bodyId: 'EARTH', aliases: { observatory: o.id.slice(4) }, group: OBSERVATORY_GROUP,
+    provider: { type: 'geodetic', bodyId: 'EARTH', latDeg: o.latDeg, lonDeg: o.lonDeg, altKm: o.altKm },
+    render: { colorKey: 'ground', glyph: 'square', label: true }, attrs: observatoryAttrs(o.meta), updatedAt: nowMs,
+  }));
+  const hst = satRecord(
+    makeOmm({ name: 'HST', norad: HUBBLE_NORAD, cospar: '1990-037B', epochMs: nowMs, meanMotion: meanMotionForAlt(540), ecc: 0.0002, incl: 28.47, raan: 120, argp: 90, ma: 40 }),
+    'satellite', 'active', 'satellite', nowMs,
+  );
+  hst.attrs = observatoryAttrs({ site: 'space', bands: ['optical', 'ultraviolet', 'near-infrared'], survey: 'CDS/P/DSS2/color' });
+  out.push(hst);
+  const orbiter = (id: string, code: string, name: string, horizons: string, a: number, e: number, incl: number, bands: string[], survey: string): EntityRecord => {
+    const el = { a, e, i: incl * DEG, raan: 40 * DEG, argp: 60 * DEG, m0: 1, epochMs: nowMs };
+    return {
+      id, name, kind: 'probe', bodyId: 'EARTH', aliases: { dsn: code, horizons }, group: 'dsn',
+      provider: { type: 'sampled', frame: 'EARTH:inertial', samples: probeSamples(nowMs, (t) => { const s = keplerState(el, EARTH.gm, t); return [...s.r, ...s.v]; }, { pastDays: 3, futureDays: 7, stepMin: 30 }) },
+      links: { newsQuery: name }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
+      attrs: observatoryAttrs({ site: 'space', bands, survey }), updatedAt: nowMs,
+    };
+  };
+  out.push(orbiter('dsn-CHDR', 'CHDR', 'Chandra X-ray Observatory', '-151', 80_900, 0.72, 76, ['x-ray'], 'CDS/P/RASS'));
+  out.push(orbiter('dsn-TESS', 'TESS', 'TESS', '-95', 242_000, 0.55, 40, ['optical', 'near-infrared'], 'CDS/P/DSS2/color'));
   return out;
 }
 

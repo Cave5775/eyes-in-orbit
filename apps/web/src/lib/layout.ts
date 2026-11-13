@@ -1,6 +1,6 @@
 /** Pure sizing and persistence logic for the resizable panels (no DOM access except the injected storage). */
 
-export type PanelKey = 'left' | 'right' | 'bottom';
+export type PanelKey = 'left' | 'right' | 'bottom' | 'obs';
 export type PanelSizes = Partial<Record<PanelKey, number>>;
 
 interface Spec {
@@ -12,17 +12,20 @@ interface Spec {
   max: number;
 }
 
-/** Sizes in px: widths for `left` and `right`, height for `bottom`. */
+/** Sizes in px: widths for `left`, `right` and `obs` (the observatory panel beside the launch board), height for `bottom`. */
 export const PANELS: Record<PanelKey, Spec> = {
   left: { def: 292, defNarrow: 240, min: 200, max: 640 },
   right: { def: 372, defNarrow: 320, min: 260, max: 760 },
   bottom: { def: 176, defNarrow: 176, min: 110, max: 520 },
+  obs: { def: 460, defNarrow: 380, min: 300, max: 900 },
 };
 
 export const PANEL_KEYS = Object.keys(PANELS) as PanelKey[];
 
 /** Viewport width at or below which the narrow defaults apply (matches the CSS media query). */
 export const NARROW_PX = 1100;
+/** Minimum width that stays for the launch board when the observatory panel shares the bottom row. */
+export const MIN_BOARD_W = 320;
 /** Minimum space that must stay for the globe. */
 export const MIN_SCENE_W = 360;
 export const MIN_SCENE_H = 200;
@@ -48,6 +51,8 @@ export function maxSize(key: PanelKey, sizes: Record<PanelKey, number>, vp: View
     case 'left': room = vp.w - MIN_SCENE_W - sizes.right; break;
     case 'right': room = vp.w - MIN_SCENE_W - sizes.left; break;
     case 'bottom': room = vp.h - CHROME_H - MIN_SCENE_H; break;
+    // the launch board keeps at least this much beside it
+    case 'obs': room = vp.w - MIN_BOARD_W; break;
   }
   // never let a tiny viewport push the cap below the minimum
   return Math.max(spec.min, Math.min(spec.max, room));
@@ -68,11 +73,13 @@ export function resolveSizes(stored: PanelSizes, vp: Viewport): Record<PanelKey,
     left: stored.left ?? defaultSize('left', vp.w),
     right: stored.right ?? defaultSize('right', vp.w),
     bottom: stored.bottom ?? defaultSize('bottom', vp.w),
+    obs: stored.obs ?? defaultSize('obs', vp.w),
   };
   out.left = clampSize('left', out.left, out, vp);
   out.right = clampSize('right', out.right, out, vp);
   out.left = clampSize('left', out.left, out, vp);
   out.bottom = clampSize('bottom', out.bottom, out, vp);
+  out.obs = clampSize('obs', out.obs, out, vp);
   return out;
 }
 

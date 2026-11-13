@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { dragRect, fitRect, resizeRect, viewportNow, type FloatRect, type FloatWindow, type Viewport } from '../lib/floating';
 import { useStore } from '../state/store';
+import { SkyView } from './SkyView';
 import { StreamFrame } from './StreamFrame';
 
 /**
@@ -17,22 +18,44 @@ export function FloatingLayer() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  if (floats.length === 0) return null;
+  const sky = useStore((s) => s.sky);
+  const focusSky = useStore((s) => s.focusSky);
+  const setSkyRect = useStore((s) => s.setSkyRect);
+  const closeSky = useStore((s) => s.closeSky);
+  const focusFloat = useStore((s) => s.focusFloat);
+  const setFloatRect = useStore((s) => s.setFloatRect);
+  const closeFloat = useStore((s) => s.closeFloat);
+
+  if (floats.length === 0 && !sky) return null;
   return (
     <div className="float-layer">
       {floats.map((f) => (
-        <FloatingWindow key={f.url} win={f} vp={vp} />
+        <FloatingWindow key={f.url} win={f} vp={vp} focus={focusFloat} setRect={setFloatRect} close={closeFloat}>
+          <StreamFrame url={f.url} className="float-frame" />
+        </FloatingWindow>
       ))}
+      {/* the Sky view shares the window cap and the chrome; it is not a stream and is not remembered across reloads */}
+      {sky && (
+        <FloatingWindow key={sky.url} win={sky} vp={vp} focus={focusSky} setRect={(_id, r) => setSkyRect(r)} close={closeSky}>
+          <SkyView obsId={sky.obsId} />
+        </FloatingWindow>
+      )}
     </div>
   );
 }
 
 type Mode = 'move' | 'resize';
 
-function FloatingWindow({ win, vp }: { win: FloatWindow; vp: Viewport }) {
-  const focus = useStore((s) => s.focusFloat);
-  const setRect = useStore((s) => s.setFloatRect);
-  const close = useStore((s) => s.closeFloat);
+interface WindowProps {
+  win: FloatWindow;
+  vp: Viewport;
+  focus(id: string): void;
+  setRect(id: string, rect: { x: number; y: number; w: number }): void;
+  close(id: string): void;
+  children: ReactNode;
+}
+
+function FloatingWindow({ win, vp, focus, setRect, close, children }: WindowProps) {
   const rect: FloatRect = fitRect(win, vp);
   const drag = useRef<{ px: number; py: number; start: FloatRect; mode: Mode } | null>(null);
   const [mode, setMode] = useState<Mode | null>(null);
@@ -94,7 +117,7 @@ function FloatingWindow({ win, vp }: { win: FloatWindow; vp: Viewport }) {
         <button className="float-btn" onClick={() => close(win.url)} title="Close this window" aria-label="Close this window">&times;</button>
       </div>
       <div className="float-body">
-        <StreamFrame url={win.url} className="float-frame" />
+        {children}
       </div>
       <div
         className="float-grip"

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { StreamLink } from '@eio/core';
 import { MAX_FLOATS } from '../../lib/floating';
+import { canOpenStream } from '../../lib/sky-window';
 import { embedFor } from '../../lib/stream-url';
 import { pageOrigin } from '../../lib/youtube';
 import { useStore } from '../../state/store';
@@ -9,6 +10,7 @@ import { StreamFrame } from '../StreamFrame';
 export function StreamTab({ streams }: { streams: StreamLink[] }) {
   const [index, setIndex] = useState(0);
   const floats = useStore((s) => s.floats);
+  const sky = useStore((s) => s.sky);
   const openFloat = useStore((s) => s.openFloat);
   const closeFloat = useStore((s) => s.closeFloat);
   const link = streams[Math.min(index, streams.length - 1)];
@@ -19,7 +21,7 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
   const href = link.url;
   // a stream lives in one place: while it floats, the tab shows a placeholder instead of a second player
   const popped = !!embedUrl && floats.some((f) => f.url === embedUrl);
-  const full = floats.length >= MAX_FLOATS;
+  const full = !canOpenStream(floats, sky);
 
   return (
     <div className="stream-tab">
@@ -53,7 +55,7 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
               className="btn"
               onClick={() => openFloat(embedUrl, link.title)}
               disabled={full}
-              title={full ? `At most ${MAX_FLOATS} pop-out windows: close or dock one first` : 'Open this stream in a floating window'}
+              title={full ? `At most ${MAX_FLOATS} floating windows (the Sky view counts): close or dock one first` : 'Open this stream in a floating window'}
             >
               Pop out
             </button>

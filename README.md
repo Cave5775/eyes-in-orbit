@@ -59,4 +59,4 @@ An npm workspaces monorepo:
 
 ## Credits
 
-Earth imagery: NASA Blue Marble and NASA GIBS. Moon: three.js example texture from NASA LRO imagery. Mars: USGS Astrogeology / NASA Viking MDIM 2.1. Maps are downloaded by `npm run assets` and not committed.
+Earth imagery: NASA Blue Marble and NASA GIBS. Moon: three.js example texture from NASA LRO imagery. Mars: USGS Astrogeology / NASA Viking MDIM 2.1. Maps are downloaded by `npm run assets` and not committed. Sky view: [Aladin Lite](https://aladin.cds.unistra.fr/AladinLite/) and the HiPS surveys served by the CDS, Strasbourg (loaded from a CDN when the window is opened).

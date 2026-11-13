@@ -1,4 +1,4 @@
-import { defaultBodies, type EntityRecord } from '@eio/core';
+import { defaultBodies, observatoryOf, type EntityRecord } from '@eio/core';
 import { fmtDays, fmtKm, fmtNum } from './format';
 import { viewClass } from './view-class';
 
@@ -125,6 +125,7 @@ export function normaliseType(raw: string): string {
   const d = raw.trim().toLowerCase();
   const h = d.replace(/[\s_]+/g, '-');
   if (CATEGORY_IDS.has(h)) return h;
+  if (h === OBSERVATORY_TYPE || h === 'observatories') return OBSERVATORY_TYPE;
   const k = d.replace(/[\s-]+/g, '_');
   const single = k.length > 1 && k.endsWith('s') ? k.slice(0, -1) : k;
   if (KNOWN_KINDS.has(k)) return k;
@@ -132,7 +133,14 @@ export function normaliseType(raw: string): string {
   return CATEGORY_ALIASES[h] ?? k;
 }
 
+/**
+ * `type:observatory` is neither a category nor a kind: it is every entity with the `observatory` attribute (core `observatoryOf`),
+ * whatever its kind (a ground station, a probe, a satellite). The telescopes keep their own category and colour.
+ */
+export const OBSERVATORY_TYPE = 'observatory';
+
 interface TypeMatcher {
+  observatory?: boolean;
   category?: CategoryId;
   kinds?: readonly string[];
 }
@@ -143,7 +151,8 @@ function typeMatcher(value: string): TypeMatcher {
   let m = typeMatchers.get(value);
   if (m) return m;
   const v = normaliseType(value);
-  if (CATEGORY_IDS.has(v)) m = { category: v as CategoryId };
+  if (v === OBSERVATORY_TYPE) m = { observatory: true };
+  else if (CATEGORY_IDS.has(v)) m = { category: v as CategoryId };
   else {
     // a kind, singular or plural (`rover`, `rovers`)
     const base = v.length > 1 && v.endsWith('s') ? v.slice(0, -1) : v;
@@ -165,8 +174,9 @@ function typeMatcher(value: string): TypeMatcher {
  *
  * A word that is both an old category alias and a kind (`moon`, `planets`, `pad`) is the kind.
  */
-export function matchesType(rec: { kind: string; group?: string; render?: { colorKey?: string } }, value: string): boolean {
+export function matchesType(rec: { kind: string; group?: string; render?: { colorKey?: string }; attrs?: EntityRecord['attrs'] }, value: string): boolean {
   const m = typeMatcher(value);
+  if (m.observatory) return observatoryOf(rec) !== null;
   if (m.category) return categoryOf(rec) === m.category;
   return !!m.kinds && m.kinds.includes(rec.kind.toLowerCase());
 }

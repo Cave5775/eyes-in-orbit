@@ -14,6 +14,9 @@ import {
   closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, viewportNow,
   type FloatWindow,
 } from '../lib/floating';
+import {
+  focusSkyWindow, openSkyWindow, setSkyRect, type SkyWindow,
+} from '../lib/sky-window';
 import { useMemo } from 'react';
 import { EARTH_CENTRE, frameChainLabel, centreLabel, frameCrumbs, isEarthCentre, type Centre, type Crumb } from '../lib/frame';
 import { frameOnSelect, loadFrame, resolveFrame, saveFrame } from '../lib/frame-store';
@@ -75,13 +78,20 @@ interface State {
   clock: ClockSnapshot;
   /** pop-out stream windows, in stacking order; they live here so tab and selection changes do not touch them */
   floats: FloatWindow[];
+  /** the Sky view window (one at most; shares the stream windows' cap, not persisted) */
+  sky: SkyWindow | null;
 
   upsertEntities(records: EntityRecord[], replace?: boolean): void;
-  /** Pop a stream out into a floating window (no-op at the cap; focuses it when already open). */
-  openFloat(url: string, title: string): void;
+  /** Pop a stream out into a floating window (no-op at the cap, counting the Sky view; focuses it when already open). False when refused. */
+  openFloat(url: string, title: string): boolean;
   /** Close a floating window (the Stream tab's "Dock back" uses this too; the tab then plays the stream again). */
   closeFloat(url: string): void;
   focusFloat(url: string): void;
+  /** Open the Sky view for an observatory entity, or retarget the open one; false when the window cap is reached. */
+  openSky(obsId: string, title: string): boolean;
+  closeSky(): void;
+  focusSky(): void;
+  setSkyRect(rect: { x: number; y: number; w: number }): void;
   /** Move or resize a floating window; the store clamps it to the viewport and keeps 16:9. */
   setFloatRect(url: string, rect: { x: number; y: number; w: number }): void;
   /**
@@ -223,6 +233,7 @@ export const useStore = create<State>((set, get) => ({
   conn: 'connecting',
   clock: clock.snapshot(),
   floats: loadFloats(),
+  sky: null,
 
   upsertEntities(records, replace = false) {
     const t0 = perf.on ? performance.now() : 0;
@@ -250,9 +261,25 @@ export const useStore = create<State>((set, get) => ({
       restoreFrame();
     }
   },
-  openFloat: (url, title) => set((s) => ({ floats: openFloatWindow(s.floats, url, title, viewportNow()) })),
+  openFloat(url, title) {
+    const s = get();
+    const floats = openFloatWindow(s.floats, url, title, viewportNow(), s.sky ? 1 : 0, s.sky?.z ?? 0);
+    if (!floats.some((f) => f.url === url)) return false; // refused: the cap (Sky view counted) or not a floatable URL
+    if (floats !== s.floats) set({ floats });
+    return true;
+  },
+  openSky(obsId, title) {
+    const s = get();
+    const sky = openSkyWindow(s.sky, s.floats, obsId, title, viewportNow());
+    if (sky === s.sky) return false;
+    set({ sky });
+    return true;
+  },
+  closeSky: () => set({ sky: null }),
+  focusSky: () => set((s) => (s.sky ? { sky: focusSkyWindow(s.sky, s.floats) } : {})),
+  setSkyRect: (rect) => set((s) => ({ sky: setSkyRect(s.sky, rect, viewportNow()) })),
   closeFloat: (url) => set((s) => ({ floats: closeFloatWindow(s.floats, url) })),
-  focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url) })),
+  focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url, s.sky?.z ?? 0) })),
   setFloatRect: (url, rect) => set((s) => ({ floats: setFloatRect(s.floats, url, rect, viewportNow()) })),
   selectObject(id, opts = {}) {
     const s = get();

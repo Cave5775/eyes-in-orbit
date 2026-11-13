@@ -17,3 +17,4 @@ export * from './booster';
 export * from './launch-group';
 export * from './parent';
 export * from './describe';
+export * from './observatory';

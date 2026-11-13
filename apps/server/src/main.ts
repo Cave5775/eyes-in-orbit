@@ -19,6 +19,7 @@ import { issRest } from './connectors/iss-rest';
 import { launchlibrary } from './connectors/launchlibrary';
 import { snapi } from './connectors/snapi';
 import { spacetrack } from './connectors/spacetrack';
+import { observatories } from './connectors/observatories';
 import { notam, satnogs, webcastOcr } from './connectors/stubs';
 import { Http } from './http';
 import { Hub } from './hub';
@@ -26,7 +27,7 @@ import { Store } from './store';
 import { registerStream } from './ws';
 
 const CONNECTORS: Connector[] = [
-  bodies, flightclub, celestrak, launchlibrary, snapi, dsn, horizons, horizonsBodies, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
+  bodies, flightclub, celestrak, launchlibrary, snapi, dsn, horizons, horizonsBodies, observatories, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
 ];
 
 async function main(): Promise<void> {
