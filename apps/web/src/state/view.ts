@@ -11,11 +11,14 @@ export interface ViewState {
   detail: boolean;
   scopeAll: boolean;
   surface: boolean;
+  /** id of the observatory the camera stands at (first-person view), else null; mirrors the controller */
+  firstPerson: string | null;
   help: boolean;
   toggleLabels(): void;
   toggleDetail(): void;
   toggleScope(): void;
   setSurface(on: boolean): void;
+  setFirstPerson(id: string | null): void;
   setHelp(on: boolean): void;
   toggleHelp(): void;
 }
@@ -58,6 +61,7 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
     detail: loadFlag(DETAIL_KEY, storage),
     scopeAll: false,
     surface: false,
+    firstPerson: null,
     help: false,
     toggleLabels: () => {
       const labels = !get().labels;
@@ -71,6 +75,7 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
     },
     toggleScope: () => set({ scopeAll: !get().scopeAll }),
     setSurface: (surface) => { if (get().surface !== surface) set({ surface }); },
+    setFirstPerson: (firstPerson) => { if (get().firstPerson !== firstPerson) set({ firstPerson }); },
     setHelp: (help) => { if (get().help !== help) set({ help }); },
     toggleHelp: () => set({ help: !get().help }),
   }));

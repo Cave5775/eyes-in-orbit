@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { sourceLabel } from '../lib/arrays';
 import { fmtDist, fmtPathWindow } from '../lib/format';
+import { firstPersonReadout } from '../lib/first-person';
 import { CATEGORIES } from '../lib/browser-ui';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { launchOfPathEntity, liftoffMsOf, pathTipText } from '../lib/launch-seek';
@@ -28,7 +29,8 @@ const HELP: [string, string][] = [
   ['F', 'Fit the selection and its related objects'],
   ['Shift+F', 'Fit everything visible (respects the search and the hidden groups)'],
   ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or Surface switches to the globe view, and that choice is remembered until you press S again'],
-  ['Esc', 'Deselect and return to the Earth view'],
+  ['Look from here', 'Observatories panel: the camera stands at the selected observatory (a ground site at eye height, a space telescope where it is now) and looks outward with a level horizon. Left drag turns the view, the wheel changes the field of view (1 to 120 degrees), pan is off. Esc or Leave returns to the camera you had'],
+  ['Esc', 'Deselect and return to the Earth view (also leaves the first-person view)'],
   ['Follow, Fit, Model', 'Camera actions for the selection, in the selection panel on the right. Follow keeps the camera on the object; Fit is the same as F'],
   ['Model', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or Model on such a selection flies to it'],
   ['View: Labels', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
@@ -53,6 +55,7 @@ export function SceneView() {
   const [stats, setStats] = useState<SceneStats | null>(null);
   const surface = useView((s) => s.surface);
   const help = useView((s) => s.help);
+  const firstPerson = useView((s) => s.firstPerson);
   /** open choice popup for a click on overlapping objects */
   const [pick, setPick] = useState<{ items: PickItem[]; more: number; x: number; y: number } | null>(null);
   const closePick = useCallback(() => setPick(null), []);
@@ -131,6 +134,7 @@ export function SceneView() {
       onLabels: (labels, n) => objectLayer.update(labels, n),
       onFollowChange: (f) => store.getState().setFollow(f),
       onSurfaceChange: (on) => useView.getState().setSurface(on),
+      onFirstPersonChange: (id) => useView.getState().setFirstPerson(id),
     });
     scene.current = ctl;
     runtime.onFitRequest = (ids) => ctl.fitEntities(ids);
@@ -145,6 +149,7 @@ export function SceneView() {
       fitVisible: () => ctl.fitVisible(),
       toggleSurface: () => ctl.toggleSurface(),
       viewModel: (id) => { ctl.viewModel(id); },
+      lookFrom: (id) => { ctl.lookFrom(id); },
     };
     runtime.camera = camera;
     if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime, clock };
@@ -197,6 +202,7 @@ export function SceneView() {
       if (runtime.onFitRequest) runtime.onFitRequest = undefined;
       if (runtime.camera === camera) runtime.camera = undefined; // StrictMode remounts: only clear our own
       ctl.dispose();
+      useView.getState().setFirstPerson(null);
       pathLayer.dispose();
       objectLayer.dispose();
       scene.current = null;
@@ -238,6 +244,12 @@ export function SceneView() {
         <FrameBar />
       </div>
       <div className="scene-tools" role="toolbar" aria-label="Camera">
+        {firstPerson && (
+          <button className="key on" onClick={() => useStore.getState().resetView()}
+            title="Leave the first-person view: back to the camera you had, in the Earth view (Esc)">
+            Leave<kbd>Esc</kbd>
+          </button>
+        )}
         <button className={surface ? 'key on' : 'key'} onClick={() => runtime.camera?.toggleSurface()} aria-pressed={surface}
           title="Surface-aligned camera: centred on the selected object, level horizon, north-up. On by default near the Earth; turn it off for the globe view, the choice is remembered (S)">
           Surface<kbd>S</kbd>
@@ -268,7 +280,13 @@ export function SceneView() {
         <div className="scene-hud mono">
           {stats && (
             <>
-              <span>Camera {fmtDist(stats.distKm)}{fromFrame}{stats.frame.locked ? ' (locked)' : ''}</span>
+              {stats.firstPerson ? (
+                <span className="lit" title="First-person view: the camera stands at the observatory. Drag turns the view, the wheel changes the field of view">
+                  {firstPersonReadout(stats.firstPerson.name, stats.firstPerson.az, stats.firstPerson.el, stats.firstPerson.fovDeg)}
+                </span>
+              ) : (
+                <span>Camera {fmtDist(stats.distKm)}{fromFrame}{stats.frame.locked ? ' (locked)' : ''}</span>
+              )}
               <span style={{ minWidth: '22ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">
                 {stats.scope.rendered.toLocaleString('en-US')} of {stats.scope.total.toLocaleString('en-US')} drawn
               </span>

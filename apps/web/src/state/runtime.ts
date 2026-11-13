@@ -29,6 +29,8 @@ export interface CameraCommands {
   toggleSurface(): void;
   /** fly to the selected object's 3D model and follow it */
   viewModel(id: string): void;
+  /** first-person view: stand the camera at the observatory `id` and look outward (Esc, the home route, leaves it) */
+  lookFrom(id: string): void;
 }
 
 /** Make sure the record has a live provider on the main thread (the scene does this too; panels must not race it). */

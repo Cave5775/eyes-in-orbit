@@ -15,6 +15,7 @@ import { EARTH_CENTRE, centreLabel, distanceFromCentre, isEarthCentre, type Cent
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
+import { FP_FOV_START, firstPersonStart, focusEndsFirstPerson, selectionEndsFirstPerson, type FirstPersonSaved } from '../lib/first-person';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_CTX, NO_QUERY, classify, isDrawn, queryActive, type Class, type Ctx, type Query } from '../lib/query';
 import { OccluderSet } from '../lib/occlusion';
@@ -90,6 +91,8 @@ export interface SceneCallbacks {
   /** The scene changed follow mode by itself (FIT leaves the followed object). */
   onFollowChange?(follow: boolean): void;
   onSurfaceChange?(on: boolean): void;
+  /** The first-person view started (the observatory's id) or ended (null), see `SceneController.lookFrom`. */
+  onFirstPersonChange?(id: string | null): void;
 }
 
 /** What the page tells the scene about the query and the selection (see `SceneController.setView`). */
@@ -118,6 +121,8 @@ export interface SceneStats {
   detailEnabled: boolean;
   /** surface-aligned camera mode */
   surface: boolean;
+  /** first-person view (the camera stands at an observatory): which one, the view direction (az: compass bearing, rad; el: rad) and the field of view; null when off */
+  firstPerson: { id: string; name: string; az: number; el: number; fovDeg: number } | null;
   /** selected path: window relative to now (ms, negative = past) */
   path: { pastMs: number; futureMs: number } | null;
   /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
@@ -249,6 +254,8 @@ export class SceneController {
   /** the selected object has a position this frame (`updateHighlights`) */
   private selOk = false;
   private surfaceOn = false;
+  /** first-person view: the observatory the camera stands at and the camera it replaced (restored on leaving) */
+  private fp: { id: string; prev: FirstPersonSaved } | null = null;
   private surfaceSrc: SurfaceSource | null = null;
   /** the user's remembered choice: false after they switched the surface view off, which stops it coming on by itself */
   private surfaceAuto = loadSurfacePref();
@@ -481,6 +488,8 @@ export class SceneController {
     const old = this.ctx;
     const sameFocus = focus.size === old.focus.size && [...focus].every((id) => old.focus.has(id));
     const selChanged = v.selectedId !== this.selectedId;
+    // the camera stands at an observatory that is no longer the selection: the first-person view ends and the camera is restored
+    if (selChanged && this.fp && selectionEndsFirstPerson(this.fp.id, v.selectedId)) this.leaveFirstPerson();
     if (!selChanged && sameFocus && v.query === this.query && v.text === (old.text ?? null) && v.highlight === this.highlight) return;
     this.query = v.query;
     this.highlight = v.highlight;
@@ -582,6 +591,7 @@ export class SceneController {
   }
 
   setFollow(follow: boolean): void {
+    if (!follow && this.fp) this.leaveFirstPerson(); // letting go of the observatory: back to the globe view centred where we stood
     if (follow !== this.follow) this.groundLock = null;
     if (!follow && this.follow) {
       this.freeTarget.copy(this.rig.target).sub(this.rig.pan);
@@ -609,6 +619,10 @@ export class SceneController {
    * other) is followed, a ground point is followed, neither is the home view (free camera over the Earth).
    */
   focus(req: FocusRequest): void {
+    if (this.fp) {
+      if (!focusEndsFirstPerson(this.fp.id, req)) return; // the observatory we stand at, again: nothing to do
+      this.leaveFirstPerson(); // another object, a ground point or the home view: the camera is restored first
+    }
     this.groundLock = null;
     this.untrackedId = null;
     if (req.id) {
@@ -681,6 +695,60 @@ export class SceneController {
     if (req) this.applyAutoSurface(req);
   }
 
+  // ------------------------------------------------------------------ first-person view
+
+  /** The observatory the camera stands at (first-person view), or null. */
+  get firstPersonId(): string | null {
+    return this.fp?.id ?? null;
+  }
+
+  /**
+   * First-person view: the camera stands AT entity `id` (a ground site at eye height, a space telescope where it is now) and looks
+   * outward in the site's local east/north/up frame; it replaces the Earth view (the rig's `firstPerson` mode, entered with the
+   * usual mode transition). The entity is followed like any selection (an internal refocus: `nonce` 0 skips the auto surface view)
+   * and its own point, ring, label and model are not drawn. `leaveFirstPerson` restores the camera and its field of view.
+   * False when the entity has no position.
+   */
+  lookFrom(id: string): boolean {
+    if (this.fp?.id === id) return true;
+    const rec = this.recs.get(id);
+    if (!rec || this.bodyIds.has(id) || !this.worldPos(id, clock.now(), this.tmp)) return false;
+    const alt = altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z]);
+    this.leaveFirstPerson();
+    if (this.surfaceOn) this.setSurfaceMode(false); // leaves a globe pose behind, which is what is restored later
+    const prev: FirstPersonSaved = { dist: this.rig.dist, az: this.rig.az, el: this.rig.el, fov: this.camera.fov };
+    if (!this.follow || this.followId !== id) {
+      this.focus({ id, nonce: 0 });
+      this.cb.onFollowChange?.(true);
+    }
+    const start = firstPersonStart(alt);
+    this.fp = { id, prev };
+    this.rig.switchMode('firstPerson');
+    this.rig.az = start.az;
+    this.rig.el = start.el;
+    this.camera.fov = start.fov;
+    this.camera.updateProjectionMatrix();
+    this.applyAppearance(); // hides the observatory's own point
+    this.cb.onFirstPersonChange?.(id);
+    return true;
+  }
+
+  /** End the first-person view (no-op when off): the field of view and the previous distance, azimuth and elevation come back, in the globe view. */
+  private leaveFirstPerson(): void {
+    const fp = this.fp;
+    if (!fp) return;
+    this.fp = null;
+    this.camera.fov = fp.prev.fov || FP_FOV_START;
+    this.camera.updateProjectionMatrix();
+    this.rig.target.copy(this.camera.position); // an unfollowed globe view stays centred where we stood
+    this.rig.switchMode('globe');
+    this.rig.az = fp.prev.az;
+    this.rig.el = fp.prev.el;
+    this.rig.dist = fp.prev.dist;
+    this.applyAppearance(); // the observatory's point is drawn again
+    this.cb.onFirstPersonChange?.(null);
+  }
+
   // ------------------------------------------------------------------ camera modes and fit
 
   get surfaceMode(): boolean {
@@ -714,7 +782,7 @@ export class SceneController {
    * Leaving flies back to the globe view of the same place.
    */
   setSurfaceMode(on: boolean): void {
-    if (on === this.surfaceOn) return;
+    if (on === this.surfaceOn || this.fp) return; // the first-person view has no surface mode
     if (on) {
       if (!this.surfaceAvailable()) return;
       const src = this.pickSurfaceSource();
@@ -750,6 +818,7 @@ export class SceneController {
    * Returns false when none of the ids has a position.
    */
   fitEntities(ids: string[], opts: { points?: { latDeg: number; lonDeg: number }[]; includePath?: boolean } = {}): boolean {
+    this.leaveFirstPerson();
     // surface view of one object: refit inside the surface view instead of leaving it for the globe
     if (this.surfaceOn && ids.length === 1 && !opts.points?.length && this.fitSurface(ids[0])) return true;
     // an entity with a 3D model and nothing else to frame: show the model (following it), not a 3,200 km view of a dot
@@ -781,6 +850,7 @@ export class SceneController {
    * above on the sunlit side. False when the entity has no model or no state. Leaves the surface view.
    */
   viewModel(id: string): boolean {
+    this.leaveFirstPerson();
     const def = this.models.defOf(id);
     const rec = this.recs.get(id);
     if (!def || !rec) return false;
@@ -800,6 +870,7 @@ export class SceneController {
 
   /** FIT VISIBLE: everything the query leaves on screen (the selection and its related objects always stay). */
   fitVisible(): boolean {
+    this.leaveFirstPerson();
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const rec of this.recs.values()) {
@@ -991,6 +1062,7 @@ export class SceneController {
       detail: this.detail.stats,
       detailEnabled: this.detail.enabled,
       surface: this.surfaceOn,
+      firstPerson: this.fp ? { id: this.fp.id, name: this.recs.get(this.fp.id)?.name ?? this.fp.id, az: this.rig.az, el: this.rig.el, fovDeg: this.camera.fov } : null,
       path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now } : null,
       scope: { mode: this.scopeMode, ...this.scopeCounts },
       frame: { label: centreLabel(this.frameCentre, (id) => this.recs.get(id)), isDefault: isEarthCentre(this.frameCentre), locked: this.frameLocked },
@@ -1134,7 +1206,7 @@ export class SceneController {
       const rec = this.recs.get(id);
       const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
       // the selected point is drawn from the highlight set (updateHighlights), not the cloud
-      paint(this.sats, i, rec, !rec || id === this.selectedId ? 'hide' : this.lookOf(rec, c));
+      paint(this.sats, i, rec, !rec || id === this.selectedId || id === this.fp?.id ? 'hide' : this.lookOf(rec, c));
       if (active && c === 'show') this.satKeep[i] = 1;
       if (exemptRec(rec)) this.satExempt[i] = 1;
     });
@@ -1144,7 +1216,7 @@ export class SceneController {
     this.dynIds.forEach((id, i) => {
       const rec = this.recs.get(id);
       const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
-      paint(this.dyn, i, rec, rec ? this.lookOf(rec, c) : 'hide');
+      paint(this.dyn, i, rec, rec && id !== this.fp?.id ? this.lookOf(rec, c) : 'hide'); // the observatory the camera stands at is not drawn
       this.dynBaseSize[i] = this.dyn.size.getX(i);
       if (active && c === 'show') this.dynKeep[i] = 1;
       if (exemptRec(rec)) this.dynExempt[i] = 1;
@@ -1465,7 +1537,11 @@ export class SceneController {
     // camera
     let anchored: boolean;
     let focusBody: string | undefined;
-    if (this.surfaceOn) {
+    // first-person: the camera stands at the observatory, which must have a position (else the view ends, like the surface view)
+    if (this.fp && !this.worldPos(this.fp.id, t, this.anchor)) this.leaveFirstPerson();
+    if (this.fp) {
+      anchored = true;
+    } else if (this.surfaceOn) {
       anchored = this.surfaceTarget(this.anchor, t);
       if (!anchored) this.setSurfaceMode(false); // the anchored object lost its position: back to the globe
       // an object may be approached as in the globe view (the camera itself still stops MIN_ALT_KM above the ground)
@@ -1585,6 +1661,7 @@ export class SceneController {
         return { r: liftNearSurface(s.r), v: s.v };
       },
       visibility: (id) => {
+        if (id === this.fp?.id) return 'hide'; // the model of the observatory the camera stands at would surround the camera
         const r = rec(id);
         const look = r ? this.lookOf(r) : 'hide';
         return look === 'boost' ? 'show' : look;
@@ -1701,7 +1778,8 @@ export class SceneController {
       if (ok) hi.pos.setXYZ(i, tmp.x, tmp.y, tmp.z);
     };
     const sel = this.selectedId ? this.recs.get(this.selectedId) : undefined;
-    const ok = !!sel && this.worldPos(sel.id, t, tmp);
+    const here = !!sel && sel.id === this.fp?.id; // the camera stands at the selection: no ring, dot or label on top of it
+    const ok = !!sel && !here && this.worldPos(sel.id, t, tmp);
     this.selOk = ok;
     const c = sel ? this.palette.colors[colorKeyOf(sel)] : this.palette.accent;
     // a drawn 3D model replaces the sprite; a model larger than the ring is its own selection cue

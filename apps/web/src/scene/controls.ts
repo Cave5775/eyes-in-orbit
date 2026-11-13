@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FP_LOOK_KM, clampFpEl, firstPersonDrag, firstPersonEye, firstPersonLookDir, zoomFov } from '../lib/first-person';
 import {
   MAX_DIST_KM, MIN_ALT_KM, advanceSurfaceFrame, altitudeOf, blendPosition, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceFrame, type V3,
 } from '../lib/camera';
@@ -12,7 +13,7 @@ export interface FlyOptions {
   durationMs?: number;
 }
 
-export type RigMode = 'globe' | 'surface';
+export type RigMode = 'globe' | 'surface' | 'firstPerson';
 
 const ease = (u: number) => u * u * (3 - 2 * u);
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -24,6 +25,10 @@ const tup = (v: THREE.Vector3): V3 => [v.x, v.y, v.z];
  *  - `surface`: the target is an object (or a ground point) and the frame is its local east/north/up, so "up" on screen is
  *    the local vertical, the horizon is level and az = -90 deg looks north. The frame is north-up but carried along the
  *    ground (see `advanceSurfaceFrame`), so the view does not spin when the target passes over a pole.
+ *  - `firstPerson`: the camera stands at the followed object (its eye, see `firstPersonEye`) and looks outward in the same local
+ *    east/north/up frame; `az` is a compass bearing (0 = north, clockwise) and `el` the elevation above the horizon. Left drag turns
+ *    the view, wheel and pinch change the camera's field of view (the camera does not move), pan is off. The look-at `target` is
+ *    `FP_LOOK_KM` ahead of the eye (for the scope policy and the mode transition's aim); `dist` is that distance.
  * Left drag orbits, right/shift drag pans (in surface mode it slides the target along the ground, see `onGroundPan`), wheel and pinch zoom with a step proportional to the height
  * above the surface (see `zoomDistance`). Any user input cancels a fly-to or a mode transition.
  */
@@ -173,7 +178,16 @@ export class OrbitRig {
     this.dist = Math.min(this.maxDist, Math.max(this.minDist, this.dist));
 
     // the mode's own ("natural") pose
-    if (this.mode === 'surface') {
+    if (this.mode === 'firstPerson') {
+      const eye = firstPersonEye(tup(base));
+      const basis = (this.frame = advanceSurfaceFrame(this.frame, ellipsoidUp(eye)));
+      this.el = clampFpEl(this.el);
+      const d = firstPersonLookDir(basis, this.az, this.el);
+      this.dist = FP_LOOK_KM;
+      this.natOffset.set(-d[0] * FP_LOOK_KM, -d[1] * FP_LOOK_KM, -d[2] * FP_LOOK_KM);
+      this.target.set(eye[0] - this.natOffset.x, eye[1] - this.natOffset.y, eye[2] - this.natOffset.z);
+      this.natUp.set(basis.u[0], basis.u[1], basis.u[2]);
+    } else if (this.mode === 'surface') {
       const basis = (this.frame = advanceSurfaceFrame(this.frame, ellipsoidUp(tup(this.target))));
       this.el = this.clampSurfaceEl(this.el);
       const ce = Math.cos(this.el), se = Math.sin(this.el), ca = Math.cos(this.az), sa = Math.sin(this.az);
@@ -227,6 +241,12 @@ export class OrbitRig {
   }
 
   private orbitBy(dx: number, dy: number): void {
+    if (this.mode === 'firstPerson') {
+      const v = firstPersonDrag(this.az, this.el, dx, dy, this.camera.fov, this.dom.clientHeight);
+      this.az = v.az;
+      this.el = v.el;
+      return;
+    }
     this.az -= dx * 0.0055;
     const el = this.el + dy * 0.0055;
     this.el = this.mode === 'surface' ? this.clampSurfaceEl(el) : Math.max(-MAX_EL, Math.min(MAX_EL, el));
@@ -243,6 +263,7 @@ export class OrbitRig {
   }
 
   private panBy(dx: number, dy: number): void {
+    if (this.mode === 'firstPerson') return; // no pan: the camera stays at the observatory
     const k = (2 * this.dist * Math.tan((this.camera.fov * Math.PI) / 360)) / this.dom.clientHeight;
     if (this.mode === 'surface') {
       // the target slides along the ground at its own height: the owner moves it (and stops following whatever it followed)
@@ -256,6 +277,12 @@ export class OrbitRig {
   }
 
   private zoomBy(factor: number): void {
+    if (this.mode === 'firstPerson') {
+      // zoom is the field of view (wheel down / pinch in: wider), the camera does not move
+      this.camera.fov = zoomFov(this.camera.fov, factor);
+      this.camera.updateProjectionMatrix();
+      return;
+    }
     this.dist = zoomDistance(this.dist, factor, this.altitudeKm, {
       minDist: this.minDist,
       maxDist: this.maxDist,
