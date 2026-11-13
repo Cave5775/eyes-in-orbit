@@ -33,7 +33,7 @@ const HELP: [string, string][] = [
   ['Model', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or Model on such a selection flies to it'],
   ['View: Labels', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
   ['View: Highlight', 'Dims everything but the selection, the objects related to it and what the search matches (smaller, fainter points) instead of hiding what the search leaves out. Hidden groups stay hidden. Off by default, remembered'],
-  ['View menu (top bar)', 'Labels, highlight, close-up Earth imagery, scope (draw everything, or only what is near the camera focus) and the colour legend; and show or hide the DSN panel (hidden by default), the launch board, the news ticker and the colour legend; a hidden panel gives its space back to the globe and the choice is remembered'],
+  ['View menu (top bar)', 'Labels, highlight, close-up Earth imagery, scope (draw everything, or only what is near the camera focus) and the colour legend; and show or hide the launch board, the news ticker and the colour legend (the Data streams button next to it opens the feed list and the DSN table); a hidden panel gives its space back to the globe and the choice is remembered'],
   ['H', 'Show / hide this help'],
 ];
 

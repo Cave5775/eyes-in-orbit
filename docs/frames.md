@@ -10,7 +10,7 @@ This section is the contract as implemented now; the sections below are the orig
 
 **The focus is four fields** in the store: `selectedId`, `frame` (an entity id, default `body-earth`; `Centre` is that string, `EARTH_CENTRE`, with `isEarthCentre` as the identity fast path: the Earth is the origin, every output equals the pre-frame behaviour), `frameLocked` and `follow`. `focus` is only the one-shot camera request that goes with a change (`{id, nonce}`, `{lat, lon, nonce}` for a pad, `{nonce}` for the home view).
 
-**One selection action**, `selectObject(id, {fly = true})`; every route calls it: tree body nodes and rows, list rows and search results (`EntityBrowser`), breadcrumb crumbs (`FrameBar`), scene clicks and the choice popup (`SceneView`), the DSN panel, launch cards (`focusLaunch`), and the restored frame at load. It
+**One selection action**, `selectObject(id, {fly = true})`; every route calls it: tree body nodes and rows, list rows and search results (`EntityBrowser`), breadcrumb crumbs (`FrameBar`), scene clicks and the choice popup (`SceneView`), the DSN table (Data streams popup), launch cards (`focusLaunch`), and the restored frame at load. It
 1. selects the entity (the detail panel shows it; an id that is not in the catalog is ignored),
 2. sets the frame to it when it is orbitable and the frame is not locked (a locked frame stays; a non-orbitable entity leaves the frame as it is),
 3. turns follow on and emits ONE focus request for it (`fly: false` skips both: select and frame without moving the camera).
@@ -60,7 +60,7 @@ setFrameLocked(locked: boolean): void;
 
 **Data.** LRO (Horizons id -85) must be fetched Moon-centred: `CENTER '500@301'`, `frame: 'MOON:inertial'`, `bodyId: 'MOON'`, a step fine enough for a ~2 h orbit (about 5 min, with Hermite interpolation from the velocities Horizons returns) over a window that stays modest (the per-target window/step must be explicit in `dsn-targets.ts`/`horizons.ts`). The drawn Moon comes from the low-precision series (`moonPositionEci`, about 0.3 degrees, up to ~2000 km); LRO is expressed relative to that same Moon by the frame hop, so it stays on the drawn Moon. Horizons vectors are ICRF J2000 and the core frames are equatorial of date (about 0.36 degrees of precession in 2026): a tilt of ~11 km at lunar distance, accepted and documented, not fixed here.
 
-**UI** (later phase): a breadcrumb `SUN > EARTH > MOON` with a lock toggle shows and sets the frame; the entity browser groups entities under their primary body as a tree; a Lock action in the selection; the DSN panel moves into the View menu (plans.md UI/UX item).
+**UI** (later phase): a breadcrumb `SUN > EARTH > MOON` with a lock toggle shows and sets the frame; the entity browser groups entities under their primary body as a tree; a Lock action in the selection; the DSN table lives in the Data streams popup.
 
 ## Implementation notes (FRAME, phase 1)
 
@@ -149,6 +149,6 @@ One universal rule decides which orbit lines are drawn, from one pure function (
 | FRAME | `Centre` type and `lib/frame.ts`, store `frame`/`frameLocked`, replace `RefBody` usage, paths/trails/orbit lines sampled in the frame, readouts, camera pivot, orbit period by primary gm | `apps/web/src/lib/{frame,ref-body,paths,orbit,telemetry}.ts` (+tests), `apps/web/src/state/store.ts`, `scene/{PathOverlay,overlays}.ts`, the frame/focusBody/bodyTarget/path parts of `scene/SceneController.ts`, `ui/SceneView.tsx` HUD frame text, `ui/TopBar.tsx` tab wiring (keep the tabs working, they become `setFrame` shortcuts), `ui/detail/TelemetryTab.tsx` readout labels |
 | SURFACE | surface view targets the object, oriented with the local surface, on by default when viewing an object | surface functions of `scene/SceneController.ts` (`setSurfaceMode`, `surfaceTarget`, `surfaceFitDist`, `fitSurface`, `panSurface`, `pickSurfaceSource`, `freezeSurfaceSource`, a small auto-surface hook at the end of `focus()`), `lib/camera.ts` and `scene/controls.ts` surface parts, tests |
 
-Phase 2 (after phase 1 is verified and committed): UI/UX agent (breadcrumb, lock, entity tree, View menu with the DSN panel).
+Phase 2 (after phase 1 is verified and committed): UI/UX agent (breadcrumb, lock, entity tree, View menu; the DSN table later moved to the Data streams popup).
 
 Rules for everyone: no git commands that change state; small Edit calls and re-reading regions right before editing shared files; own dev-server port; report what was verified and what not.

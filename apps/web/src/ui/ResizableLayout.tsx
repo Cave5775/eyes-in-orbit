@@ -9,7 +9,7 @@ function viewport() {
 
 /**
  * The app grid root. Panel sizes are CSS variables on this element (`--left-w`, `--right-w`,
- * `--bottom-h`, `--dsn-w`) so the grid template and the splitter positions both follow them.
+ * `--bottom-h`) so the grid template and the splitter positions both follow them.
  * `children` is passed through unchanged, so resizing re-renders only this component.
  */
 export function ResizableLayout({ children }: { children: ReactNode }) {
@@ -45,12 +45,11 @@ export function ResizableLayout({ children }: { children: ReactNode }) {
 
   // hidden panels (PANELS menu) give their space back; the stored sizes are untouched, so showing one restores it
   const shown = usePanels((s) => s.visible);
-  const bottomShown = shown.board || shown.dsn;
+  const bottomShown = shown.board;
   const style = {
     '--left-w': `${sizes.left}px`,
     '--right-w': `${sizes.right}px`,
     '--bottom-h': bottomShown ? `${sizes.bottom}px` : '0px',
-    '--dsn-w': `${sizes.dsn}px`,
     '--ticker-h': shown.ticker ? '26px' : '0px',
   } as CSSProperties;
 
@@ -71,7 +70,6 @@ export function ResizableLayout({ children }: { children: ReactNode }) {
       {sp('left', { orientation: 'vertical', grow: 1, label: 'Resize entity list', className: 'sp-left' })}
       {sp('right', { orientation: 'vertical', grow: -1, label: 'Resize detail panel', className: 'sp-right' })}
       {bottomShown && sp('bottom', { orientation: 'horizontal', grow: -1, label: 'Resize bottom panels', className: 'sp-bottom' })}
-      {shown.board && shown.dsn && sp('dsn', { orientation: 'vertical', grow: -1, label: 'Resize DSN panel', className: 'sp-dsn' })}
     </div>
   );
 }

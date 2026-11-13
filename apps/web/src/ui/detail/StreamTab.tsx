@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { StreamLink } from '@eio/core';
 import { MAX_FLOATS } from '../../lib/floating';
-import { pageOrigin, resolveStream } from '../../lib/youtube';
+import { embedFor } from '../../lib/stream-url';
+import { pageOrigin } from '../../lib/youtube';
 import { useStore } from '../../state/store';
 import { StreamFrame } from '../StreamFrame';
 
@@ -12,7 +13,10 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
   const closeFloat = useStore((s) => s.closeFloat);
   const link = streams[Math.min(index, streams.length - 1)];
   if (!link) return <div className="empty">No streams for this entity.</div>;
-  const { embedUrl, href } = resolveStream(link, pageOrigin());
+  // the same resolver as the "Watch a livestream" field: YouTube, Twitch, Vimeo and direct video links embed
+  const embed = link.kind === 'youtube' || link.kind === 'web' ? embedFor(link.url, pageOrigin()) : null;
+  const embedUrl = embed?.embedUrl ?? null;
+  const href = link.url;
   // a stream lives in one place: while it floats, the tab shows a placeholder instead of a second player
   const popped = !!embedUrl && floats.some((f) => f.url === embedUrl);
   const full = floats.length >= MAX_FLOATS;
@@ -34,7 +38,7 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
           <button className="btn active" onClick={() => closeFloat(embedUrl)}>Dock back</button>
         </div>
       ) : embedUrl ? (
-        <StreamFrame key={embedUrl} url={embedUrl} />
+        <StreamFrame key={embedUrl} url={embedUrl} autoplay={false} />
       ) : (
         <div className="stream-fallback">
           <div className="dim">{link.title} cannot be embedded (the provider blocks framing).</div>

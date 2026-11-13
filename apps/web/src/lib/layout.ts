@@ -1,6 +1,6 @@
 /** Pure sizing and persistence logic for the resizable panels (no DOM access except the injected storage). */
 
-export type PanelKey = 'left' | 'right' | 'bottom' | 'dsn';
+export type PanelKey = 'left' | 'right' | 'bottom';
 export type PanelSizes = Partial<Record<PanelKey, number>>;
 
 interface Spec {
@@ -12,12 +12,11 @@ interface Spec {
   max: number;
 }
 
-/** Sizes in px: widths for `left`, `right` and `dsn` (the DSN panel inside the bottom row), height for `bottom`. */
+/** Sizes in px: widths for `left` and `right`, height for `bottom`. */
 export const PANELS: Record<PanelKey, Spec> = {
   left: { def: 292, defNarrow: 240, min: 200, max: 640 },
   right: { def: 372, defNarrow: 320, min: 260, max: 760 },
   bottom: { def: 176, defNarrow: 176, min: 110, max: 520 },
-  dsn: { def: 470, defNarrow: 360, min: 260, max: 900 },
 };
 
 export const PANEL_KEYS = Object.keys(PANELS) as PanelKey[];
@@ -49,7 +48,6 @@ export function maxSize(key: PanelKey, sizes: Record<PanelKey, number>, vp: View
     case 'left': room = vp.w - MIN_SCENE_W - sizes.right; break;
     case 'right': room = vp.w - MIN_SCENE_W - sizes.left; break;
     case 'bottom': room = vp.h - CHROME_H - MIN_SCENE_H; break;
-    case 'dsn': room = vp.w - PANELS.dsn.min; break;
   }
   // never let a tiny viewport push the cap below the minimum
   return Math.max(spec.min, Math.min(spec.max, room));
@@ -70,13 +68,11 @@ export function resolveSizes(stored: PanelSizes, vp: Viewport): Record<PanelKey,
     left: stored.left ?? defaultSize('left', vp.w),
     right: stored.right ?? defaultSize('right', vp.w),
     bottom: stored.bottom ?? defaultSize('bottom', vp.w),
-    dsn: stored.dsn ?? defaultSize('dsn', vp.w),
   };
   out.left = clampSize('left', out.left, out, vp);
   out.right = clampSize('right', out.right, out, vp);
   out.left = clampSize('left', out.left, out, vp);
   out.bottom = clampSize('bottom', out.bottom, out, vp);
-  out.dsn = clampSize('dsn', out.dsn, out, vp);
   return out;
 }
 

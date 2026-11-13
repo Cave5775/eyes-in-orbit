@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import { providerOfEmbed, safeHref } from '../lib/stream-url';
 import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
 
 /**
@@ -6,8 +7,60 @@ import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, type Widget
  * the URL alone so scene, clock, store and selection updates never re-render (and never reload) the iframe.
  * Play and mute state comes back from the player by postMessage into this component's own state.
  * The strip is shown on hover (or always, on touch screens) and sits over the bottom edge of the frame.
+ * Only YouTube takes our strip (its player is driven by postMessage). Twitch and Vimeo embeds keep their own controls,
+ * and a direct video file is a <video controls> element (an HLS .m3u8 only where the browser plays it natively).
  */
-export const StreamFrame = memo(function StreamFrame({ url, className = '' }: { url: string; className?: string }) {
+export const StreamFrame = memo(function StreamFrame({ url, className = '', autoplay = true }: { url: string; className?: string; /** direct video only: false = wait for a click (the docked tab) */ autoplay?: boolean }) {
+  const provider = providerOfEmbed(url);
+  if (provider === null) {
+    const href = safeHref(url);
+    return (
+      <div className={`stream-player stream-fallback ${className}`.trim()}>
+        <div className="dim">This link cannot be shown here.</div>
+        {href && <a className="btn active" href={href} target="_blank" rel="noopener noreferrer">Open in new tab</a>}
+      </div>
+    );
+  }
+  if (provider === 'video') return <VideoPlayer url={url} className={className} autoplay={autoplay} />;
+  if (provider === 'twitch' || provider === 'vimeo') {
+    return (
+      <div className={`stream-player ${className}`.trim()}>
+        <iframe
+          className="stream-frame" src={url} title="Live stream" allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+          allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
+      </div>
+    );
+  }
+  return <YouTubeFrame url={url} className={className} />;
+});
+
+/** Whether this browser plays HLS itself (Safari, iOS); other browsers would need a library, which the app does not bundle. */
+function hlsNative(): boolean {
+  try {
+    return document.createElement('video').canPlayType('application/vnd.apple.mpegurl') !== '';
+  } catch {
+    return false;
+  }
+}
+
+function VideoPlayer({ url, className, autoplay }: { url: string; className: string; autoplay: boolean }) {
+  const hls = /.m3u8$/i.test(new URL(url).pathname);
+  if (hls && !hlsNative()) {
+    return (
+      <div className={`stream-player stream-fallback ${className}`.trim()}>
+        <div className="dim">This browser cannot play HLS (.m3u8) streams directly.</div>
+        <a className="btn active" href={url} target="_blank" rel="noopener noreferrer">Open stream</a>
+      </div>
+    );
+  }
+  return (
+    <div className={`stream-player ${className}`.trim()}>
+      <video className="stream-frame" src={url} controls autoPlay={autoplay && url.startsWith('https:')} muted playsInline preload="metadata" />
+    </div>
+  );
+}
+
+function YouTubeFrame({ url, className }: { url: string; className: string }) {
   const frame = useRef<HTMLIFrameElement>(null);
   // the embed starts muted (mute=1), so that is the state until the player says otherwise
   const [info, setInfo] = useState<WidgetInfo>({ muted: true });
@@ -62,4 +115,4 @@ export const StreamFrame = memo(function StreamFrame({ url, className = '' }: { 
       </div>
     </div>
   );
-});
+}

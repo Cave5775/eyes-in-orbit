@@ -3,8 +3,8 @@ import { fmtAgo, fmtBitrate, fmtDist, fmtLightTime } from '../lib/format';
 import { useStore } from '../state/store';
 import { useWallNow } from './hooks';
 
-/** Active DSN dish <-> spacecraft links; clicking a spacecraft locates it on the globe. */
-export function DsnPanel() {
+/** Active DSN dish <-> spacecraft links, the DSN part of the Data streams popup; clicking a spacecraft locates it on the globe. */
+export function DsnSection() {
   const dsn = useStore((s) => s.dsn);
   const entities = useStore((s) => s.entities);
   const selectObject = useStore((s) => s.selectObject);
@@ -14,9 +14,9 @@ export function DsnPanel() {
   const idle = (dsn?.links ?? []).filter((l) => !(l.downlink?.active || l.uplink?.active));
 
   return (
-    <section className="panel dsn">
-      <div className="panel-head">
-        <span>Deep Space Network</span>
+    <div className="dsn">
+      <div className="ds-sub">
+        <span>Dishes and links</span>
         <span className="mono dim">{dsn ? `${active.length} active · ${fmtAgo(dsn.fetchedAt, wall)}` : 'no data'}</span>
       </div>
       {!dsn ? (
@@ -52,6 +52,6 @@ export function DsnPanel() {
           </tbody>
         </table>
       )}
-    </section>
+    </div>
   );
 }
