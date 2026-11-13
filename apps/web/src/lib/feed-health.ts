@@ -84,3 +84,12 @@ export function feedCounts(list: ConnectorHealth[]): { red: number; orange: numb
   }
   return { red, orange };
 }
+
+/** Link state as the Data streams button and its status line show it: label and the `.dot` / `.chip` tone. */
+export const CONN_LABEL: Record<'connecting' | 'live' | 'reconnecting' | 'offline' | 'mock', [label: string, tone: string]> = {
+  connecting: ['Connecting', 'warn'],
+  live: ['Link up', 'ok'],
+  reconnecting: ['Reconnecting', 'warn'],
+  offline: ['Offline', 'bad'],
+  mock: ['Mock data', 'accent'],
+};

@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DSN_FEEDS, FEED_CATALOG, feedInfo } from '../src/lib/feed-catalog';
+import { DSN_FEEDS, FEED_CATALOG, credentialConnector, feedInfo } from '../src/lib/feed-catalog';
 import { mockHealth } from '../src/mock/generators';
 
 const dir = join(__dirname, '../../server/src/connectors');
@@ -32,5 +32,14 @@ describe('feed catalog', () => {
   it('gives unknown ids a generic entry and knows the DSN ids', () => {
     expect(feedInfo('nope').name).toBe('nope');
     expect([...DSN_FEEDS].every((id) => FEED_CATALOG[id].name === 'Deep Space Network')).toBe(true);
+  });
+});
+
+describe('credential feeds', () => {
+  it('maps the feeds that need a login or key, and the mock alias', () => {
+    expect(credentialConnector('spacetrack')).toBe('spacetrack');
+    expect(credentialConnector('launchlibrary')).toBe('launchlibrary');
+    expect(credentialConnector('launch-library-2')).toBe('launchlibrary');
+    expect(credentialConnector('celestrak')).toBeNull();
   });
 });
