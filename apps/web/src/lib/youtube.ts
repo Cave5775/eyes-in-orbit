@@ -65,6 +65,24 @@ export function embedParams(origin?: string): URLSearchParams {
   return p;
 }
 
+/**
+ * The same YouTube embed with YouTube's own control bar on (`controls=1`, keyboard shortcuts back on) or off (the
+ * defaults of `embedParams`). Everything else, including `enablejsapi`, stays, so our strip keeps working either way.
+ * Changing the iframe src reloads the player, so callers switch it only on a user's click. Non-YouTube URLs pass through.
+ */
+export function withNativeControls(embedUrl: string, on: boolean): string {
+  let u: URL;
+  try {
+    u = new URL(embedUrl);
+  } catch {
+    return embedUrl;
+  }
+  if (u.origin !== YT_ORIGIN || !u.pathname.startsWith('/embed/')) return embedUrl;
+  u.searchParams.set('controls', on ? '1' : '0');
+  u.searchParams.set('disablekb', on ? '0' : '1');
+  return u.toString();
+}
+
 /** Convert a YouTube watch/live/short URL to an embeddable iframe URL, or null if it is not YouTube. */
 export function toEmbedUrl(url: string, origin?: string): string | null {
   const id = youtubeVideoId(url);

@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { providerOfEmbed, safeHref } from '../lib/stream-url';
-import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
+import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, withNativeControls, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
+import { usePlayerPrefs } from '../state/player';
 
 /**
  * The only element that holds the live video, used by the docked Stream tab and by pop-out windows. Memoised on
@@ -9,6 +10,8 @@ import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, type Widget
  * The strip is shown on hover (or always, on touch screens) and sits over the bottom edge of the frame.
  * Only YouTube takes our strip (its player is driven by postMessage). Twitch and Vimeo embeds keep their own controls,
  * and a direct video file is a <video controls> element (an HLS .m3u8 only where the browser plays it natively).
+ * The strip's CONTROLS button switches every YouTube player to YouTube's own control bar (one shared choice,
+ * `state/player.ts`); the players reload once, and a HIDE CONTROLS button in the corner switches back.
  */
 export const StreamFrame = memo(function StreamFrame({ url, className = '', autoplay = true }: { url: string; className?: string; /** direct video only: false = wait for a click (the docked tab) */ autoplay?: boolean }) {
   const provider = providerOfEmbed(url);
@@ -67,6 +70,9 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
   // The pointer over a cross-origin iframe is delivered to the frame, not the page: the transparent cover below
   // takes the pointer instead, so hover and click reach the page and can reveal the strip.
   const [hot, setHot] = useState(false);
+  const native = usePlayerPrefs((s) => s.nativeControls);
+  const setNative = usePlayerPrefs((s) => s.setNativeControls);
+  const src = withNativeControls(url, native);
 
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
@@ -101,18 +107,27 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
       <iframe
         ref={frame}
         className="stream-frame"
-        src={url}
+        src={src}
         title="Live stream"
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+        allowFullScreen
         referrerPolicy="strict-origin-when-cross-origin"
         onLoad={onLoad}
       />
-      {/* transparent: the picture stays unobstructed; a click on it reveals the strip */}
-      <div className="stream-cover" onMouseEnter={() => setHot(true)} onClick={() => setHot(true)} />
-      <div className="stream-strip">
-        <button className="btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>{playing ? 'Pause' : 'Play'}</button>
-        <button className="btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>{muted ? 'Unmute' : 'Mute'}</button>
-      </div>
+      {native ? (
+        // YouTube's own bar takes the clicks, so no cover; only a small corner button to switch back
+        <button className="btn stream-ctl-toggle" onClick={() => setNative(false)} title="Hide the player's own controls on all video players">Hide controls</button>
+      ) : (
+        <>
+          {/* transparent: the picture stays unobstructed; a click on it reveals the strip */}
+          <div className="stream-cover" onMouseEnter={() => setHot(true)} onClick={() => setHot(true)} />
+          <div className="stream-strip">
+            <button className="btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>{playing ? 'Pause' : 'Play'}</button>
+            <button className="btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>{muted ? 'Unmute' : 'Mute'}</button>
+            <button className="btn" onClick={() => setNative(true)} title="Show the player's own controls (seek bar, quality, captions, fullscreen) on all video players">Controls</button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
