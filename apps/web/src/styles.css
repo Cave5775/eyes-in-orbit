@@ -527,6 +527,15 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 .watch-input[aria-invalid='true'] { border-color: var(--bad); }
 .watch-error { margin-top: 5px; font-size: 11.5px; line-height: 1.35; color: var(--bad); }
 .watch-error a { margin-left: 4px; }
+.watch-recent { margin-top: 8px; }
+.watch-recent-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--ink-3); }
+.watch-recent-clear, .watch-recent-x { background: none; border: 0; padding: 0 4px; color: var(--ink-3); cursor: pointer; font: inherit; }
+.watch-recent-clear:hover, .watch-recent-x:hover { color: var(--ink); }
+.watch-recent-list { list-style: none; margin: 3px 0 0; padding: 0; max-height: 128px; overflow-y: auto; }
+.watch-recent-row { display: flex; align-items: center; gap: 4px; }
+.watch-recent-open { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 3px 4px; color: var(--ink-2, var(--ink)); cursor: pointer; font: inherit; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 3px; }
+.watch-recent-open:hover { background: var(--hover, rgba(255, 255, 255, 0.08)); color: var(--ink); }
+.watch-recent-x { font-size: 15px; line-height: 1; }
 video.stream-frame { background: #000; object-fit: contain; }
 
 /* ---- Deep Space Network table (inside the Data streams popup) ---- */
