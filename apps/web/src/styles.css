@@ -409,6 +409,11 @@ button.chip:hover { border-color: var(--ink-3); color: var(--ink); }
 .stream-player:hover .stream-strip, .stream-player.hot .stream-strip, .stream-player:focus-within .stream-strip { opacity: 1; pointer-events: auto; }
 .stream-strip .btn { background: rgba(13, 14, 16, 0.85); }
 @media (hover: none) { .stream-strip { opacity: 1; pointer-events: auto; } }
+/* mute button: 10 bars of rising height, light up to the volume, dark above (wheel over it changes the volume) */
+.stream-strip .vol-btn { padding: 4px 8px; }
+.vol-bars { display: inline-flex; align-items: flex-end; gap: 2px; width: 40px; height: 16px; }
+.vol-bars > span { flex: 1; background: #3a3e45; }
+.vol-bars > span.on { background: #e6e8eb; }
 /* with the player's own controls on: a small switch-back in the top-right corner, faint until hovered */
 .stream-ctl-toggle { position: absolute; top: 6px; right: 6px; padding: 2px 8px; font-size: 11px; background: rgba(13, 14, 16, 0.85); opacity: 0.55; }
 .stream-ctl-toggle:hover, .stream-ctl-toggle:focus-visible { opacity: 1; }

@@ -1,7 +1,8 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { providerOfEmbed, safeHref } from '../lib/stream-url';
 import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, withNativeControls, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
 import { usePlayerPrefs } from '../state/player';
+import { barHeights, barsLit, toggleMute as toggledMute, wheelVolume, type VolumeState } from '../lib/volume';
 
 /**
  * The only element that holds the live video, used by the docked Stream tab and by pop-out windows. Memoised on
@@ -67,6 +68,9 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
   const frame = useRef<HTMLIFrameElement>(null);
   // the embed starts muted (mute=1), so that is the state until the player says otherwise
   const [info, setInfo] = useState<WidgetInfo>({ muted: true });
+  // the level the wheel sets; YouTube reports its own in infoDelivery, which overrides this
+  const [volume, setVolume] = useState(100);
+  const muteBtn = useRef<HTMLButtonElement>(null);
   // The pointer over a cross-origin iframe is delivered to the frame, not the page: the transparent cover below
   // takes the pointer instead, so hover and click reach the page and can reveal the strip.
   const [hot, setHot] = useState(false);
@@ -78,25 +82,62 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== YT_ORIGIN || !frame.current || e.source !== frame.current.contentWindow) return;
       const next = parseWidgetMessage(e.data);
-      if (next) setInfo((prev) => ({ ...prev, ...next }));
+      if (next) {
+        setInfo((prev) => ({ ...prev, ...next }));
+        if (next.volume !== undefined) setVolume(next.volume);
+      }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
-  const send = (func: WidgetCommand) => frame.current?.contentWindow?.postMessage(widgetCommand(func), YT_ORIGIN);
+  const send = (func: WidgetCommand, args: unknown[] = []) => frame.current?.contentWindow?.postMessage(widgetCommand(func, args), YT_ORIGIN);
   const onLoad = () => frame.current?.contentWindow?.postMessage(widgetListen(), YT_ORIGIN);
   const playing = info.playerState === 1 || info.playerState === 3;
   const muted = info.muted ?? true;
+  const lit = barsLit({ volume, muted });
 
   const togglePlay = () => {
     send(playing ? 'pauseVideo' : 'playVideo');
     setInfo((p) => ({ ...p, playerState: playing ? 2 : 1 }));
   };
-  const toggleMute = () => {
-    send(muted ? 'unMute' : 'mute');
-    setInfo((p) => ({ ...p, muted: !muted }));
+  // the latest state, also between renders: several wheel events can arrive before React redraws, each must start from the last
+  const stateRef = useRef<VolumeState>({ volume, muted });
+  stateRef.current = { volume, muted };
+  const apply = (from: VolumeState, to: VolumeState) => {
+    stateRef.current = to;
+    if (to.volume !== from.volume) send('setVolume', [to.volume]);
+    if (to.muted !== from.muted) send(to.muted ? 'mute' : 'unMute');
+    setVolume(to.volume);
+    setInfo((p) => ({ ...p, muted: to.muted }));
   };
+  const toggleMute = () => {
+    const from = { volume, muted };
+    apply(from, toggledMute(from));
+  };
+  // arrow keys on the focused button change the level like the wheel (up/right louder), so it is not mouse-only
+  const onVolumeKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    const dir = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? -1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? 1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    const from = stateRef.current;
+    apply(from, wheelVolume(from, dir));
+  };
+  // non-passive, so preventDefault keeps the page from scrolling and the globe from zooming
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  useEffect(() => {
+    const el = muteBtn.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const from = stateRef.current;
+      applyRef.current(from, wheelVolume(from, e.deltaY));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [native]);
 
   return (
     <div
@@ -123,7 +164,11 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
           <div className="stream-cover" onMouseEnter={() => setHot(true)} onClick={() => setHot(true)} />
           <div className="stream-strip">
             <button className="btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>{playing ? 'Pause' : 'Play'}</button>
-            <button className="btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>{muted ? 'Unmute' : 'Mute'}</button>
+            <button ref={muteBtn} className="btn vol-btn" onClick={toggleMute} onKeyDown={onVolumeKey} title={`${muted ? 'Unmute' : 'Mute'}; scroll the wheel to change the volume (${muted ? 0 : volume}%)`} aria-label={muted ? 'Unmute' : 'Mute'}>
+              <span className="vol-bars" aria-hidden="true">
+                {barHeights().map((h, i) => <span key={i} className={i < lit ? 'on' : ''} style={{ height: `${h * 100}%` }} />)}
+              </span>
+            </button>
             <button className="btn" onClick={() => setNative(true)} title="Show the player's own controls (seek bar, quality, captions, fullscreen) on all video players">Controls</button>
           </div>
         </>

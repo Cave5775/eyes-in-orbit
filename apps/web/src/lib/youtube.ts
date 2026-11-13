@@ -109,11 +109,11 @@ export function resolveStream(link: StreamLink, origin?: string): { embedUrl: st
   return { embedUrl: link.kind === 'youtube' || link.kind === 'web' ? toEmbedUrl(link.url, origin) : null, href: link.url };
 }
 
-export type WidgetCommand = 'playVideo' | 'pauseVideo' | 'mute' | 'unMute';
+export type WidgetCommand = 'playVideo' | 'pauseVideo' | 'mute' | 'unMute' | 'setVolume';
 
 /** A player command as the IFrame API's postMessage form expects it. */
-export function widgetCommand(func: WidgetCommand): string {
-  return JSON.stringify({ event: 'command', func, args: [] });
+export function widgetCommand(func: WidgetCommand, args: unknown[] = []): string {
+  return JSON.stringify({ event: 'command', func, args });
 }
 
 /** Sent once the iframe has loaded so the player starts posting its state (`infoDelivery`) to the page. */
@@ -125,6 +125,8 @@ export interface WidgetInfo {
   /** -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued */
   playerState?: number;
   muted?: boolean;
+  /** 0-100 */
+  volume?: number;
 }
 
 /** Read the state fields out of a player message; null for anything else. */
@@ -140,9 +142,10 @@ export function parseWidgetMessage(data: unknown): WidgetInfo | null {
   if (!msg || typeof msg !== 'object') return null;
   const { event, info } = msg as { event?: unknown; info?: unknown };
   if (event !== 'infoDelivery' || !info || typeof info !== 'object') return null;
-  const { playerState, muted } = info as { playerState?: unknown; muted?: unknown };
+  const { playerState, muted, volume } = info as { playerState?: unknown; muted?: unknown; volume?: unknown };
   const out: WidgetInfo = {};
   if (typeof playerState === 'number' && Number.isFinite(playerState)) out.playerState = playerState;
   if (typeof muted === 'boolean') out.muted = muted;
+  if (typeof volume === 'number' && Number.isFinite(volume)) out.volume = volume;
   return out;
 }
