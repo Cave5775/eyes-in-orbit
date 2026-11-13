@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { providerOfEmbed } from '../lib/stream-url';
+import { providerOfEmbed, safeHref } from '../lib/stream-url';
 import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
 
 /**
@@ -10,9 +10,18 @@ import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, type Widget
  * Only YouTube takes our strip (its player is driven by postMessage). Twitch and Vimeo embeds keep their own controls,
  * and a direct video file is a <video controls> element (an HLS .m3u8 only where the browser plays it natively).
  */
-export const StreamFrame = memo(function StreamFrame({ url, className = '' }: { url: string; className?: string }) {
+export const StreamFrame = memo(function StreamFrame({ url, className = '', autoplay = true }: { url: string; className?: string; /** direct video only: false = wait for a click (the docked tab) */ autoplay?: boolean }) {
   const provider = providerOfEmbed(url);
-  if (provider === 'video') return <VideoPlayer url={url} className={className} />;
+  if (provider === null) {
+    const href = safeHref(url);
+    return (
+      <div className={`stream-player stream-fallback ${className}`.trim()}>
+        <div className="dim">This link cannot be shown here.</div>
+        {href && <a className="btn active" href={href} target="_blank" rel="noopener noreferrer">Open in new tab</a>}
+      </div>
+    );
+  }
+  if (provider === 'video') return <VideoPlayer url={url} className={className} autoplay={autoplay} />;
   if (provider === 'twitch' || provider === 'vimeo') {
     return (
       <div className={`stream-player ${className}`.trim()}>
@@ -34,7 +43,7 @@ function hlsNative(): boolean {
   }
 }
 
-function VideoPlayer({ url, className }: { url: string; className: string }) {
+function VideoPlayer({ url, className, autoplay }: { url: string; className: string; autoplay: boolean }) {
   const hls = /.m3u8$/i.test(new URL(url).pathname);
   if (hls && !hlsNative()) {
     return (
@@ -46,7 +55,7 @@ function VideoPlayer({ url, className }: { url: string; className: string }) {
   }
   return (
     <div className={`stream-player ${className}`.trim()}>
-      <video className="stream-frame" src={url} controls autoPlay muted playsInline preload="metadata" />
+      <video className="stream-frame" src={url} controls autoPlay={autoplay && url.startsWith('https:')} muted playsInline preload="metadata" />
     </div>
   );
 }

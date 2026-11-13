@@ -38,7 +38,7 @@ export function StreamTab({ streams }: { streams: StreamLink[] }) {
           <button className="btn active" onClick={() => closeFloat(embedUrl)}>Dock back</button>
         </div>
       ) : embedUrl ? (
-        <StreamFrame key={embedUrl} url={embedUrl} />
+        <StreamFrame key={embedUrl} url={embedUrl} autoplay={false} />
       ) : (
         <div className="stream-fallback">
           <div className="dim">{link.title} cannot be embedded (the provider blocks framing).</div>

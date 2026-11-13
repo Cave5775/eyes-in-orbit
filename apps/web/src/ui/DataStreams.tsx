@@ -23,7 +23,7 @@ export function DataStreams() {
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
 
-  useDismiss(open, root, close);
+  useDismiss(open, root, close, button);
 
   return (
     <div className="menu-anchor" ref={root}>

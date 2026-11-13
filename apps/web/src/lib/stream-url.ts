@@ -82,12 +82,25 @@ function vimeoEmbed(u: URL): StreamEmbed | null {
 
 function videoEmbed(u: URL): StreamEmbed | null {
   if (!VIDEO_EXT.test(u.pathname)) return null;
-  const file = decodeURIComponent(u.pathname.split('/').pop() ?? '') || u.hostname;
+  const raw = u.pathname.split('/').pop() ?? '';
+  let file = raw;
+  try {
+    file = decodeURIComponent(raw); // a malformed %-escape throws: keep the raw name
+  } catch { /* keep raw */ }
+  file ||= u.hostname;
   return { embedUrl: u.href, provider: 'video', title: `${u.hostname}: ${file}`.slice(0, 80) };
 }
 
 /** Resolve a pasted URL to an embed, or null when it is not a supported stream. `origin` is the page's own origin (Twitch needs its host). */
 export function embedFor(url: string, origin?: string): StreamEmbed | null {
+  try {
+    return resolveEmbed(url, origin);
+  } catch {
+    return null; // never throw: callers resolve links during render
+  }
+}
+
+function resolveEmbed(url: string, origin?: string): StreamEmbed | null {
   const u = parseWebUrl(url);
   if (!u) return null;
   const yt = toEmbedUrl(u.href, origin);

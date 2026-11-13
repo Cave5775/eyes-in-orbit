@@ -8,7 +8,7 @@ export function WatchMenu() {
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(false), []);
-  useDismiss(open, root, close);
+  useDismiss(open, root, close, button);
   useEffect(() => {
     if (open) root.current?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
   }, [open]);

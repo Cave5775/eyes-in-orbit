@@ -24,7 +24,7 @@ export function useWallNow(intervalMs: number): number {
  * Close a popup on an outside click and on Esc (ViewMenu pattern): `root` is the element that counts as inside, `onClose`
  * runs for either. Esc is handled in the capture phase and stopped, so the app-wide Esc (back to the Earth view) does not also fire.
  */
-export function useDismiss(open: boolean, root: RefObject<HTMLElement>, onClose: () => void): void {
+export function useDismiss(open: boolean, root: RefObject<HTMLElement>, onClose: () => void, returnFocus?: RefObject<HTMLElement>): void {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
@@ -34,6 +34,7 @@ export function useDismiss(open: boolean, root: RefObject<HTMLElement>, onClose:
       if (e.key !== 'Escape') return;
       e.stopPropagation();
       onClose();
+      returnFocus?.current?.focus();
     };
     document.addEventListener('pointerdown', onDown);
     window.addEventListener('keydown', onKey, true);
@@ -41,5 +42,5 @@ export function useDismiss(open: boolean, root: RefObject<HTMLElement>, onClose:
       document.removeEventListener('pointerdown', onDown);
       window.removeEventListener('keydown', onKey, true);
     };
-  }, [open, root, onClose]);
+  }, [open, root, onClose, returnFocus]);
 }

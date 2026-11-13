@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PANEL_INFO, usePanels, type PanelId } from '../state/panels';
 import { useStore } from '../state/store';
 import { useView } from '../state/view';
+import { useDismiss } from './hooks';
 
 /** Optional panels the menu lists under "Panels" (the colour legend is a scene setting, listed under "Scene"). */
 const PANEL_ROWS: readonly PanelId[] = ['board', 'ticker'];
@@ -23,25 +24,10 @@ export function ViewMenu() {
   const highlight = useStore((s) => s.highlight);
   const setHighlight = useStore((s) => s.setHighlight);
 
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, root, close, button);
   useEffect(() => {
-    if (!open) return;
-    root.current?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
-    const onDown = (e: PointerEvent) => {
-      if (!root.current?.contains(e.target as Node | null)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation(); // the app-wide Esc (back to the Earth view) must not also fire
-      setOpen(false);
-      button.current?.focus();
-    };
-    document.addEventListener('pointerdown', onDown);
-    // capture phase: runs before the window-level Esc handler in App.tsx
-    window.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('keydown', onKey, true);
-    };
+    if (open) root.current?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
   }, [open]);
 
   const scene: Row[] = [
