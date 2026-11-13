@@ -4,7 +4,7 @@ import { HUBBLE_NORAD, observatoryAttrs, type Omm, type StreamLink } from '@eio/
 import { clearBackoff, isBackedOff, isBlockError, isConnectError, readBackoff, recordFailure } from '../backoff';
 import type { Connector, ConnectorContext } from '../connector';
 import type { NewEntity } from '../hub';
-import { isFresh } from '../store';
+import { LimitedError } from '../net/limiter';
 
 /**
  * Fragmentation-event debris clouds. GROUP names verified against the CelesTrak index page
@@ -163,19 +163,11 @@ function localGroup(ctx: ConnectorContext, group: SatGroup): { omms: Omm[]; sour
 
 const hhmm = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
 
-export interface CelestrakOptions {
-  /** pause before a download that follows another download in the same run (default 1 to 2 s) */
-  spacingMs?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-}
-
-const defaultSpacingMs = (): number => 1000 + Math.random() * 1000;
-const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** `spacingMs`/`sleep` are injectable so tests do not wait. */
-export function createCelestrak(opts: CelestrakOptions = {}): Connector {
-  const spacingMs = opts.spacingMs ?? defaultSpacingMs;
-  const sleep = opts.sleep ?? defaultSleep;
+/**
+ * The spacing between downloads (2 s), the 15 requests per hour and the 24 h stop after repeated failures are the request
+ * limiter's job (`net/limits.ts`, source `celestrak`); a group is downloaded at most once per 3 h by its cache TTL.
+ */
+export function createCelestrak(): Connector {
   return {
     id: 'celestrak',
     intervalMs: TTL_MS,
@@ -188,8 +180,6 @@ export function createCelestrak(opts: CelestrakOptions = {}): Connector {
       let retryAt = Infinity;
       /** set by the first block or connect error (or a stored connect-error gate): the rest of the run stays off the network */
       let halt: string | undefined;
-      /** a group was downloaded earlier in this run, so the next download waits a moment */
-      let downloaded = false;
       for (const group of FETCH_ORDER) {
         const source = `celestrak:${group}`;
         if (halt) {
@@ -215,16 +205,20 @@ export function createCelestrak(opts: CelestrakOptions = {}): Connector {
           continue;
         }
         const row = ctx.store.get<Omm[]>(source);
-        const needsDownload = !(row && isFresh(row));
-        if (needsDownload && downloaded && !ctx.config.offline) await sleep(spacingMs());
-        if (needsDownload) downloaded = true;
         // a stale copy with a fetch time lets CelesTrak answer 304 instead of resending an unchanged group
         const headers = row?.fetchedAt ? { 'if-modified-since': new Date(row.fetchedAt).toUTCString() } : undefined;
         try {
           const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=json`;
-          const res = await ctx.cachedFetch(source, url, TTL_MS, parseOmmJson, headers);
+          const res = await ctx.cachedFetch(source, url, TTL_MS, parseOmmJson, headers, { source: 'celestrak', mode: 'poll' });
           groups[group] = res.value;
-          if (res.stale) {
+          if (res.limitedUntil !== undefined) {
+            // the request limiter refused the download (cap or block): not a failure of the source, so no backoff gate; the rest of the run stays off the network
+            retryAt = Math.min(retryAt, res.limitedUntil);
+            const local = localGroup(ctx, group);
+            if (local) groups[group] = local.omms;
+            degraded.push(`${group}: ${res.error ?? 'rate limited'}, using ${local?.source === 'file' ? 'data file' : 'cache'}`);
+            halt = `${group} is rate limited`;
+          } else if (res.stale) {
             // cachedFetch fell back to an old entry because the download failed; a newer saved file beats it
             const next = recordFailure(ctx.store, source, res.error ?? 'download failed');
             retryAt = Math.min(retryAt, next.notBefore);
@@ -234,6 +228,12 @@ export function createCelestrak(opts: CelestrakOptions = {}): Connector {
             if (isBlockError(res.error ?? '')) halt = `${group} failed`;
           } else clearBackoff(ctx.store, source);
         } catch (err) {
+          if (err instanceof LimitedError) {
+            retryAt = Math.min(retryAt, err.retryAt);
+            give(localGroup(ctx, group), err.message);
+            halt = `${group} is rate limited`;
+            continue;
+          }
           const next = recordFailure(ctx.store, source, err);
           retryAt = Math.min(retryAt, next.notBefore);
           give(localGroup(ctx, group), (err as Error).message);

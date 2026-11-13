@@ -2,9 +2,12 @@ import { XMLParser } from 'fast-xml-parser';
 import { observatoryAttrs, type DsnLink, type DsnSnapshot } from '@eio/core';
 import type { Connector } from '../connector';
 import type { NewEntity } from '../hub';
+import { LimitedError } from '../net/limiter';
 import { DSN_STATIONS, DSN_STATION_OBSERVATORY, DSN_TARGETS, probeEntity, probeId } from './dsn-targets';
 
 const POLL_MS = 5000;
+/** The second URL is tried only once the source has failed this many requests in a row (persisted by the limiter). */
+export const FALLBACK_AFTER_FAILURES = 3;
 /** probe attrs change with every range tick; republishing them at most this often keeps `entities.changed` quiet */
 const ATTR_REFRESH_MS = 60_000;
 const C_KM_S = 299_792.458;
@@ -110,16 +113,22 @@ export const dsn: Connector = {
     );
   },
   async run(ctx) {
-    const candidates = workingUrl ? [workingUrl, ...ctx.config.dsnUrls.filter((u) => u !== workingUrl)] : ctx.config.dsnUrls;
+    // ONE request per poll. The known-good (or first) URL until the source has failed FALLBACK_AFTER_FAILURES requests in a
+    // row (persisted by the limiter, with its backoff); from then on the attempts rotate through the other URLs. Trying two
+    // URLs in one run would double the request rate of a 5 s poll, and a failed request blocks the source anyway.
+    const ordered = workingUrl ? [workingUrl, ...ctx.config.dsnUrls.filter((u) => u !== workingUrl)] : ctx.config.dsnUrls;
+    const failures = ctx.http.limiter.consecutiveFailures('dsn');
+    const candidates = failures >= FALLBACK_AFTER_FAILURES ? [ordered[(failures - FALLBACK_AFTER_FAILURES + 1) % ordered.length]] : ordered.slice(0, 1);
     const errors: string[] = [];
     let snapshot: DsnSnapshot | undefined;
     for (const url of candidates) {
       try {
         // the feed is behind a CDN; the query string defeats stale copies
-        snapshot = parseDsn(await ctx.http.text(`${url}${url.includes('?') ? '&' : '?'}r=${Date.now()}`));
+        snapshot = parseDsn(await ctx.http.text(`${url}${url.includes('?') ? '&' : '?'}r=${Date.now()}`, {}, { source: 'dsn', mode: 'poll' }));
         workingUrl = url;
         break;
       } catch (err) {
+        if (err instanceof LimitedError) throw err;
         errors.push(`${url}: ${(err as Error).message}`);
       }
     }

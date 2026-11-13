@@ -186,7 +186,7 @@ describe('api', () => {
 
     const res = await s2.inject({ url: '/api/news?entity=sat-25544&limit=3' });
     expect(res.json().articles[0].id).toBe(9);
-    expect(String(fetchMock.mock.calls[0][0])).toContain('search=International+Space+Station');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('search=international+space+station');
     expect(String(fetchMock.mock.calls[0][0])).toContain('limit=3');
     await s2.inject({ url: '/api/news?entity=sat-25544&limit=3' });
     expect(fetchMock).toHaveBeenCalledTimes(1); // cached for 10 min

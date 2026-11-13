@@ -55,7 +55,7 @@ async function main(): Promise<void> {
       ids.forEach((id) => void scheduler.refresh(id));
       describe.syncHealth();
     },
-  }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline }), describe);
+  }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline, limiter: http.limiter }), describe);
   await registerStream(app, hub);
 
   await app.listen({ port: config.port, host: config.host });

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { searchNews } from './connectors/snapi';
 import { syncLaunchEntities } from './connectors/launchlibrary';
 import { CredentialError, type Credentials } from './credentials';
+import { LimitedError } from './net/limiter';
 import type { DescribeService } from './describe/service';
 import type { Http } from './http';
 import { parseTile, type ImageryCache } from './imagery';
@@ -88,6 +89,11 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
     try {
       return { articles: await searchNews(http, search, limit) };
     } catch (err) {
+      if (err instanceof LimitedError) {
+        // not an upstream failure: the request limiter refused the search; the client shows the retry time
+        return reply.code(429).header('retry-after', String(Math.max(Math.ceil((err.retryAt - Date.now()) / 1000), 1)))
+          .send({ error: err.message, limited: true, retryAt: err.retryAt });
+      }
       return reply.code(502).send({ error: (err as Error).message });
     }
   });
@@ -152,6 +158,9 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
         if (!buf) return reply.code(404).send({ error: 'tile not cached and OFFLINE=1' });
         return reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=86400').send(buf);
       } catch (err) {
+        if (err instanceof LimitedError) {
+          return reply.code(429).header('retry-after', String(Math.max(Math.ceil((err.retryAt - Date.now()) / 1000), 1))).send({ error: err.message, limited: true, retryAt: err.retryAt });
+        }
         return reply.code(502).send({ error: (err as Error).message });
       }
     });

@@ -10,7 +10,7 @@ import { matchTrajectory, type Trajectory } from '../trajectory';
 const POLL_MS = 10 * 60_000;
 const PHASE_TICK_MS = 15_000;
 const UPCOMING_TTL_MS = 9 * 60_000;
-/** past launches change rarely; a longer TTL keeps the anonymous tier (~15 req/h) comfortable */
+/** past launches change rarely; a longer TTL keeps the anonymous tier (15 req/h; capped at 7 by `net/limits.ts`) comfortable */
 const PREVIOUS_TTL_MS = 55 * 60_000;
 type Json = Record<string, any>;
 
@@ -25,7 +25,7 @@ export function streamKind(url: string): StreamLink['kind'] {
   return 'web';
 }
 
-/** LL2 returns `vidURLs` in 2.2.0 and `vid_urls` (always empty) next to it; accept either. Official webcasts first. */
+/** LL2 2.2.0 returned `vidURLs` (and an empty `vid_urls` next to it); 2.3.0 fills `vid_urls`. Accept either. Official webcasts first. */
 export function normalizeStreams(raw: Json, nowMs: number): StreamLink[] {
   const vids: Json[] = (raw.vidURLs?.length ? raw.vidURLs : raw.vid_urls) ?? [];
   return vids
@@ -53,7 +53,8 @@ const num = (v: unknown): number | undefined => {
 function normalizeLanding(raw: Json): Launch['landing'] {
   const l = raw.rocket?.launcher_stage?.[0]?.landing;
   if (!l || typeof l.attempt !== 'boolean') return undefined;
-  return { attempt: l.attempt, location: l.location?.abbrev ?? undefined, type: l.type?.abbrev ?? undefined };
+  // 2.3.0 calls the landing place `landing_location` (2.2.0: `location`)
+  return { attempt: l.attempt, location: l.landing_location?.abbrev ?? l.location?.abbrev ?? undefined, type: l.type?.abbrev ?? undefined };
 }
 
 export function normalizeLaunch(raw: Json, nowMs = Date.now()): Launch {
@@ -76,7 +77,7 @@ export function normalizeLaunch(raw: Json, nowMs = Date.now()): Launch {
       orbit: orbit?.abbrev ?? orbit?.name ?? undefined,
     } : undefined,
     pad: lat !== undefined && lon !== undefined
-      ? { name: raw.pad.name, latitude: lat, longitude: lon, location: raw.pad.location?.name, countryCode: raw.pad.location?.country_code }
+      ? { name: raw.pad.name, latitude: lat, longitude: lon, location: raw.pad.location?.name, countryCode: raw.pad.location?.country_code ?? raw.pad.country?.alpha_3_code ?? raw.pad.location?.country?.alpha_3_code }
       : undefined,
     streams: normalizeStreams(raw, nowMs),
     image: typeof raw.image === 'string' ? raw.image : raw.image?.image_url ?? undefined,
@@ -239,14 +240,16 @@ export const launchlibrary: Connector = {
   async run(ctx) {
     const { ll2Base, ll2Token } = ctx.config;
     const headers = ll2Token ? { authorization: `Token ${ll2Token}` } : undefined;
+    // a run that fell back to a stale copy is retried at the normal interval (it was every 5 min: up to 24 requests per hour against a limit of 15)
+    const ro = { source: 'll2', mode: 'poll', staleRetryMs: POLL_MS } as const;
     const results = (text: string): Json[] => {
       const j = JSON.parse(text);
       if (!Array.isArray(j.results)) throw new Error(`unexpected LL2 response: ${text.slice(0, 120)}`);
       return j.results;
     };
     const [upcoming, previous] = await Promise.allSettled([
-      ctx.cachedFetch('ll2:upcoming', `${ll2Base}/launch/upcoming/?limit=15&mode=detailed&ordering=net`, UPCOMING_TTL_MS, results, headers),
-      ctx.cachedFetch('ll2:previous', `${ll2Base}/launch/previous/?limit=10&mode=detailed&ordering=-net`, PREVIOUS_TTL_MS, results, headers),
+      ctx.cachedFetch('ll2:upcoming', `${ll2Base}/launches/upcoming/?limit=15&mode=detailed&ordering=net`, UPCOMING_TTL_MS, results, headers, ro),
+      ctx.cachedFetch('ll2:previous', `${ll2Base}/launches/previous/?limit=10&mode=detailed&ordering=-net`, PREVIOUS_TTL_MS, results, headers, ro),
     ]);
     if (upcoming.status === 'rejected') throw upcoming.reason;
     const now = Date.now();

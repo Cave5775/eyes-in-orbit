@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { USER_AGENT } from './http';
+import { guardedFetch } from './net/guarded-fetch';
+import { LimitedError, type Limiter } from './net/limiter';
 
 /**
  * Earth imagery tiles for the close-up detail layer: NASA GIBS "Blue Marble: shaded relief and bathymetry" (the same look
@@ -47,9 +49,15 @@ export function tileUrl(id: TileId): string {
 
 const isJpeg = (b: Buffer): boolean => b.length > 1024 && b[0] === 0xff && b[1] === 0xd8;
 
+/** A tile that failed is not requested again for this long (the error is answered from memory). */
+export const NEGATIVE_CACHE_MS = 10 * 60_000;
+
 export interface ImageryOptions {
+  /** every request to NASA passes this limiter (source `gibs`: 5 per second, 1000 per hour, a 15 min block after HTTP 429/503) */
+  limiter: Limiter;
   offline?: boolean;
   fetch?: typeof fetch;
+  now?: () => number;
   /** disk cache cap, bytes */
   maxBytes?: number;
   /** simultaneous requests to NASA */
@@ -62,8 +70,10 @@ export class ImageryCache {
   private active = 0;
   private waiting: (() => void)[] = [];
   private bytes = -1;
+  /** tile path -> failure message and the time it may be tried again */
+  private failed = new Map<string, { until: number; message: string }>();
 
-  constructor(private dir: string, private opts: ImageryOptions = {}) {}
+  constructor(private dir: string, private opts: ImageryOptions) {}
 
   get offline(): boolean {
     return !!this.opts.offline;
@@ -86,6 +96,8 @@ export class ImageryCache {
       }
     }
     if (this.opts.offline) return null;
+    const failure = this.failed.get(path);
+    if (failure && failure.until > (this.opts.now ?? Date.now)()) throw new Error(`${failure.message} (not retried for 10 min)`);
     const pending = this.inflight.get(path);
     if (pending) return pending;
     const p = this.download(id, path).finally(() => this.inflight.delete(path));
@@ -107,17 +119,27 @@ export class ImageryCache {
 
   private download(id: TileId, path: string): Promise<Buffer> {
     return this.slot(async () => {
-      const res = await (this.opts.fetch ?? fetch)(tileUrl(id), {
-        headers: { 'user-agent': USER_AGENT, accept: 'image/jpeg' },
-        signal: AbortSignal.timeout(this.opts.timeoutMs ?? 20_000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status} from GIBS for tile ${id.z}/${id.x}/${id.y}`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (!isJpeg(buf)) throw new Error(`GIBS answered tile ${id.z}/${id.x}/${id.y} with something that is not a JPEG (${res.headers.get('content-type') ?? 'no type'}, ${buf.length} bytes)`);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, buf);
-      this.account(buf.length);
-      return buf;
+      try {
+        // a tile is a user-triggered request: it may wait up to 1 s for the 200 ms spacing (the 4-wide queue above bounds the crowd), never longer
+        const r = await guardedFetch(this.opts.limiter, 'gibs', tileUrl(id), {
+          headers: { 'user-agent': USER_AGENT, accept: 'image/jpeg' },
+          signal: AbortSignal.timeout(this.opts.timeoutMs ?? 20_000),
+        }, { mode: 'demand', fetch: this.opts.fetch, waitMs: 1000 });
+        if ('limited' in r) throw new LimitedError('gibs', r.retryAt, r.reason, r.kind);
+        const res = r.response;
+        if (!res.ok) throw new Error(`HTTP ${res.status} from GIBS for tile ${id.z}/${id.x}/${id.y}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (!isJpeg(buf)) throw new Error(`GIBS answered tile ${id.z}/${id.x}/${id.y} with something that is not a JPEG (${res.headers.get('content-type') ?? 'no type'}, ${buf.length} bytes)`);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, buf);
+        this.account(buf.length);
+        this.failed.delete(path);
+        return buf;
+      } catch (err) {
+        // a refused request says nothing about the tile; a failed one is remembered so a retrying client does not repeat it
+        if (!(err instanceof LimitedError)) this.failed.set(path, { until: (this.opts.now ?? Date.now)() + NEGATIVE_CACHE_MS, message: (err as Error).message });
+        throw err;
+      }
     });
   }
 

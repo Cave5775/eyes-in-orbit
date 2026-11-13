@@ -8,6 +8,8 @@ import { spacetrack } from '../src/connectors/spacetrack';
 import { CredentialError, Credentials } from '../src/credentials';
 import { Http } from '../src/http';
 import { Hub } from '../src/hub';
+import { Limiter, useLimiter } from '../src/net/limiter';
+import { LIMITS } from '../src/net/limits';
 import { Store } from '../src/store';
 
 const make = (env: NodeJS.ProcessEnv = {}) => {
@@ -68,13 +70,24 @@ describe('Credentials', () => {
     expect(config.ll2Token).toBeUndefined();
   });
 
-  it('drops the Space-Track cache and retry gate when its login changes, so the new login is tried at once', () => {
+  it('lifts only the Space-Track failure block when its login changes: the cache, the 2 h spacing and the counters stay', () => {
     const { creds, store } = make();
     store.set('spacetrack:starlink', [], 1000);
     recordFailure(store, 'spacetrack', new Error('Space-Track login failed'));
+    const limiter = useLimiter(store, new Limiter(store, { limits: LIMITS }));
+    const before = Date.now();
+    limiter.tryAcquire('spacetrack:login', 'poll', true);
+    limiter.tryAcquire('spacetrack:query', 'poll', true);
+    limiter.block('spacetrack:login', 6 * 3600_000, 'failed login');
+    limiter.block('spacetrack:query', 6 * 3600_000, 'failed login');
     creds.update({ spacetrackPassword: 'new' });
-    expect(store.get('spacetrack:starlink')).toBeUndefined();
+    expect(store.get('spacetrack:starlink')).toBeDefined();
     expect(readBackoff(store, 'spacetrack')).toBeUndefined();
+    for (const s of ['spacetrack:login', 'spacetrack:query']) {
+      expect(limiter.state(s).blockedUntil).toBeUndefined();
+      expect((limiter.state(s).hour ?? limiter.state(s).day)?.count).toBe(1);
+    }
+    expect(limiter.state('spacetrack:query').nextAllowedAt).toBeGreaterThan(before + 3600_000); // still inside the 2 h gap
   });
 });
 

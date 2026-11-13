@@ -192,8 +192,7 @@ describe('celestrak navigation and amateur groups', () => {
 });
 
 describe('celestrak connector run', () => {
-  const sleeps: number[] = [];
-  const fast = createCelestrak({ spacingMs: () => 1500, sleep: async (ms) => void sleeps.push(ms) });
+  const fast = createCelestrak();
   /** groups the fake CelesTrak answers with HTTP 403 (set by `fakeCtx(block)`) */
   let blocked = new Set<string>();
   const body = (group: string): string => {
@@ -384,25 +383,6 @@ describe('celestrak connector run', () => {
     expect(ctx.calls.map((c) => c.key)).toContain('celestrak:gps-ops');
   });
 
-  it('pauses between downloads, but not before the first one nor for a group with a fresh cache entry', async () => {
-    const ctx = fakeCtx();
-    ctx.store.set('celestrak:starlink', parseOmmJson(fixture('celestrak-starlink.json')), 3600_000); // fresh
-    sleeps.length = 0;
-    await fast.run!(ctx as never);
-    // 11 groups, 10 need a download, so 9 pauses
-    expect(sleeps).toEqual(new Array(9).fill(1500));
-  });
-
-  it('defaults to a pause of 1 to 2 s', async () => {
-    const waits: number[] = [];
-    const real = createCelestrak({ sleep: async (ms) => void waits.push(ms) });
-    await real.run!(fakeCtx() as never);
-    expect(waits).toHaveLength(10);
-    for (const w of waits) {
-      expect(w).toBeGreaterThanOrEqual(1000);
-      expect(w).toBeLessThanOrEqual(2000);
-    }
-  });
 
   it('sends If-Modified-Since from the cached fetch time, and only when a cached copy exists', async () => {
     const ctx = fakeCtx();

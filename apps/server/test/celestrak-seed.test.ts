@@ -4,11 +4,14 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createCelestrak, loadGroupFileStamped, parseOmmJson } from '../src/connectors/celestrak';
 import { SEED_MAX_AGE_MS, seedGroups } from '../src/connectors/celestrak-seed';
+import { Limiter } from '../src/net/limiter';
+import { LIMITS } from '../src/net/limits';
 import { Store } from '../src/store';
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
 const tmp = () => mkdtempSync(join(tmpdir(), 'eio-seed-'));
-const noWait = { sleep: async () => {}, spacingMs: () => 0 };
+/** a limiter that allows everything: these tests are about the files, the limits have their own tests */
+const noWait = { get limiter() { return new Limiter(new Store(':memory:'), { limits: {} }); } };
 
 /** A fetch that answers per group from `answers` (a body, or an Error to throw, or a number for an HTTP status). */
 function fakeFetch(answers: Record<string, string | number | Error>) {
@@ -92,16 +95,31 @@ describe('celestrak seed', () => {
     expect(existsSync(join(dir, 'stations.json.tmp'))).toBe(false);
   });
 
-  it('spaces the downloads', async () => {
+  it('spaces the downloads through the limiter (2 s) and counts them there', async () => {
     const waits: number[] = [];
+    let t = Date.parse('2026-11-01T10:00:00Z');
+    const store = new Store(':memory:');
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => t, sleep: async (ms) => { waits.push(ms); t += ms; } });
     const f = fakeFetch({ stations: fixture('celestrak-stations.json'), starlink: fixture('celestrak-starlink.json'), active: fixture('celestrak-active.json') });
-    await seedGroups({ dir: tmp(), groups: ['stations', 'starlink', 'active'], fetchImpl: f.impl, spacingMs: () => 1500, sleep: async (ms) => void waits.push(ms) });
-    expect(waits).toEqual([1500, 1500]);
+    await seedGroups({ dir: tmp(), groups: ['stations', 'starlink', 'active'], fetchImpl: f.impl, limiter });
+    expect(waits).toEqual([2000, 2000]);
+    expect(limiter.status('celestrak')).toMatchObject({ used: 3, cap: 15, window: 'hour' });
+  });
+
+  it('stops without a request when the limiter says no (a block from an earlier run)', async () => {
+    const store = new Store(':memory:');
+    const limiter = new Limiter(store, { limits: LIMITS });
+    limiter.block('celestrak', 3600_000, 'HTTP 403');
+    const f = fakeFetch({ stations: fixture('celestrak-stations.json') });
+    const r = await seedGroups({ dir: tmp(), groups: ['stations', 'starlink'], fetchImpl: f.impl, limiter });
+    expect(f.urls).toHaveLength(0);
+    expect(r.failed?.error).toMatch(/rate limited until/);
+    expect(r.skipped).toEqual(['starlink']);
   });
 });
 
 describe('celestrak connector with saved files', () => {
-  const fast = createCelestrak({ spacingMs: () => 0, sleep: async () => {} });
+  const fast = createCelestrak();
   const issOnly = parseOmmJson(fixture('celestrak-stations.json'));
   // a different object under the same group, so the cache (the ISS) and the file can be told apart
 const otherOnly = [{ ...issOnly[0], NORAD_CAT_ID: 99999, OBJECT_NAME: 'FROM THE FILE' }];

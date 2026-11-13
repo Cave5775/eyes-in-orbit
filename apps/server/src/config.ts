@@ -38,7 +38,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST || 'localhost',
     port: Number(env.PORT) || 8787,
     ll2Token: env.LL2_TOKEN || undefined,
-    ll2Base: (env.LL2_BASE || 'https://ll.thespacedevs.com/2.2.0').replace(/\/+$/, ''),
+    ll2Base: (env.LL2_BASE || 'https://ll.thespacedevs.com/2.3.0').replace(/\/+$/, ''),
     dataDir: resolve(env.DATA_DIR || resolve(REPO_ROOT, 'data')),
     offline: env.OFFLINE === '1' || env.OFFLINE === 'true',
     disabledConnectors: (env.DISABLED_CONNECTORS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
