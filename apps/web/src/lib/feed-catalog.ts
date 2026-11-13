@@ -54,6 +54,12 @@ export const FEED_CATALOG: Record<string, FeedInfo> = {
     source: 'NASA JPL Solar System Dynamics',
     link: 'https://ssd.jpl.nasa.gov/horizons/',
   },
+  observatories: {
+    name: 'Ground observatories',
+    provides: 'Mauna Kea, Paranal and Rubin as fixed ground points (offline list; coordinates cited in the connector).',
+    source: 'ESO, Rubin Observatory, Maunakea Observatories',
+    link: 'https://www.eso.org/public/teles-instr/paranal-observatory/',
+  },
   'iss-live': {
     name: 'ISS live telemetry',
     provides: 'Live ISS values: solar array and radiator joint angles, attitude quaternion and state vector.',

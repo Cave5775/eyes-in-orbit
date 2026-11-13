@@ -7,7 +7,8 @@ import { matchesType, normaliseType } from './browser-ui';
  *
  *   group:starlink  #starlink   CelesTrak group (also `group:cosmos` for `cosmos-2251-debris`: a word prefix)
  *   type:probe      what it is: a general category (the chips: satellites, stations, navigation, probes, launch-vehicles,
- *                   debris, ground, bodies, other) or an entity kind (satellite, launch_vehicle, ground_station, moon, ...)
+ *                   debris, ground, bodies, other), an entity kind (satellite, launch_vehicle, ground_station, moon, ...) or
+ *                   `observatory` (every entity with the observatory attribute, any kind)
  *   launch:2024-123             launch group from the COSPAR designator (`launch:1993` is every launch of that year)
  *   id:25544        norad:25544 an id or alias value: entity id, NORAD, COSPAR, ...
  *   body:earth                  what orbits that body or one of its moons (the tree nodes)
@@ -105,6 +106,7 @@ export interface TagTarget {
   bodyId?: string;
   aliases?: Record<string, string>;
   render?: { colorKey?: string };
+  attrs?: Record<string, string | number | boolean | null>;
 }
 
 /** Does `rec` match the single tag `key:value` (value already normalised)? */

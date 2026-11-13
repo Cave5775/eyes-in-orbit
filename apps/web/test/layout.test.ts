@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHROME_H, MIN_SCENE_H, MIN_SCENE_W, PANELS, STORAGE_KEY, clampSize, defaultSize, dragSize, keyboardStep, loadSizes, maxSize,
+  CHROME_H, MIN_BOARD_W, MIN_SCENE_H, MIN_SCENE_W, PANELS, STORAGE_KEY, clampSize, defaultSize, dragSize, keyboardStep, loadSizes, maxSize,
   parseSizes, resolveSizes, saveSizes, type StorageLike,
 } from '../src/lib/layout';
 
@@ -51,6 +51,16 @@ describe('defaults and clamping', () => {
     for (const k of ['left', 'right', 'bottom'] as const) {
       expect(maxSize(k, sizes, tiny)).toBeGreaterThanOrEqual(PANELS[k].min);
     }
+  });
+
+  it('the observatory panel width keeps room for the launch board and persists like the others', () => {
+    const sizes = resolveSizes({}, WIDE);
+    expect(sizes.obs).toBe(PANELS.obs.def);
+    expect(resolveSizes({}, SMALL).obs).toBe(PANELS.obs.defNarrow);
+    expect(clampSize('obs', 99999, sizes, SMALL)).toBeLessThanOrEqual(SMALL.w - MIN_BOARD_W);
+    expect(clampSize('obs', 10, sizes, WIDE)).toBe(PANELS.obs.min);
+    expect(parseSizes('{"obs":500}')).toEqual({ obs: 500 });
+    expect(parseSizes('{"obs":50}')).toEqual({});
   });
 
   it('resolveSizes re-clamps stored values for a smaller window', () => {

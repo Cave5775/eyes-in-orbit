@@ -5,7 +5,7 @@ import { useView } from '../state/view';
 import { useDismiss } from './hooks';
 
 /** Optional panels the menu lists under "Panels" (the colour legend is a scene setting, listed under "Scene"). */
-const PANEL_ROWS: readonly PanelId[] = ['board', 'ticker'];
+const PANEL_ROWS: readonly PanelId[] = ['board', 'observatories', 'ticker'];
 
 interface Row { key: string; label: string; hint: string; on: boolean; toggle(): void }
 

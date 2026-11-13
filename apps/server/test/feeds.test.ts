@@ -119,7 +119,8 @@ describe('horizons', () => {
       expect(spec, code).toEqual(DEFAULT_HORIZONS);
       expect(horizonsUrl('-31', NOW, spec), code).toBe(plain);
       expect(probeEntity(code), code).toMatchObject({ bodyId: 'EARTH' });
-      expect(probeEntity(code).attrs, code).toBeUndefined();
+      // only the observatory attributes (JWST, TESS, Chandra); nothing about the track
+      expect(Object.keys(probeEntity(code).attrs ?? {}).filter((k) => !k.startsWith('observatory')), code).toEqual([]);
     }
     expect(DEFAULT_HORIZONS).toEqual({ center: '500@399', frame: 'EARTH:inertial', bodyId: 'EARTH', stepMin: 30, pastDays: 3, futureDays: 7 });
   });

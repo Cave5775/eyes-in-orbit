@@ -45,11 +45,12 @@ export function ResizableLayout({ children }: { children: ReactNode }) {
 
   // hidden panels (PANELS menu) give their space back; the stored sizes are untouched, so showing one restores it
   const shown = usePanels((s) => s.visible);
-  const bottomShown = shown.board;
+  const bottomShown = shown.board || shown.observatories;
   const style = {
     '--left-w': `${sizes.left}px`,
     '--right-w': `${sizes.right}px`,
     '--bottom-h': bottomShown ? `${sizes.bottom}px` : '0px',
+    '--obs-w': `${sizes.obs}px`,
     '--ticker-h': shown.ticker ? '26px' : '0px',
   } as CSSProperties;
 
@@ -69,6 +70,7 @@ export function ResizableLayout({ children }: { children: ReactNode }) {
       {children}
       {sp('left', { orientation: 'vertical', grow: 1, label: 'Resize entity list', className: 'sp-left' })}
       {sp('right', { orientation: 'vertical', grow: -1, label: 'Resize detail panel', className: 'sp-right' })}
+      {shown.board && shown.observatories && sp('obs', { orientation: 'vertical', grow: -1, label: 'Resize observatory panel', className: 'sp-obs' })}
       {bottomShown && sp('bottom', { orientation: 'horizontal', grow: -1, label: 'Resize bottom panels', className: 'sp-bottom' })}
     </div>
   );

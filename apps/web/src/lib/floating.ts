@@ -115,13 +115,13 @@ export function focusFloatWindow(list: FloatWindow[], url: string): FloatWindow[
 }
 
 /**
- * Open a window for `url`. An already open stream is brought to the front instead. Beyond MAX_FLOATS the list
- * is returned unchanged, as it is for a URL that cannot be floated.
+ * Open a window for `url`. An already open stream is brought to the front instead. Beyond MAX_FLOATS (counting `reserved`
+ * windows of another kind, the Sky view) the list is returned unchanged, as it is for a URL that cannot be floated.
  */
-export function openFloatWindow(list: FloatWindow[], url: string, title: string, vp: Viewport): FloatWindow[] {
+export function openFloatWindow(list: FloatWindow[], url: string, title: string, vp: Viewport, reserved = 0): FloatWindow[] {
   if (!isFloatableUrl(url)) return list;
   if (list.some((f) => f.url === url)) return focusFloatWindow(list, url);
-  if (list.length >= MAX_FLOATS) return list;
+  if (list.length + reserved >= MAX_FLOATS) return list;
   const rect = defaultRect(vp, list.length);
   return [...list, { url, title: title.slice(0, 200) || 'Live stream', ...rect, z: nextZ(list) }];
 }

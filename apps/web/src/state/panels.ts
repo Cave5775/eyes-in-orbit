@@ -1,20 +1,21 @@
 import { create } from 'zustand';
 
 /** Panels the PANELS menu can show and hide. */
-export type PanelId = 'board' | 'ticker' | 'legend';
+export type PanelId = 'board' | 'observatories' | 'ticker' | 'legend';
 export type PanelVisibility = Record<PanelId, boolean>;
 
-export const PANEL_IDS: readonly PanelId[] = ['board', 'ticker', 'legend'];
+export const PANEL_IDS: readonly PanelId[] = ['board', 'observatories', 'ticker', 'legend'];
 
 /** What the menu shows for each panel (label, one-line hint). */
 export const PANEL_INFO: Record<PanelId, { label: string; hint: string }> = {
   board: { label: 'Launches', hint: 'Upcoming launches with countdowns' },
+  observatories: { label: 'Observatories', hint: 'Telescopes and sites, with a Sky view from their position' },
   ticker: { label: 'News ticker', hint: 'Scrolling spaceflight headlines' },
   legend: { label: 'Colour legend', hint: 'Category colours, bottom left of the scene' },
 };
 
 /** All panels start shown. (Older stored state may carry a `dsn` key: the DSN moved to the Data streams popup, and unknown keys are dropped.) */
-export const DEFAULT_PANELS: PanelVisibility = { board: true, ticker: true, legend: true };
+export const DEFAULT_PANELS: PanelVisibility = { board: true, observatories: true, ticker: true, legend: true };
 
 export const PANELS_STORAGE_KEY = 'eio.panels.v1';
 

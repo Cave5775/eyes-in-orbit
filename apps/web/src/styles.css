@@ -682,3 +682,33 @@ video.stream-frame { background: #000; object-fit: contain; }
 .vlist-pin { position: absolute; left: 0; right: 0; background: var(--panel); }
 .vlist-pin.last { box-shadow: 0 1px 0 var(--line-2), 0 5px 7px -3px rgba(0, 0, 0, 0.6); }
 /* ==== end STICKY TREE ==== */
+
+/* ---- observatory panel (bottom row, beside the launch board) and the Sky view window ---- */
+.bottom.two { grid-template-columns: minmax(0, 1fr) var(--obs-w); }
+.bottom.two .obs { border-left: 1px solid var(--line); }
+.sp-obs { right: calc(var(--obs-w) - 4px); bottom: var(--ticker-h); height: var(--bottom-h); }
+.obs-list { flex: 1; min-height: 0; overflow-y: auto; }
+.obs-row {
+  display: grid; grid-template-columns: minmax(0, 1.6fr) auto minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 4px 10px;
+  width: 100%; text-align: left; padding: 5px 12px; background: transparent; border: 0; border-bottom: 1px solid var(--line);
+  color: var(--ink); font-size: 12px; font-stretch: var(--narrow);
+}
+.obs-row:hover { background: rgba(230, 227, 220, 0.07); }
+.obs-row.sel { background: rgba(230, 227, 220, 0.14); }
+.obs-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.obs-place, .obs-bands { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.panel-head .key[disabled] { opacity: 0.45; cursor: not-allowed; }
+.sky { position: absolute; inset: 0; background: #000; }
+.sky-aladin { position: absolute; inset: 0; }
+.sky-msg { position: absolute; left: 0; right: 0; top: 0; padding: 14px; font-size: 12px; color: var(--ink-2); z-index: 2; }
+.sky-err { color: var(--ink); }
+.sky-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+  padding: 3px 6px; background: rgba(0, 0, 0, 0.62); font-size: 10.5px; font-stretch: var(--narrow); color: var(--ink-2);
+}
+.sky-note { flex: 1 1 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sky-select { max-width: 60%; font-size: 10.5px; background: var(--hull-2); color: var(--ink); border: 1px solid var(--rule-2); }
+.sky-follow { display: inline-flex; align-items: center; gap: 3px; }
+.sky-credit { margin-left: auto; }
+.sky-aladin { overflow: hidden; contain: paint; }
+.float-head { position: relative; z-index: 5; }

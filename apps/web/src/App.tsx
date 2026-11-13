@@ -6,6 +6,7 @@ import { EntityBrowser } from './ui/EntityBrowser';
 import { FloatingLayer } from './ui/FloatingLayer';
 import { LaunchBoard } from './ui/LaunchBoard';
 import { NewsTicker } from './ui/NewsTicker';
+import { ObservatoryPanel } from './ui/ObservatoryPanel';
 import { ResizableLayout } from './ui/ResizableLayout';
 import { SceneView } from './ui/SceneView';
 import { TopBar } from './ui/TopBar';
@@ -30,10 +31,11 @@ export function App() {
         <EntityBrowser />
         <SceneView />
         <DetailPanel />
-        {/* the bottom row exists only while the launch board is shown (View menu) */}
-        {panels.board && (
-          <div className="bottom">
-            <LaunchBoard />
+        {/* the bottom row exists only while the launch board or the observatory panel is shown (View menu) */}
+        {(panels.board || panels.observatories) && (
+          <div className={panels.board && panels.observatories ? 'bottom two' : 'bottom'}>
+            {panels.board && <LaunchBoard />}
+            {panels.observatories && <ObservatoryPanel />}
           </div>
         )}
         {panels.ticker && <NewsTicker />}

@@ -1,8 +1,8 @@
 import { XMLParser } from 'fast-xml-parser';
-import type { DsnLink, DsnSnapshot } from '@eio/core';
+import { observatoryAttrs, type DsnLink, type DsnSnapshot } from '@eio/core';
 import type { Connector } from '../connector';
 import type { NewEntity } from '../hub';
-import { DSN_STATIONS, DSN_TARGETS, probeEntity, probeId } from './dsn-targets';
+import { DSN_STATIONS, DSN_STATION_OBSERVATORY, DSN_TARGETS, probeEntity, probeId } from './dsn-targets';
 
 const POLL_MS = 5000;
 /** probe attrs change with every range tick; republishing them at most this often keeps `entities.changed` quiet */
@@ -104,6 +104,7 @@ export const dsn: Connector = {
         id: s.id, name: s.name, kind: 'ground_station', bodyId: 'EARTH', aliases: { dsn: s.complex }, group: 'dsn',
         provider: { type: 'geodetic', bodyId: 'EARTH', latDeg: s.latDeg, lonDeg: s.lonDeg, altKm: s.altKm },
         render: { colorKey: 'ground', glyph: 'square', label: true },
+        attrs: observatoryAttrs(DSN_STATION_OBSERVATORY),
       })),
       ...Object.keys(DSN_TARGETS).map(probeEntity),
     );
