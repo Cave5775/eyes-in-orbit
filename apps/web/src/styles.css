@@ -411,6 +411,10 @@ button.chip:hover { border-color: var(--ink-3); color: var(--ink); }
 @media (hover: none) { .stream-strip { opacity: 1; pointer-events: auto; } }
 /* mute button: 10 bars of rising height, light up to the volume, dark above (wheel over it changes the volume) */
 .stream-strip .vol-btn { padding: 4px 8px; }
+/* LIVE button: a dot that is red at the live edge and grey when behind (a click jumps to live) */
+.live-btn { display: inline-flex; align-items: center; gap: 6px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7078; }
+.live-btn.live .live-dot { background: #ff3b30; }
 .vol-bars { display: inline-flex; align-items: flex-end; gap: 2px; width: 40px; height: 16px; }
 .vol-bars > span { flex: 1; background: #3a3e45; }
 .vol-bars > span.on { background: #e6e8eb; }

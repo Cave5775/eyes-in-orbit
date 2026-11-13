@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { providerOfEmbed, safeHref } from '../lib/stream-url';
-import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, withNativeControls, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
+import { YT_ORIGIN, isLiveChannelEmbed, parseWidgetMessage, widgetCommand, widgetListen, withNativeControls, withStart, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
+import { LIVE_SEEK_SECONDS, liveStatus } from '../lib/live';
 import { usePlayerPrefs } from '../state/player';
 import { barHeights, barsLit, toggleMute as toggledMute, wheelVolume, type VolumeState } from '../lib/volume';
 
@@ -12,7 +13,10 @@ import { barHeights, barsLit, toggleMute as toggledMute, wheelVolume, type Volum
  * Only YouTube takes our strip (its player is driven by postMessage). Twitch and Vimeo embeds keep their own controls,
  * and a direct video file is a <video controls> element (an HLS .m3u8 only where the browser plays it natively).
  * The strip's CONTROLS button switches every YouTube player to YouTube's own control bar (one shared choice,
- * `state/player.ts`); the players reload once, and a HIDE CONTROLS button in the corner switches back.
+ * `state/player.ts`); the players reload once (the `controls` embed parameter is read only at load; the IFrame API has no
+ * setter for it), each resuming at its last position through `start=` unless it is live, and a HIDE CONTROLS button in
+ * the corner switches back. The LIVE button (live streams only) shows whether the player is at the live head and jumps there.
+ * Only the controls choice changes the iframe src; the src is held in a ref so no other render can reload the frame.
  */
 export const StreamFrame = memo(function StreamFrame({ url, className = '', autoplay = true }: { url: string; className?: string; /** direct video only: false = wait for a click (the docked tab) */ autoplay?: boolean }) {
   const provider = providerOfEmbed(url);
@@ -76,7 +80,14 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
   const [hot, setHot] = useState(false);
   const native = usePlayerPrefs((s) => s.nativeControls);
   const setNative = usePlayerPrefs((s) => s.setNativeControls);
-  const src = withNativeControls(url, native);
+  const live = liveStatus(info, isLiveChannelEmbed(url));
+  // The src changes only when the controls choice (or the link) does; the reload resumes where this player was.
+  const srcRef = useRef<{ url: string; native: boolean; src: string }>();
+  if (!srcRef.current || srcRef.current.url !== url || srcRef.current.native !== native) {
+    const resume = srcRef.current && srcRef.current.url === url && live === 'hidden' ? info.currentTime : undefined;
+    srcRef.current = { url, native, src: withStart(withNativeControls(url, native), resume) };
+  }
+  const src = srcRef.current.src;
 
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
@@ -97,6 +108,10 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
   const muted = info.muted ?? true;
   const lit = barsLit({ volume, muted });
 
+  const goLive = () => {
+    send('seekTo', [LIVE_SEEK_SECONDS, true]);
+    send('playVideo');
+  };
   const togglePlay = () => {
     send(playing ? 'pauseVideo' : 'playVideo');
     setInfo((p) => ({ ...p, playerState: playing ? 2 : 1 }));
@@ -169,6 +184,11 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
                 {barHeights().map((h, i) => <span key={i} className={i < lit ? 'on' : ''} style={{ height: `${h * 100}%` }} />)}
               </span>
             </button>
+            {live !== 'hidden' && (
+              <button className={`btn live-btn ${live}`} onClick={goLive} title={live === 'live' ? 'Playing at the live edge' : 'Behind live or paused: jump to the live edge'}>
+                <span className="live-dot" aria-hidden="true" />Live
+              </button>
+            )}
             <button className="btn" onClick={() => setNative(true)} title="Show the player's own controls (seek bar, quality, captions, fullscreen) on all video players">Controls</button>
           </div>
         </>
