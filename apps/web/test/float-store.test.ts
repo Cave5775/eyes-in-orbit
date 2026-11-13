@@ -40,3 +40,22 @@ describe('floating windows in the store: streams and the Sky view share the z or
     expect(st().floats).toHaveLength(0);
   });
 });
+
+describe('minimize in the store', () => {
+  it('toggles a stream window and the Sky window, keeps the rect, and the cap still counts them', () => {
+    expect(st().openFloat(yt(1), 'a')).toBe(true);
+    const rect = { x: st().floats[0].x, y: st().floats[0].y, w: st().floats[0].w };
+    st().toggleFloatMinimized(yt(1));
+    expect(st().floats[0].minimized).toBe(true);
+    expect(st().floats[0]).toMatchObject(rect);
+    expect(st().openSky('obs-paranal', 'Sky')).toBe(true);
+    st().toggleSkyMinimized();
+    expect(st().sky!.minimized).toBe(true);
+    for (let i = 2; i < MAX_FLOATS; i++) expect(st().openFloat(yt(i), `s${i}`)).toBe(true);
+    expect(st().openFloat(yt(99), 'late')).toBe(false);
+    st().toggleFloatMinimized(yt(1));
+    st().toggleSkyMinimized();
+    expect(st().floats[0].minimized).toBe(false);
+    expect(st().sky!.minimized).toBe(false);
+  });
+});

@@ -428,6 +428,8 @@ button.chip:hover { border-color: var(--ink-3); color: var(--ink); }
   position: absolute; pointer-events: auto; display: flex; flex-direction: column; min-width: 0; min-height: 0;
   background: var(--panel); border-radius: 3px; box-shadow: 0 0 0 1px var(--rule-2), 0 10px 30px rgba(0, 0, 0, 0.6); overflow: hidden;
 }
+.float-win.mini { min-height: 0; } /* a minimized window is clipped to its title bar; the body keeps its full size inside (set inline) so the player keeps running, never display:none */
+.float-win.mini .float-head { border-bottom: 0; }
 .float-win.busy { box-shadow: 0 0 0 1px var(--ink), 0 14px 40px rgba(0, 0, 0, 0.75); }
 .float-head {
   flex: none; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 10px;
