@@ -41,7 +41,7 @@ Open <http://localhost:5173>. Run the tests with `npm test`.
 
 ## Where the data comes from
 
-[CelesTrak](https://celestrak.org) (satellite orbits), [Launch Library 2](https://thespacedevs.com/llapi) (launches), [Spaceflight News](https://www.spaceflightnewsapi.net), NASA DSN Now, [JPL Horizons](https://ssd.jpl.nasa.gov/horizons/) (probes, and the positions of the planets, dwarf planets and major moons, with an analytic fallback offline) and [wheretheiss.at](https://wheretheiss.at) plus the ISS Lightstreamer feed (ISS). If CelesTrak is blocked on your network, see the troubleshooting section of the [reference](docs/reference.md#celestrak-blocked-or-unreachable).
+[CelesTrak](https://celestrak.org) (satellite orbits), [Launch Library 2](https://thespacedevs.com/llapi) (launches), [Spaceflight News](https://www.spaceflightnewsapi.net), NASA DSN Now, [JPL Horizons](https://ssd.jpl.nasa.gov/horizons/) (probes, and the positions of the planets, dwarf planets and major moons, with an analytic fallback offline) and [wheretheiss.at](https://wheretheiss.at) plus the ISS Lightstreamer feed (ISS). The About tab of an object reads [Wikipedia](https://www.wikipedia.org) (found through Wikidata) and, with a free token, [ESA DISCOS](https://discosweb.esoc.esa.int/), only for the object you open. If CelesTrak is blocked on your network, see the troubleshooting section of the [reference](docs/reference.md#celestrak-blocked-or-unreachable).
 
 ## How it is organised
 

@@ -42,4 +42,12 @@ describe('credential feeds', () => {
     expect(credentialConnector('launch-library-2')).toBe('launchlibrary');
     expect(credentialConnector('celestrak')).toBeNull();
   });
+
+  it('knows the description sources: Wikipedia needs nothing, DISCOS needs a token', () => {
+    expect(FEED_CATALOG.wikipedia.provides).toMatch(/About/);
+    expect(FEED_CATALOG.discos.provides).toMatch(/token/);
+    expect(credentialConnector('discos')).toBe('discos');
+    expect(credentialConnector('wikipedia')).toBeNull();
+    expect(mockHealth(0).map((h) => h.id)).toEqual(expect.arrayContaining(['wikipedia', 'discos']));
+  });
 });

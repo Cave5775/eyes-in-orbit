@@ -687,3 +687,19 @@ video.stream-frame { background: #000; object-fit: contain; }
 .perf-overlay { position: fixed; right: 8px; bottom: 8px; z-index: 50; min-width: 230px; padding: 6px 8px; background: rgba(8, 12, 20, 0.82); border: 1px solid var(--line); font: 11px/1.5 ui-monospace, Consolas, monospace; color: var(--ink-2); pointer-events: none; }
 .perf-row { display: flex; justify-content: space-between; gap: 12px; }
 .perf-row b { color: var(--ink); font-weight: 500; }
+
+/* ---- About tab: article summary, small thumbnail, facts table, source links ---- */
+.about { padding: 0 12px 12px; max-width: 68ch; }
+.about-sum { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 6px; }
+.about-thumb { flex: none; max-width: 96px; height: auto; border-radius: 2px; border: 1px solid var(--line); }
+.about-title { font-weight: 500; }
+.about-blurb { font-size: 11px; font-stretch: var(--narrow); }
+.about-text { margin: 6px 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
+.about-facts { display: block; margin: 8px 0; }
+.about-fact { display: flex; gap: 8px; padding: 2px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.about-fact dt { flex: none; width: 9em; color: var(--ink-2); }
+.about-fact dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.about-fallback { margin: 8px 0 4px; font-size: 11px; line-height: 1.5; }
+.about-links { display: flex; gap: 12px; margin: 6px 0; font-size: 12px; }
+.about-links a { color: var(--ink); }
+.about-meta { font-size: 10px; margin-top: 6px; }

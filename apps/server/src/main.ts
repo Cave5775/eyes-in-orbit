@@ -7,6 +7,7 @@ import { ImageryCache } from './imagery';
 import { loadConfig, loadDotEnv } from './config';
 import { Scheduler, type Connector } from './connector';
 import { Credentials } from './credentials';
+import { DescribeService } from './describe/service';
 import { bodies } from './connectors/bodies';
 import { celestrak } from './connectors/celestrak';
 import { dsn } from './connectors/dsn';
@@ -46,10 +47,14 @@ async function main(): Promise<void> {
   await app.register(compress, { global: true, threshold: 1024 });
   loadLiveTelemetry(hub, store);
   const credentials = new Credentials(config, store);
+  const describe = new DescribeService({ store, http, config, hub });
   registerApi(app, hub, http, store, {
     credentials,
-    onChanged: (ids) => ids.forEach((id) => void scheduler.refresh(id)),
-  }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline }));
+    onChanged: (ids) => {
+      ids.forEach((id) => void scheduler.refresh(id));
+      describe.syncHealth();
+    },
+  }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline }), describe);
   await registerStream(app, hub);
 
   await app.listen({ port: config.port, host: config.host });

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { searchNews } from './connectors/snapi';
 import { syncLaunchEntities } from './connectors/launchlibrary';
 import { CredentialError, type Credentials } from './credentials';
+import type { DescribeService } from './describe/service';
 import type { Http } from './http';
 import { parseTile, type ImageryCache } from './imagery';
 import type { Hub } from './hub';
@@ -37,7 +38,7 @@ export interface CredentialsApi {
   onChanged(connectors: string[]): void;
 }
 
-export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store, creds?: CredentialsApi, imagery?: ImageryCache): void {
+export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store, creds?: CredentialsApi, imagery?: ImageryCache, describe?: DescribeService): void {
   app.get('/api/health', async () => ({
     serverTime: Date.now(),
     entityCount: hub.graph.size,
@@ -64,6 +65,15 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
     searchEntities(hub.graph.all(), req.query.q ?? '', Math.min(int(req.query.limit, 20)!, 100)));
 
   app.get('/api/launches', async () => ({ launches: hub.launches }));
+
+  // text description of one object, looked up only when asked (Wikipedia via Wikidata, ESA DISCOS with a token), cached
+  if (describe) {
+    app.get<{ Params: { entityId: string } }>('/api/describe/:entityId', async (req, reply) => {
+      const rec = hub.graph.get(req.params.entityId);
+      if (!rec) return reply.code(404).send({ error: `unknown entity ${req.params.entityId}` });
+      return describe.describe(rec);
+    });
+  }
 
   app.get<{ Querystring: { entity?: string; q?: string; limit?: string } }>('/api/news', async (req, reply) => {
     const { entity, q } = req.query;

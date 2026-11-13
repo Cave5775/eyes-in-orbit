@@ -94,7 +94,7 @@ export interface IssArrays {
 }
 
 /** Credentials the UI can set (`GET/PUT /api/credentials`); each one is read by a server connector. */
-export type CredentialKey = 'spacetrackUser' | 'spacetrackPassword' | 'll2Token';
+export type CredentialKey = 'spacetrackUser' | 'spacetrackPassword' | 'll2Token' | 'discosToken';
 
 /** What the server tells the UI about one credential. Secret values are never sent, only whether one is set. */
 export interface CredentialInfo {

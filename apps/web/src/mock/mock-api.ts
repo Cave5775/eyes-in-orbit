@@ -1,6 +1,7 @@
 import type { CredentialInfo } from '@eio/core';
 import type { Api } from '../api/types';
 import { rankEntities } from '../lib/filters';
+import { mockDescription } from './describe';
 import {
   mockAscentSeries, mockBodies, mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockSatellites,
 } from './generators';
@@ -17,6 +18,7 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
     { key: 'spacetrackUser', label: 'Space-Track username (e-mail)', connector: 'spacetrack', secret: false, set: false, source: null },
     { key: 'spacetrackPassword', label: 'Space-Track password', connector: 'spacetrack', secret: true, set: false, source: null },
     { key: 'll2Token', label: 'Launch Library 2 token', connector: 'launchlibrary', secret: true, set: false, source: null },
+    { key: 'discosToken', label: 'ESA DISCOS API token', connector: 'discos', secret: true, set: false, source: null },
   ];
 
   return {
@@ -40,6 +42,11 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
       return mockNews(Date.now(), query).slice(0, limit);
     },
     dsn: async () => mockDsn(Date.now()),
+    describe: async (entityId) => {
+      const rec = entities.find((e) => e.id === entityId);
+      if (!rec) throw new Error(`unknown entity ${entityId}`);
+      return mockDescription(rec);
+    },
     iss: async () => ({
       fix: issOmm ? mockIssFix(issOmm, Date.now()) : undefined,
       telemetry: mockIssTelemetry(Date.now()),

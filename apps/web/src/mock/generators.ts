@@ -471,6 +471,8 @@ export function mockHealth(nowMs: number): ConnectorHealth[] {
     { id: 'dsn-xml', status: 'error', lastOkAt: nowMs - 86_400_000, runs: 40, failures: 2, lastError: 'The operation was aborted due to timeout', lastErrorAt: nowMs - 30_000, nextRunAt: nowMs + 45_000 },
     { id: 'iss-rest', status: 'error', runs: 12, failures: 6, lastError: 'fetch failed (UND_ERR_CONNECT_TIMEOUT)', lastErrorAt: nowMs - 10_000, nextRunAt: nowMs + 60_000 },
     { id: 'flightclub', status: 'disabled', runs: 0, note: 'DISABLED_CONNECTORS' },
+    { id: 'wikipedia', status: 'ok', lastOkAt: nowMs - 120_000, runs: 3, note: 'mock' },
+    { id: 'discos', status: 'stub', runs: 0, note: 'Needs a DISCOS API token (mock)' },
   ];
   return rows.map((h) => ({ ...h, feed: classifyFeed(h) }));
 }
