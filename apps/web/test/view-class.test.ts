@@ -83,3 +83,15 @@ describe('settleView', () => {
     expect(settleView(orbiter, mars).dist).toBe(3200);
   });
 });
+
+describe('viewClass uses the listed parent', () => {
+  const sampled = (frame: string, r: number[]) => ({
+    type: 'sampled' as const, frame: frame as `${string}:inertial`, samples: [[Date.UTC(2026, 9, 22), ...r], [Date.UTC(2026, 9, 23), ...r]],
+  });
+  it('an Earth-centred probe whose track is in the Sun sphere is a probe even when close in the old rule', () => {
+    expect(viewClass({ kind: 'probe', bodyId: 'EARTH', provider: sampled('EARTH:inertial', [1.5e6, 0, 0]) }, 5e4)).toBe('probe');
+  });
+  it('an Earth-centred probe in the Earth sphere keeps the near-orbit rule', () => {
+    expect(viewClass({ kind: 'probe', bodyId: 'EARTH', provider: sampled('EARTH:inertial', [7000, 0, 0]) }, 7000)).toBe('satellite');
+  });
+});

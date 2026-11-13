@@ -47,7 +47,7 @@ export interface TreeOptions<T extends TreeItem> {
   groupMin?: number;
   /** display name of a kind, used to order groups alphabetically among equals */
   kindName?: (kind: string) => string;
-  /** body of an item when the item itself has no `bodyId` (search hits) */
+  /** the body an item is listed under (`listedParent`: the sphere of influence its track is in); wins over `bodyId`, which search hits may lack */
   bodyOf?: (item: T) => string | undefined;
   /** registry body id an item stands for, for items without a `provider` (search hits of body entities) */
   standsForBody?: (item: T) => string | undefined;
@@ -127,7 +127,7 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
       n.backed = true;
       continue;
     }
-    nodeFor(it.bodyId ?? opts.bodyOf?.(it) ?? 'EARTH').items.push(it);
+    nodeFor(opts.bodyOf?.(it) ?? it.bodyId ?? 'EARTH').items.push(it);
   }
 
   const count = (n: Node<T>): number => {
@@ -209,7 +209,7 @@ export interface RevealOptions<T extends TreeItem> {
 export function revealKeys<T extends TreeItem>(item: T, opts: RevealOptions<T>): string[] {
   const own = item.provider?.type === 'body' ? item.provider.bodyId : opts.standsForBody?.(item);
   if (own) return bodyPathKeys(opts.bodies, own).slice(0, -1);
-  const bodyId = item.bodyId ?? opts.bodyOf?.(item) ?? 'EARTH';
+  const bodyId = opts.bodyOf?.(item) ?? item.bodyId ?? 'EARTH';
   const known = opts.bodies.some((b) => b.id === bodyId);
   // a body the registry does not know hangs off the first root (as in buildTreeRows)
   const root = opts.bodies.find((b) => !b.parentId || !opts.bodies.some((p) => p.id === b.parentId));

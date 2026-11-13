@@ -3,6 +3,7 @@ import {
   DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci,
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
 } from '@eio/core';
+import { listedParent } from '../lib/listed-parent';
 import { modelViewDirection } from '../lib/attitude';
 import { bodyPickScan, gatherWithBodies } from '../lib/body-scene';
 import { DIM } from '../lib/dim';
@@ -647,7 +648,7 @@ export class SceneController {
   /** The fly-to view of a tracked entity: an orbiter of another body is measured from its primary (lib/view-class.ts). */
   private viewOf(rec: EntityRecord, p: THREE.Vector3): { dist: number; az: number; el: number } {
     const cls = viewClass(rec, p.length());
-    return cls === 'orbiter' ? viewFor(p, refDisplay(rec.bodyId, clock.now()).r) : viewFor(p);
+    return cls === 'orbiter' ? viewFor(p, refDisplay(listedParent(rec), clock.now()).r) : viewFor(p);
   }
 
   private focusTracked(rec: EntityRecord, req?: FocusRequest): void {
