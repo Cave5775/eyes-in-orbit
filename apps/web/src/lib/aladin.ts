@@ -4,7 +4,10 @@
  * The rest of the app uses `SkyView` and never touches `window.A`.
  *
  * Version pinned to an exact release (3.8.2, the latest non-beta on npm/jsDelivr when this was written; 3.9.x are betas).
- * No subresource-integrity hash is set: it was not computed from the file in this change.
+ * Remote loading, stated plainly: opening the Sky view imports this module from cdn.jsdelivr.net, where it runs in the page with
+ * the page's privileges and no subresource-integrity check (none was computed). Aladin then fetches survey properties and tiles
+ * from CDS hosts (alasky.cds.unistra.fr and mirrors); a tile request reveals the sky position and survey being viewed. Nothing
+ * is requested before the Sky view is first opened.
  */
 
 export const ALADIN_VERSION = '3.8.2';

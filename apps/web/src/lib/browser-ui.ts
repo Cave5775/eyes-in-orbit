@@ -126,7 +126,7 @@ export function normaliseType(raw: string): string {
   const h = d.replace(/[\s_]+/g, '-');
   if (CATEGORY_IDS.has(h)) return h;
   if (h === OBSERVATORY_TYPE || h === 'observatories') return OBSERVATORY_TYPE;
-  const k =d.replace(/[\s-]+/g, '_');
+  const k = d.replace(/[\s-]+/g, '_');
   const single = k.length > 1 && k.endsWith('s') ? k.slice(0, -1) : k;
   if (KNOWN_KINDS.has(k)) return k;
   if (KNOWN_KINDS.has(single)) return single;

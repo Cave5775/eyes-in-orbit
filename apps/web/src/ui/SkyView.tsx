@@ -34,8 +34,11 @@ export function SkyView({ obsId }: { obsId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [obsId]);
 
-  // create the view once; Aladin has no destroy call, so unmounting empties its element
+  // create the view once the observatory has imagery (the host div is always rendered, so a row that qualifies late still
+  // initialises); Aladin has no destroy call, so unmounting empties its element
+  const usable = !!row?.imagery;
   useEffect(() => {
+    if (!usable) return;
     let cancelled = false;
     const el = host.current;
     loadAladin().then(
@@ -53,8 +56,9 @@ export function SkyView({ obsId }: { obsId: string }) {
       cancelled = true;
       view.current = null;
       if (el) el.replaceChildren();
+      setLoad({ state: 'loading' });
     };
-  }, []);
+  }, [usable]);
 
   // aim: when the observatory changes, and every 5 s step of sim time for a ground site that follows its zenith
   const tracks = !!target?.tracksZenith;
@@ -68,15 +72,15 @@ export function SkyView({ obsId }: { obsId: string }) {
     view.current?.setSurvey(survey);
   }, [survey, load.state]);
 
-  if (!row) return <div className="sky-msg">This observatory is not in the catalogue.</div>;
-  if (!row.imagery) return <div className="sky-msg">{row.name} observes in {row.meta.bands.join(', ') || 'radio'}: there is no sky imagery to show.</div>;
+  const none = !row ? 'This observatory is not in the catalogue.' : !row.imagery ? `${row.name} observes in ${row.meta.bands.join(', ') || 'radio'}: there is no sky imagery to show.` : null;
 
   return (
     <div className="sky">
       <div className="sky-aladin" ref={host} />
-      {load.state === 'loading' && <div className="sky-msg">Loading Aladin Lite {ALADIN_VERSION}...</div>}
-      {load.state === 'error' && <div className="sky-msg sky-err" role="alert">{load.message}</div>}
-      <div className="sky-bar">
+      {none && <div className="sky-msg">{none}</div>}
+      {!none && load.state === 'loading' && <div className="sky-msg">Loading Aladin Lite {ALADIN_VERSION}...</div>}
+      {!none && load.state === 'error' && <div className="sky-msg sky-err" role="alert">{load.message}</div>}
+      {!none && <div className="sky-bar">
         <span className="sky-note" title={target?.note}>{target?.note}</span>
         <select className="sky-select" value={survey} onChange={(e) => setSurvey(e.target.value)} aria-label="Sky survey" title="Survey (HiPS) shown">
           {SURVEYS.map((s) => <option key={s.id} value={s.id}>{s.label} ({s.band})</option>)}
@@ -87,7 +91,7 @@ export function SkyView({ obsId }: { obsId: string }) {
           </label>
         )}
         <span className="sky-credit">Aladin Lite, CDS</span>
-      </div>
+      </div>}
     </div>
   );
 }

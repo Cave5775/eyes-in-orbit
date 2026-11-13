@@ -2,7 +2,7 @@ import { DEG, gmstRad } from '@eio/core';
 
 /**
  * Sky geometry for a ground observatory (pure). Equatorial coordinates are of date: the sidereal angle is the MEAN one and
- * precession from J2000 (about 26 arcmin in 2026) is ignored, far below what a wide-field sky view shows.
+ * precession from J2000 (about 22 arcmin in 2026) is ignored, far below what a wide-field sky view shows.
  *
  * GMST comes from core `gmstRad`, the IAU 1982 expression (Meeus, Astronomical Algorithms 2nd ed., eq. 12.4; UT1 ~ UTC, error
  * under a second of time). Longitudes are east positive, azimuth is measured from north through east.

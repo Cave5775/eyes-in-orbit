@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { MAX_FLOATS } from '../lib/floating';
+import { canOpenStream } from '../lib/sky-window';
 import { watchResult } from '../lib/stream-url';
 import { pageOrigin } from '../lib/youtube';
 import { useStore } from '../state/store';
@@ -11,6 +12,7 @@ import { useStore } from '../state/store';
  */
 export function StreamUrlInput({ compact = false, onOpened }: { compact?: boolean; onOpened?: () => void }) {
   const floats = useStore((s) => s.floats);
+  const sky = useStore((s) => s.sky);
   const openFloat = useStore((s) => s.openFloat);
   const [text, setText] = useState('');
   const [problem, setProblem] = useState<{ error: string; href: string | null } | null>(null);
@@ -23,11 +25,10 @@ export function StreamUrlInput({ compact = false, onOpened }: { compact?: boolea
       return;
     }
     const { embedUrl, title } = r.embed;
-    if (floats.length >= MAX_FLOATS && !floats.some((f) => f.url === embedUrl)) {
-      setProblem({ error: `At most ${MAX_FLOATS} stream windows: close one first.`, href: null });
+    if ((!canOpenStream(floats, sky) && !floats.some((f) => f.url === embedUrl)) || !openFloat(embedUrl, title)) {
+      setProblem({ error: `At most ${MAX_FLOATS} floating windows (the Sky view counts): close one first.`, href: null });
       return;
     }
-    openFloat(embedUrl, title);
     setProblem(null);
     setText('');
     onOpened?.();

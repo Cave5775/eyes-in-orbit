@@ -81,8 +81,8 @@ interface State {
   sky: SkyWindow | null;
 
   upsertEntities(records: EntityRecord[], replace?: boolean): void;
-  /** Pop a stream out into a floating window (no-op at the cap; focuses it when already open). */
-  openFloat(url: string, title: string): void;
+  /** Pop a stream out into a floating window (no-op at the cap, counting the Sky view; focuses it when already open). False when refused. */
+  openFloat(url: string, title: string): boolean;
   /** Close a floating window (the Stream tab's "Dock back" uses this too; the tab then plays the stream again). */
   closeFloat(url: string): void;
   focusFloat(url: string): void;
@@ -251,7 +251,13 @@ export const useStore = create<State>((set, get) => ({
       restoreFrame();
     }
   },
-  openFloat: (url, title) => set((s) => ({ floats: openFloatWindow(s.floats, url, title, viewportNow(), s.sky ? 1 : 0) })),
+  openFloat(url, title) {
+    const s = get();
+    const floats = openFloatWindow(s.floats, url, title, viewportNow(), s.sky ? 1 : 0, s.sky?.z ?? 0);
+    if (!floats.some((f) => f.url === url)) return false; // refused: the cap (Sky view counted) or not a floatable URL
+    if (floats !== s.floats) set({ floats });
+    return true;
+  },
   openSky(obsId, title) {
     const s = get();
     const sky = openSkyWindow(s.sky, s.floats, obsId, title, viewportNow());
@@ -263,7 +269,7 @@ export const useStore = create<State>((set, get) => ({
   focusSky: () => set((s) => (s.sky ? { sky: focusSkyWindow(s.sky, s.floats) } : {})),
   setSkyRect: (rect) => set((s) => ({ sky: setSkyRect(s.sky, rect, viewportNow()) })),
   closeFloat: (url) => set((s) => ({ floats: closeFloatWindow(s.floats, url) })),
-  focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url) })),
+  focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url, s.sky?.z ?? 0) })),
   setFloatRect: (url, rect) => set((s) => ({ floats: setFloatRect(s.floats, url, rect, viewportNow()) })),
   selectObject(id, opts = {}) {
     const s = get();

@@ -106,24 +106,24 @@ export function nextZ(list: readonly FloatWindow[]): number {
 }
 
 /** Bring a window to the front. Returns the same array when it is already on top or not open. */
-export function focusFloatWindow(list: FloatWindow[], url: string): FloatWindow[] {
+export function focusFloatWindow(list: FloatWindow[], url: string, otherZ = 0): FloatWindow[] {
   const target = list.find((f) => f.url === url);
   if (!target) return list;
-  if (list.every((f) => f.z <= target.z)) return list;
-  const z = nextZ(list);
+  if (target.z > otherZ && list.every((f) => f.z <= target.z)) return list;
+  const z = Math.max(nextZ(list), otherZ + 1);
   return list.map((f) => (f.url === url ? { ...f, z } : f));
 }
 
 /**
  * Open a window for `url`. An already open stream is brought to the front instead. Beyond MAX_FLOATS (counting `reserved`
- * windows of another kind, the Sky view) the list is returned unchanged, as it is for a URL that cannot be floated.
+ * windows of another kind, the Sky view; `otherZ` is that window's z, so a new or raised stream goes above it) the list is returned unchanged, as it is for a URL that cannot be floated.
  */
-export function openFloatWindow(list: FloatWindow[], url: string, title: string, vp: Viewport, reserved = 0): FloatWindow[] {
+export function openFloatWindow(list: FloatWindow[], url: string, title: string, vp: Viewport, reserved = 0, otherZ = 0): FloatWindow[] {
   if (!isFloatableUrl(url)) return list;
-  if (list.some((f) => f.url === url)) return focusFloatWindow(list, url);
+  if (list.some((f) => f.url === url)) return focusFloatWindow(list, url, otherZ);
   if (list.length + reserved >= MAX_FLOATS) return list;
   const rect = defaultRect(vp, list.length);
-  return [...list, { url, title: title.slice(0, 200) || 'Live stream', ...rect, z: nextZ(list) }];
+  return [...list, { url, title: title.slice(0, 200) || 'Live stream', ...rect, z: Math.max(nextZ(list), otherZ + 1) }];
 }
 
 export function closeFloatWindow(list: FloatWindow[], url: string): FloatWindow[] {

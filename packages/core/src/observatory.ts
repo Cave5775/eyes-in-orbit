@@ -66,13 +66,13 @@ export interface GroundObservatory {
  *   its Google Earth link carries -24.62722, -70.40389.
  * - Rubin (Cerro Pachon): 30 deg 14' 41" S, 70 deg 44' 58" W, 2672.75 m (Wikipedia "Vera C. Rubin Observatory"; the operator
  *   page https://rubinobservatory.org/about/summit-facility returned no text to the fetch tool).
- * - Mauna Kea summit: 19.8207 N, 155.4681 W, 4.205 km. NOT checked against a page in this run (the one fetch was refused);
- *   from the Maunakea Observatories summit coordinates as commonly published (https://www.maunakeaobservatories.org/).
+ * - Mauna Kea: 19 deg 49' 20" N, 155 deg 28' 30" W (19.8222, -155.4749), altitude 4,205 m (infobox of
+ *   https://en.wikipedia.org/wiki/Maunakea_Observatories).
  */
 export const GROUND_OBSERVATORIES: GroundObservatory[] = [
   {
-    id: 'obs-maunakea', name: 'Mauna Kea Observatories', latDeg: 19.8207, lonDeg: -155.4681, altKm: 4.205,
-    source: 'https://www.maunakeaobservatories.org/', meta: { site: 'ground', bands: ['optical', 'infrared', 'submillimetre'], survey: 'CDS/P/DSS2/color' },
+    id: 'obs-maunakea', name: 'Mauna Kea Observatories', latDeg: 19.8222, lonDeg: -155.4749, altKm: 4.205,
+    source: 'https://en.wikipedia.org/wiki/Maunakea_Observatories', meta: { site: 'ground', bands: ['optical', 'infrared', 'submillimetre'], survey: 'CDS/P/DSS2/color' },
   },
   {
     id: 'obs-paranal', name: 'Paranal Observatory (VLT)', latDeg: -24.62722, lonDeg: -70.40389, altKm: 2.635,
