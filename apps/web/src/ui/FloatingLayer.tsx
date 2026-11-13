@@ -68,27 +68,55 @@ function FloatingWindow({ win, vp, focus, setRect, close, children }: WindowProp
     return () => document.body.classList.remove('floating-busy', cls);
   }, [mode]);
 
+  // the gesture is followed by listeners on the window, not by pointer capture alone: whatever is under the pointer (the Sky view's
+  // canvas and bar, an iframe) cannot swallow the moves, and a browser that does not retarget to the captured element still works
+  const live = useRef({ vp, setRect });
+  live.current = { vp, setRect };
+  const stop = useRef<(() => void) | null>(null);
+  useEffect(() => () => stop.current?.(), []);
+
   const begin = (e: PointerEvent<HTMLElement>, next: Mode) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    stop.current?.();
+    const el = e.currentTarget;
+    const pointerId = e.pointerId;
+    try {
+      el.setPointerCapture(pointerId);
+    } catch {
+      // the window listeners below carry the gesture
+    }
     drag.current = { px: e.clientX, py: e.clientY, start: rect, mode: next };
     focus(win.url);
     setMode(next);
-  };
-  const track = (e: PointerEvent<HTMLElement>) => {
-    const d = drag.current;
-    if (!d) return;
-    const dx = e.clientX - d.px;
-    const dy = e.clientY - d.py;
-    const next = d.mode === 'move' ? dragRect(d.start, dx, dy, vp) : resizeRect(d.start, dx, dy, vp);
-    setRect(win.url, next);
-  };
-  const end = (e: PointerEvent<HTMLElement>) => {
-    if (!drag.current) return;
-    drag.current = null;
-    setMode(null);
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    const track = (m: globalThis.PointerEvent) => {
+      const d = drag.current;
+      if (!d || m.pointerId !== pointerId) return;
+      const dx = m.clientX - d.px;
+      const dy = m.clientY - d.py;
+      const to = d.mode === 'move' ? dragRect(d.start, dx, dy, live.current.vp) : resizeRect(d.start, dx, dy, live.current.vp);
+      live.current.setRect(win.url, to);
+    };
+    const end = (m: globalThis.PointerEvent) => {
+      if (m.pointerId !== pointerId) return;
+      stop.current?.();
+    };
+    stop.current = () => {
+      window.removeEventListener('pointermove', track);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      stop.current = null;
+      drag.current = null;
+      setMode(null);
+      try {
+        if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId);
+      } catch {
+        // already released
+      }
+    };
+    window.addEventListener('pointermove', track);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
   };
 
   const onHeadDown = (e: PointerEvent<HTMLElement>) => {
@@ -107,10 +135,6 @@ function FloatingWindow({ win, vp, focus, setRect, close, children }: WindowProp
       <div
         className="float-head"
         onPointerDown={onHeadDown}
-        onPointerMove={track}
-        onPointerUp={end}
-        onPointerCancel={end}
-        onLostPointerCapture={end}
         title="Drag to move"
       >
         <span className="float-title" title={win.title}>{win.title}</span>
@@ -122,10 +146,6 @@ function FloatingWindow({ win, vp, focus, setRect, close, children }: WindowProp
       <div
         className="float-grip"
         onPointerDown={(e) => begin(e, 'resize')}
-        onPointerMove={track}
-        onPointerUp={end}
-        onPointerCancel={end}
-        onLostPointerCapture={end}
         title="Drag to resize (keeps 16:9)"
         aria-label="Resize window"
       />

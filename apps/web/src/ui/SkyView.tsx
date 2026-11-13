@@ -51,6 +51,19 @@ export function SkyView({ obsId }: { obsId: string }) {
     };
   }, [survey]);
 
+  // the user takes the view: dragging or zooming ends "Follow zenith", else the next 5 s step of sim time would snap it back
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    const stop = () => setFollow(false);
+    el.addEventListener('pointerdown', stop, true);
+    el.addEventListener('wheel', stop, { passive: true, capture: true });
+    return () => {
+      el.removeEventListener('pointerdown', stop, true);
+      el.removeEventListener('wheel', stop, true);
+    };
+  }, []);
+
   // another observatory in the same window: its default survey and a fresh follow
   useEffect(() => {
     setSurvey(row?.meta.survey ?? DEFAULT_HIPS_SURVEY);

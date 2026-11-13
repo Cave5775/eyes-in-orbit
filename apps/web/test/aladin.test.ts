@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ALADIN_URL, ALADIN_VERSION, createSkyView, loadAladin, resetAladinLoader, type AladinGlobal } from '../src/lib/aladin';
+import { ALADIN_URL, ALADIN_VERSION, MAX_FOV_DEG, createSkyView, loadAladin, resetAladinLoader, type AladinGlobal } from '../src/lib/aladin';
 
 function fakeAladin() {
   const calls: unknown[][] = [];
+  const handlers: Record<string, (n: number) => void> = {};
   const inst = {
     gotoRaDec: (...a: number[]) => calls.push(['goto', ...a]),
     setFoV: (...a: number[]) => calls.push(['fov', ...a]),
     setImageSurvey: (...a: string[]) => calls.push(['survey', ...a]),
     getFoV: () => [12, 8],
+    on: (...a: unknown[]) => { calls.push(['on', a[0]]); handlers[String(a[0])] = a[1] as (n: number) => void; },
   };
   const A: AladinGlobal = { init: Promise.resolve(), aladin: (_el, o) => { calls.push(['create', o]); return inst; } };
-  return { A, calls };
+  return { A, calls, handlers };
 }
 
 afterEach(() => { resetAladinLoader(); vi.useRealTimers(); });
@@ -62,11 +64,21 @@ describe('aladin adapter', () => {
   it('createSkyView passes the start point and forwards the few calls the app uses', () => {
     const { A, calls } = fakeAladin();
     const v = createSkyView(A, {} as HTMLElement, { survey: 'CDS/P/DSS2/color', raDeg: 10.5, decDeg: -20, fovDeg: 30 });
-    expect(calls[0][1]).toMatchObject({ survey: 'CDS/P/DSS2/color', target: '10.5 -20', fov: 30, cooFrame: 'equatorial' });
+    expect(calls[0][1]).toMatchObject({ survey: 'CDS/P/DSS2/color', target: '10.5 -20', fov: 30, cooFrame: 'equatorial', projection: 'TAN' });
     v.gotoRaDec(1, 2);
     v.setSurvey('CDS/P/2MASS/color');
     v.setFov(5);
-    expect(calls.slice(1)).toEqual([['goto', 1, 2], ['survey', 'CDS/P/2MASS/color'], ['fov', 5]]);
+    expect(calls.slice(2)).toEqual([['goto', 1, 2], ['survey', 'CDS/P/2MASS/color'], ['fov', 5]]);
     expect(v.fov()).toBe(12);
+  });
+
+  it('createSkyView caps the field of view at MAX_FOV_DEG (the TAN projection stretches without bound)', () => {
+    const { A, calls, handlers } = fakeAladin();
+    createSkyView(A, {} as HTMLElement, { survey: 'CDS/P/DSS2/color', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    calls.length = 0;
+    handlers.zoomChanged(60);
+    expect(calls).toEqual([]);
+    handlers.zoomChanged(170);
+    expect(calls).toEqual([['fov', MAX_FOV_DEG]]);
   });
 });

@@ -20,6 +20,7 @@ interface AladinInstance {
   setFoV(deg: number): void;
   getFoV(): number[] | number;
   setImageSurvey(idOrUrl: string): void;
+  on(event: string, cb: (...args: number[]) => void): void;
 }
 export interface AladinGlobal {
   init?: Promise<unknown>;
@@ -101,6 +102,9 @@ export interface SkyView {
   fov(): number | null;
 }
 
+/** Widest field of view the Sky view allows: the gnomonic (TAN) projection stretches the edges without bound toward 180 degrees. */
+export const MAX_FOV_DEG = 100;
+
 /** Create a view in `el` from a loaded Aladin (the options turn off everything but pan and zoom). */
 export function createSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewInit): SkyView {
   const a = A.aladin(el, {
@@ -108,6 +112,8 @@ export function createSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewIni
     target: `${init.raDeg} ${init.decDeg}`,
     fov: init.fovDeg,
     cooFrame: 'equatorial',
+    // gnomonic (TAN), what a camera sees: the default orthographic projection draws the sky as a ball that turns under the cursor
+    projection: 'TAN',
     // no usage logging to the CDS server (it would send the page URL and the target)
     log: false,
     showReticle: false,
@@ -122,6 +128,9 @@ export function createSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewIni
     showCooLocation: false,
     showFov: false,
     showContextMenu: false,
+  });
+  a.on('zoomChanged', (fov) => {
+    if (fov > MAX_FOV_DEG) a.setFoV(MAX_FOV_DEG);
   });
   return {
     gotoRaDec: (ra, dec) => a.gotoRaDec(ra, dec),
