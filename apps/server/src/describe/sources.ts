@@ -1,4 +1,6 @@
-import type { DescribeFact } from '@eio/core';
+import { isTrustedDescribeUrl, type DescribeFact } from '@eio/core';
+
+const WIKI_HOSTS = ['wikipedia.org', 'wikimedia.org', 'wikidata.org'];
 
 /**
  * URL builders and parsers of the three description sources. Pure functions on response text so they can be tested on
@@ -161,7 +163,8 @@ export function parseWikipediaSummary(text: string): WikipediaSummary | null {
   if (!title || !extract) throw new Error('unexpected Wikipedia summary response: no title or extract');
   if (j.type === 'disambiguation') return null;
   const urls = j.content_urls as { desktop?: { page?: unknown } } | undefined;
-  const url = str(urls?.desktop?.page) ?? `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+  const given = str(urls?.desktop?.page);
+  const url = given && isTrustedDescribeUrl(given, WIKI_HOSTS) ? given : `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
   const out: WikipediaSummary = { title, text: extract, url };
   const blurb = str(j.description);
   if (blurb) out.blurb = blurb;
@@ -169,7 +172,7 @@ export function parseWikipediaSummary(text: string): WikipediaSummary | null {
   const src = str(th?.source);
   const w = num(th?.width);
   const h = num(th?.height);
-  if (src && /^https:\/\//.test(src) && w && h) out.thumbnail = { url: src, width: w, height: h };
+  if (src && isTrustedDescribeUrl(src, WIKI_HOSTS) && w && h) out.thumbnail = { url: src, width: w, height: h };
   return out;
 }
 

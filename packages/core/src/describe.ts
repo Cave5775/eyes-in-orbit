@@ -76,3 +76,16 @@ export function composeFallback(rec: EntityRecord): string {
   if (owner) s += ` ${owner[0][0].toUpperCase()}${owner[0].slice(1)}: ${owner[1]}.`;
   return s;
 }
+
+/** Hosts (and their subdomains) a description may link to or load pictures from. */
+export const DESCRIBE_HOSTS: readonly string[] = ['wikipedia.org', 'wikimedia.org', 'wikidata.org', 'discosweb.esoc.esa.int'];
+
+/** True for an https URL whose host is one of `hosts` or a subdomain of one: nothing else is rendered as a link or image. */
+export function isTrustedDescribeUrl(url: unknown, hosts: readonly string[] = DESCRIBE_HOSTS): boolean {
+  if (typeof url !== 'string') return false;
+  // https://host[:port][/?#...] with no credentials; the core package has no URL class (no DOM lib)
+  const m = /^https:\/\/([a-z0-9.-]+)(?::\d+)?(?:[/?#]|$)/i.exec(url);
+  if (!m) return false;
+  const host = m[1].toLowerCase();
+  return hosts.some((h) => host === h || host.endsWith(`.${h}`));
+}

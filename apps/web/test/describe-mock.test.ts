@@ -4,17 +4,18 @@ import { createMockApi } from '../src/mock/mock-api';
 describe('mock About descriptions', () => {
   const api = createMockApi(Date.UTC(2026, 0, 1), 50);
 
-  it('gives the ISS a Wikipedia summary with links and a clearly marked placeholder facts table', async () => {
+  it('gives the ISS the recorded Wikipedia summary, no invented DISCOS facts', async () => {
     const d = await api.describe('sat-25544');
     expect(d.summary?.text).toMatch(/^The International Space Station/);
     expect(d.summary?.thumbnail?.url).toMatch(/^https:\/\//);
     expect(d.wikidata?.id).toBe('Q25271');
-    expect(d.discos?.facts[0].value).toMatch(/mock placeholder/);
+    expect(d.discos).toBeUndefined();
+    expect(d.sources.discos).toBe('off');
     expect(d.fallback).toContain('NORAD catalogue number 25544');
   });
 
-  it('gives Voyager 1 a short text and other objects only the fallback line', async () => {
-    expect((await api.describe('dsn-VGR1')).summary?.text).toMatch(/^Voyager 1/);
+  it('gives every other object only the fallback line', async () => {
+    expect((await api.describe('dsn-VGR1')).summary).toBeUndefined();
     const other = await api.describe('dsn-JWST');
     expect(other.summary).toBeUndefined();
     expect(other.fallback).toBeTruthy();

@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { classifyFeed, composeFallback, type EntityRecord } from '@eio/core';
+import { classifyFeed, composeFallback, isTrustedDescribeUrl, type EntityRecord } from '@eio/core';
+import { Credentials } from '../src/credentials';
 import Fastify from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerApi } from '../src/api';
 import { loadConfig } from '../src/config';
-import { DescribeService, ERROR_TTL_MS, HIT_TTL_MS, MISS_TTL_MS } from '../src/describe/service';
+import { DescribeService, ERROR_TTL_MS, HIT_TTL_MS, MAX_QUEUE, MISS_TTL_MS } from '../src/describe/service';
 import {
   discosUrl, parseDiscos, parseWikidataEntities, parseWikidataNameSearch, parseWikidataSearch, parseWikipediaSummary, pickWikidataItem,
   uniqueSpaceCandidate, wikidataEntitiesUrl, wikidataSearchUrl, wikipediaSummaryUrl,
@@ -91,6 +92,26 @@ describe('describe parsers (fixtures: real Wikidata and Wikipedia responses)', (
     expect(o.url).toBe('https://discosweb.esoc.esa.int/objects/99001');
     expect(parseDiscos('{"data":[]}')).toBeNull();
     expect(discosUrl(25544)).toBe('https://discosweb.esoc.esa.int/api/objects?filter=eq(satno%2C25544)&include=operators');
+  });
+});
+
+describe('URL allow-list', () => {
+  it('accepts https on the Wikimedia and DISCOS hosts only', () => {
+    expect(isTrustedDescribeUrl('https://en.wikipedia.org/wiki/X')).toBe(true);
+    expect(isTrustedDescribeUrl('https://upload.wikimedia.org/a.jpg')).toBe(true);
+    expect(isTrustedDescribeUrl('https://discosweb.esoc.esa.int/objects/1')).toBe(true);
+    for (const bad of ['javascript:alert(1)', 'http://en.wikipedia.org/x', 'https://evil.example/x', 'https://wikipedia.org.evil.example/x', 'https://user:pw@en.wikipedia.org/x', 'data:text/html,x', 'nope', undefined]) {
+      expect(isTrustedDescribeUrl(bad), String(bad)).toBe(false);
+    }
+  });
+
+  it('drops a foreign thumbnail and replaces a foreign page link in the Wikipedia parser', () => {
+    const j = JSON.parse(SUMMARY);
+    j.thumbnail.source = 'https://evil.example/x.png';
+    j.content_urls.desktop.page = 'javascript:alert(1)';
+    const s = parseWikipediaSummary(JSON.stringify(j))!;
+    expect(s.thumbnail).toBeUndefined();
+    expect(s.url).toBe('https://en.wikipedia.org/wiki/International_Space_Station');
   });
 });
 
@@ -270,6 +291,58 @@ describe('DescribeService', () => {
     routes['page/summary/Mars'] = reply(SUMMARY);
     await svc.describe({ id: 'body-mars', name: 'Mars', kind: 'planet', bodyId: 'SUN', aliases: {}, updatedAt: 0 });
     expect(urls()).toEqual([wikipediaSummaryUrl('Mars')]);
+  });
+
+  it('does not cache an OFFLINE answer: back online the same object is looked up for real', async () => {
+    const config = loadConfig({ OFFLINE: '1' });
+    const off = new DescribeService({ store, http: new Http(store, { fetch: fetchMock, offline: true }), config, hub }, { spacingMs: { wikipedia: 0, discos: 0 }, sleep: async () => {}, now: () => now });
+    expect((await off.describe(iss)).sources.wikipedia).toBe('off');
+    expect(fetchMock).not.toHaveBeenCalled();
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.summary?.title).toBe('International Space Station');
+    expect(d.fromCache).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('asks DISCOS again after a credential change: gate cleared, cached error and off re-asked', async () => {
+    routes['discosweb.esoc.esa.int'] = reply('denied', 401);
+    const { svc, config } = make({ DISCOS_TOKEN: 'bad' });
+    const creds = new Credentials(config, store);
+    expect((await svc.describe(iss)).sources.discos).toBe('error');
+    fetchMock.mockClear();
+    now += 1000;
+    expect((await svc.describe(iss)).fromCache).toBe(true); // same token: the short error cache holds
+    expect(fetchMock).not.toHaveBeenCalled();
+    routes['discosweb.esoc.esa.int'] = reply(DISCOS);
+    creds.update({ discosToken: 'good' });
+    svc.syncHealth();
+    now += 1000;
+    const d = await svc.describe(iss);
+    expect(d.sources.discos).toBe('ok');
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('discosweb'))).toBe(true);
+  });
+
+  it('answers "error" without caching when a source queue is full, and re-checks the gate for queued requests', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    routes['list=search'] = () => new Response(SEARCH);
+    fetchMock.mockImplementation(async (input) => {
+      await hold;
+      const url = String(input);
+      const key = Object.keys(routes).find((k) => url.includes(k));
+      return key ? routes[key]() : new Response('x', { status: 404 });
+    });
+    const { svc } = make();
+    const recs = Array.from({ length: MAX_QUEUE + 5 }, (_, i): EntityRecord => ({ ...iss, id: `sat-${70000 + i}`, aliases: { norad: String(70000 + i) } }));
+    const all = recs.map((r) => svc.describe(r));
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    const done = await Promise.all(all);
+    const busy = done.filter((d) => d.sources.wikidata === 'error');
+    expect(busy.length).toBeGreaterThan(0);
+    for (const d of busy) expect(store.get(`describe:v1:${d.entityId}`)).toBeUndefined();
+    expect(hub.healthOf('wikipedia').status).not.toBe('error');
   });
 
   it('under OFFLINE=1 serves the fallback with no request', async () => {

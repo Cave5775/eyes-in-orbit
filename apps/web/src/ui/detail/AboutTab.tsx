@@ -1,4 +1,4 @@
-import type { Description, EntityRecord } from '@eio/core';
+import { isTrustedDescribeUrl, type Description, type EntityRecord } from '@eio/core';
 import { useEffect, useState } from 'react';
 import { api } from '../../api/client';
 import { fmtAgo } from '../../lib/format';
@@ -7,15 +7,16 @@ import { useWallNow } from '../hooks';
 /** The text-description part of the About tab, split out so it can be rendered from a fixed `Description`. */
 export function AboutBody({ d, now }: { d: Description; now: number }) {
   const links: [string, string][] = [];
-  if (d.summary) links.push(['Wikipedia', d.summary.url]);
-  if (d.wikidata) links.push(['Wikidata', d.wikidata.url]);
-  if (d.discos?.url) links.push(['ESA DISCOS', d.discos.url]);
+  // defence in depth: the server already filters, but only trusted hosts are ever rendered as a link or image
+  if (d.summary && isTrustedDescribeUrl(d.summary.url)) links.push(['Wikipedia', d.summary.url]);
+  if (d.wikidata && isTrustedDescribeUrl(d.wikidata.url)) links.push(['Wikidata', d.wikidata.url]);
+  if (d.discos?.url && isTrustedDescribeUrl(d.discos.url)) links.push(['ESA DISCOS', d.discos.url]);
   const nothing = !d.summary && !d.discos;
   return (
     <div className="about">
       {d.summary && (
         <div className="about-sum">
-          {d.summary.thumbnail && (
+          {d.summary.thumbnail && isTrustedDescribeUrl(d.summary.thumbnail.url) && (
             <img
               className="about-thumb" src={d.summary.thumbnail.url} alt="" loading="lazy" referrerPolicy="no-referrer"
               width={Math.min(d.summary.thumbnail.width, 96)} />
@@ -36,7 +37,7 @@ export function AboutBody({ d, now }: { d: Description; now: number }) {
       )}
       {nothing && (
         <p className="about-text">
-          No article found for this object. <a href={d.searchUrl} target="_blank" rel="noopener noreferrer">Search Wikipedia</a>
+          No article found for this object. <a href={isTrustedDescribeUrl(d.searchUrl) ? d.searchUrl : 'https://en.wikipedia.org/'} target="_blank" rel="noopener noreferrer">Search Wikipedia</a>
         </p>
       )}
       <p className="about-fallback dim">{d.fallback}</p>

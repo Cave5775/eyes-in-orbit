@@ -26,7 +26,7 @@ export const CREDENTIAL_FIELDS: readonly CredentialField[] = [
     reset: { cache: ['spacetrack:starlink'], backoff: ['spacetrack'] },
   },
   { key: 'll2Token', label: 'Launch Library 2 token', connector: 'launchlibrary', secret: true, env: 'LL2_TOKEN' },
-  { key: 'discosToken', label: 'ESA DISCOS API token', connector: 'discos', secret: true, env: 'DISCOS_TOKEN' },
+  { key: 'discosToken', label: 'ESA DISCOS API token', connector: 'discos', secret: true, env: 'DISCOS_TOKEN', reset: { backoff: ['describe:discos'] } },
 ];
 
 const storeKey = (key: CredentialKey): string => `credential:${key}`;

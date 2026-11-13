@@ -36,12 +36,28 @@ const noradOf = (rec: EntityRecord): number | undefined => {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 };
 
+/** Most requests that may wait for one source; further lookups answer "busy" at once and are not cached. */
+export const MAX_QUEUE = 50;
+
+/** The source's queue is full. */
+class BusyError extends Error {
+  constructor() {
+    super('busy: too many lookups queued for this source');
+  }
+}
+
+/** The persistent failure gate closed while a request waited in the queue. */
+class GateError extends Error {}
+
 /** Runs tasks one after another with a minimum gap, so a burst of selections never becomes a burst of requests. */
 class Spacer {
   private tail: Promise<unknown> = Promise.resolve();
   private last = 0;
-  constructor(private gapMs: number, private sleep: (ms: number) => Promise<void>, private now: () => number) {}
+  private pending = 0;
+  constructor(private gapMs: number, private sleep: (ms: number) => Promise<void>, private now: () => number, private maxPending = MAX_QUEUE) {}
   run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.pending >= this.maxPending) return Promise.reject(new BusyError());
+    this.pending++;
     const p = this.tail.then(async () => {
       const wait = this.last + this.gapMs - this.now();
       if (wait > 0) await this.sleep(wait);
@@ -50,7 +66,7 @@ class Spacer {
       } finally {
         this.last = this.now();
       }
-    });
+    }).finally(() => void this.pending--);
     this.tail = p.catch(() => undefined);
     return p;
   }
@@ -59,6 +75,8 @@ class Spacer {
 interface SourceResult<T> {
   state: DescribeSourceState;
   value?: T;
+  /** the source's queue was full: nothing was asked, nothing may be cached */
+  busy?: boolean;
 }
 
 /**
@@ -69,6 +87,11 @@ interface SourceResult<T> {
  */
 export class DescribeService {
   private inflight = new Map<string, Promise<Description>>();
+  /** descriptions that must not be cached (a source was busy) */
+  private uncached = new WeakSet<Description>();
+  private lastToken: string | undefined;
+  /** when the DISCOS token last changed; cached DISCOS errors older than this are asked again */
+  private tokenChangedAt = 0;
   private wiki: Spacer;
   private discos: Spacer;
   private now: () => number;
@@ -85,6 +108,11 @@ export class DescribeService {
 
   /** Make the DISCOS feed show `stub` (needs credentials) or `idle` according to whether a token is set; call after credential changes. */
   syncHealth(): void {
+    const token = this.deps.config.discosToken;
+    if (token !== this.lastToken) {
+      if (this.lastToken !== undefined || token) this.tokenChangedAt = this.now();
+      this.lastToken = token;
+    }
     const h = this.deps.hub.healthOf(DISCOS_FEED);
     if (this.deps.config.offline) h.offline = true;
     if (!this.deps.config.discosToken) {
@@ -109,11 +137,15 @@ export class DescribeService {
     const key = this.cacheKey(rec.id);
     const row = store.get<Description>(key);
     if (row) {
-      const tokenAdded = row.value.sources.discos === 'off' && !!config.discosToken && noradOf(rec) !== undefined;
-      if ((isFresh(row, this.now()) && !tokenAdded) || config.offline) return { ...row.value, fromCache: true };
+      const s = row.value.sources.discos;
+      // a token that is set now but was missing (off) or rejected (error) when this was cached: ask DISCOS again
+      const tokenRetry = !!config.discosToken && noradOf(rec) !== undefined && (s === 'off' || (s === 'error' && row.fetchedAt < this.tokenChangedAt));
+      if ((isFresh(row, this.now()) && !tokenRetry) || config.offline) return { ...row.value, fromCache: true };
     }
     this.syncHealth();
     const d = await this.lookup(rec);
+    // an OFFLINE answer is only the fallback line: caching it would hide the real description once the network is back
+    if (config.offline || this.uncached.has(d)) return d;
     const found = !!(d.summary || d.discos);
     const failed = Object.values(d.sources).includes('error');
     store.set(key, d, failed ? ERROR_TTL_MS : found ? HIT_TTL_MS : MISS_TTL_MS, this.now());
@@ -146,6 +178,7 @@ export class DescribeService {
     } else {
       const wd = await this.wikidataItem(rec, norad, cospar);
       d.sources.wikidata = wd.state;
+      if (wd.busy) this.uncached.add(d);
       if (wd.value) {
         d.wikidata = { id: wd.value.id, url: wikidataUrl(wd.value.id), ...(wd.value.label ? { label: wd.value.label } : {}) };
         title = wd.value.enwiki;
@@ -154,16 +187,18 @@ export class DescribeService {
     if (title) {
       const wp = await this.source(WIKI_FEED, () => this.fetchSummary(title!));
       d.sources.wikipedia = wp.state;
+      if (wp.busy) this.uncached.add(d);
       if (wp.value) d.summary = wp.value;
     }
 
     if (norad !== undefined && this.deps.config.discosToken) {
       const token = this.deps.config.discosToken;
       const ds = await this.source(DISCOS_FEED, async () => {
-        const text = await this.get(this.discos, discosUrl(norad), discosHeaders(token));
+        const text = await this.get(DISCOS_FEED, this.discos, discosUrl(norad), discosHeaders(token));
         return parseDiscos(text);
       });
       d.sources.discos = ds.state;
+      if (ds.busy) this.uncached.add(d);
       if (ds.value) d.discos = ds.value;
     }
     return d;
@@ -171,7 +206,7 @@ export class DescribeService {
 
   private async fetchSummary(title: string): Promise<WikipediaSummary | null> {
     try {
-      return parseWikipediaSummary(await this.get(this.wiki, wikipediaSummaryUrl(title)));
+      return parseWikipediaSummary(await this.get(WIKI_FEED, this.wiki, wikipediaSummaryUrl(title)));
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return null;
       throw err;
@@ -183,20 +218,25 @@ export class DescribeService {
     return this.source(WIKI_FEED, async () => {
       let ids: string[];
       if (norad !== undefined) {
-        ids = parseWikidataSearch(await this.get(this.wiki, wikidataSearchUrl(norad)));
+        ids = parseWikidataSearch(await this.get(WIKI_FEED, this.wiki, wikidataSearchUrl(norad)));
       } else {
-        const cand = uniqueSpaceCandidate(parseWikidataNameSearch(await this.get(this.wiki, wikidataNameSearchUrl(rec.name))), rec.name);
+        const cand = uniqueSpaceCandidate(parseWikidataNameSearch(await this.get(WIKI_FEED, this.wiki, wikidataNameSearchUrl(rec.name))), rec.name);
         ids = cand ? [cand.id] : [];
       }
       if (!ids.length) return null;
-      const items = parseWikidataEntities(await this.get(this.wiki, wikidataEntitiesUrl(ids)));
+      const items = parseWikidataEntities(await this.get(WIKI_FEED, this.wiki, wikidataEntitiesUrl(ids)));
       return pickWikidataItem(items, { name: rec.name, cospar, norad });
     });
   }
 
   /** One request, queued behind the source's earlier ones so they are at least the configured gap apart. */
-  private get(spacer: Spacer, url: string, headers?: Record<string, string>): Promise<string> {
-    return spacer.run(() => this.deps.http.text(url, headers));
+  private get(feed: string, spacer: Spacer, url: string, headers?: Record<string, string>): Promise<string> {
+    return spacer.run(async () => {
+      // the gate may have closed while this request waited behind others
+      const gate = readBackoff(this.deps.store, `describe:${feed}`);
+      if (isBackedOff(gate, this.now())) throw new GateError(gate.message);
+      return this.deps.http.text(url, headers);
+    });
   }
 
   /**
@@ -218,6 +258,13 @@ export class DescribeService {
       this.ok(h);
       return value === null ? { state: 'miss' } : { state: 'ok', value };
     } catch (err) {
+      if (err instanceof BusyError) {
+        return { state: 'error', busy: true };
+      }
+      if (err instanceof GateError) {
+        this.fail(h, err.message);
+        return { state: 'error' };
+      }
       recordFailure(store, `describe:${feed}`, err, this.now());
       this.fail(h, (err as Error).message);
       return { state: 'error' };
