@@ -78,8 +78,13 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
   // The pointer over a cross-origin iframe is delivered to the frame, not the page: the transparent cover below
   // takes the pointer instead, so hover and click reach the page and can reveal the strip.
   const [hot, setHot] = useState(false);
-  const native = usePlayerPrefs((s) => s.nativeControls);
-  const setNative = usePlayerPrefs((s) => s.setNativeControls);
+  // Each player has its own choice, so switching one never reloads the others. The shared preference only says what a newly
+  // opened player starts with (read once here, not subscribed) and remembers the last choice made.
+  const [native, setNativeLocal] = useState(() => usePlayerPrefs.getState().nativeControls);
+  const setNative = (on: boolean) => {
+    setNativeLocal(on);
+    usePlayerPrefs.getState().setNativeControls(on);
+  };
   const live = liveStatus(info, isLiveChannelEmbed(url));
   // The src changes only when the controls choice (or the link) does; the reload resumes where this player was.
   const srcRef = useRef<{ url: string; native: boolean; src: string }>();
@@ -172,7 +177,7 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
       />
       {native ? (
         // YouTube's own bar takes the clicks, so no cover; only a small corner button to switch back
-        <button className="btn stream-ctl-toggle" onClick={() => setNative(false)} title="Hide the player's own controls on all video players">Hide controls</button>
+        <button className="btn stream-ctl-toggle" onClick={() => setNative(false)} title="Hide the player's own controls on this player (the player reloads, YouTube cannot switch its control bar live)">Hide controls</button>
       ) : (
         <>
           {/* transparent: the picture stays unobstructed; a click on it reveals the strip */}
@@ -189,7 +194,7 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
                 <span className="live-dot" aria-hidden="true" />Live
               </button>
             )}
-            <button className="btn" onClick={() => setNative(true)} title="Show the player's own controls (seek bar, quality, captions, fullscreen) on all video players">Controls</button>
+            <button className="btn" onClick={() => setNative(true)} title="Show the player's own controls (seek bar, quality, captions, fullscreen) on this player (the player reloads, YouTube cannot switch its control bar live)">Controls</button>
           </div>
         </>
       )}
