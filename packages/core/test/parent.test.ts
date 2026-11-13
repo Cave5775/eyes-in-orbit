@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EARTH, MARS, MOON, SUN, bodyStateEci, defaultBodies, listParent, soiKm, sunDirectionEci, type Sample, type SampleWindow } from '../src';
+import { BodyRegistry, EARTH, MARS, MOON, SUN, bodyStateEci, defaultBodies, listParent, soiKm, sunDirectionEci, type Sample, type SampleWindow } from '../src';
 
 const T0 = Date.UTC(2026, 9, 22, 12);
 const DAY = 86_400_000;
@@ -54,5 +54,13 @@ describe('listParent', () => {
     expect(listParent(rec, { frame: 'EARTH:inertial', samples: [] })).toBe('EARTH');
     expect(listParent(rec, { frame: 'NOWHERE:inertial', samples: [[T0, 1, 2, 3]] })).toBe('EARTH');
     expect(defaultBodies.has('EARTH')).toBe(true);
+  });
+});
+
+describe('listParent robustness', () => {
+  it('a body whose position throws is skipped, the others still decide', () => {
+    const bad = { ...MOON, ephemeris: () => { throw new Error('no ephemeris'); } };
+    const reg = new BodyRegistry([SUN, EARTH, bad]);
+    expect(listParent({ bodyId: 'EARTH' }, { frame: 'EARTH:inertial', samples: [[T0, 7000, 0, 0]] }, reg)).toBe('EARTH');
   });
 });

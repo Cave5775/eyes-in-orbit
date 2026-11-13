@@ -1,5 +1,6 @@
 import { BodyRegistry, defaultBodies, type Body } from './bodies';
 import { convert, frameId, parseFrame } from './frames';
+import type { Vec3 } from './math';
 import type { EntityRecord, FrameId, Sample } from './types';
 
 /**
@@ -44,9 +45,15 @@ export function listParent(
   registry: BodyRegistry = defaultBodies,
 ): string {
   if (!window || window.samples.length === 0) return rec.bodyId;
-  try {
-    if (!registry.has(parseFrame(window.frame).bodyId)) return rec.bodyId;
-    const bodies = registry.all().filter((b) => soiKm(b, registry) !== undefined);
+  let frameBody: string;
+  try { frameBody = parseFrame(window.frame).bodyId; } catch { return rec.bodyId; }
+  if (!registry.has(frameBody)) return rec.bodyId;
+  {
+    // bodies with a sphere, deepest first (computed once per call), so the first one that contains a sample is the deepest
+    const bodies = registry.all()
+      .map((b) => ({ b, soi: soiKm(b, registry), depth: depthOf(b.id, registry) }))
+      .filter((e): e is { b: Body; soi: number; depth: number } => e.soi !== undefined)
+      .sort((x, y) => y.depth - x.depth);
     const root = registry.all().find((b) => !b.parentId);
     if (!root) return rec.bodyId;
     const n = window.samples.length;
@@ -56,14 +63,16 @@ export function listParent(
       const s = window.samples[i];
       const t = s[0];
       let best: Body = root;
-      let bestDepth = 0;
-      for (const b of bodies) {
-        const d = depthOf(b.id, registry);
-        if (d <= bestDepth) continue;
-        const c = convert({ frame: frameId(b.id, 'inertial'), r: [0, 0, 0] }, window.frame, t, registry).r;
-        if (Math.hypot(s[1] - c[0], s[2] - c[1], s[3] - c[2]) < soiKm(b, registry)!) {
+      for (const { b, soi } of bodies) {
+        let c: Vec3;
+        try {
+          c = convert({ frame: frameId(b.id, 'inertial'), r: [0, 0, 0] }, window.frame, t, registry).r;
+        } catch {
+          continue; // a body whose position cannot be had is skipped, the others still decide
+        }
+        if (Math.hypot(s[1] - c[0], s[2] - c[1], s[3] - c[2]) < soi) {
           best = b;
-          bestDepth = d;
+          break;
         }
       }
       const chain = registry.lineage(best.id).map((b) => b.id).reverse();
@@ -76,7 +85,5 @@ export function listParent(
       if (i >= n - 1) break;
     }
     return common && common.length > 0 ? common[common.length - 1] : rec.bodyId;
-  } catch {
-    return rec.bodyId;
   }
 }
