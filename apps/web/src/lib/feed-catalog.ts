@@ -127,6 +127,18 @@ export const FEED_CATALOG: Record<string, FeedInfo> = {
   'dsn-xml': dsn,
 };
 
+/**
+ * Not a server connector: the Sky view's imagery is fetched by the browser itself (the server never sees it), so it has no
+ * health record. The Data streams popup lists it after the connectors under this id.
+ */
+export const SKY_IMAGERY_ID = 'sky-imagery';
+export const SKY_IMAGERY: FeedInfo = {
+  name: 'Sky imagery (HiPS)',
+  provides: 'The Sky view window: the Aladin Lite library (cdn.jsdelivr.net, loaded on first use) and the survey tiles (HiPS) from IRSA, ESA, CASDA or CDS servers, whichever answers first. Fetched by your browser, not by the server; nothing is requested until a Sky view is opened.',
+  source: 'CDS Aladin Lite; IRSA, ESA, CASDA and CDS HiPS servers',
+  link: 'https://aladin.cds.unistra.fr/AladinLite/',
+};
+
 /** Catalog entry for a connector id; unknown ids get a generic one so the popup never shows an empty pane. */
 export function feedInfo(id: string): FeedInfo {
   return FEED_CATALOG[id] ?? { name: id, provides: 'No description for this connector yet.', source: 'unknown', link: null };

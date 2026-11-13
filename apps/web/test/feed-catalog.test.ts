@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DSN_FEEDS, FEED_CATALOG, credentialConnector, feedInfo } from '../src/lib/feed-catalog';
+import { DSN_FEEDS, FEED_CATALOG, SKY_IMAGERY, SKY_IMAGERY_ID, credentialConnector, feedInfo } from '../src/lib/feed-catalog';
 import { mockHealth } from '../src/mock/generators';
 
 const dir = join(__dirname, '../../server/src/connectors');
@@ -10,6 +10,13 @@ const serverIds = readdirSync(dir)
   .flatMap((f) => [...readFileSync(join(dir, f), 'utf8').matchAll(/(?:Connector = |return )\{\s+id: '([a-z][a-z0-9-]*)'/g)].map((m) => m[1]));
 
 describe('feed catalog', () => {
+  it('describes the client-side sky imagery entry, which is not a server connector', () => {
+    expect(FEED_CATALOG[SKY_IMAGERY_ID]).toBeUndefined();
+    expect(SKY_IMAGERY.provides).toMatch(/jsdelivr/i);
+    expect(SKY_IMAGERY.provides).toMatch(/not by the server/);
+    expect(SKY_IMAGERY.link).toMatch(/^https:\/\//);
+  });
+
   it('finds the server connector ids', () => {
     expect(serverIds).toEqual(expect.arrayContaining(['celestrak', 'dsn', 'launchlibrary', 'snapi', 'horizons', 'bodies', 'satnogs']));
   });

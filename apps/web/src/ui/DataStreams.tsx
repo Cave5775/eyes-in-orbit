@@ -1,5 +1,7 @@
-import { useRef } from 'react';
-import { DSN_FEEDS, credentialConnector, feedInfo } from '../lib/feed-catalog';
+import { Fragment, useRef } from 'react';
+import { DSN_FEEDS, SKY_IMAGERY, SKY_IMAGERY_ID, credentialConnector, feedInfo } from '../lib/feed-catalog';
+import { mirrors } from '../lib/hips-mirror';
+import { SURVEYS } from '../lib/observatories';
 import { CONN_LABEL, feedCounts, feedView, sortFeeds } from '../lib/feed-health';
 import { fmtAgo, fmtUtc } from '../lib/format';
 import { useDataStreams } from '../state/data-streams';
@@ -54,7 +56,8 @@ function Popup() {
   const chooseFeed = useDataStreams((s) => s.showFeed);
   const now = useWallNow(1000);
   const feeds = sortFeeds(health);
-  const current = feeds.find((h) => h.id === feedId) ?? feeds[0];
+  const skyOn = feedId === SKY_IMAGERY_ID;
+  const current = skyOn ? undefined : feeds.find((h) => h.id === feedId) ?? feeds[0];
 
   return (
     <div className="popover ds-pop" role="dialog" aria-label="Data streams">
@@ -72,9 +75,16 @@ function Popup() {
             </button>
           );
         })}
+        <button className={skyOn ? 'ds-row on' : 'ds-row'} role="option" aria-selected={skyOn} data-feed={SKY_IMAGERY_ID} title="Fetched by this browser, not the server" onClick={() => chooseFeed(SKY_IMAGERY_ID)}>
+          <i className="dot" />
+          <span className="ds-name">{SKY_IMAGERY.name}</span>
+          <span className="mono health-badge">browser</span>
+        </button>
       </div>
       <div className="ds-detail">
-        {!current ? (
+        {skyOn ? (
+          <SkyImageryDetail />
+        ) : !current ? (
           <div className="dim">Nothing to show until the server reports its connectors.</div>
         ) : (
           <FeedDetail id={current.id} now={now} />
@@ -82,6 +92,29 @@ function Popup() {
       </div>
       <div className="ds-foot"><StreamUrlInput /></div>
     </div>
+  );
+}
+
+/** The client-side Sky imagery entry: what is fetched and which mirror each survey that has been opened is using. */
+function SkyImageryDetail() {
+  return (
+    <>
+      <div className="pop-title">{SKY_IMAGERY.name} <span className="mono dim ds-id">browser</span></div>
+      <p className="ds-provides">{SKY_IMAGERY.provides}</p>
+      <dl className="ds-kv">
+        {SURVEYS.map((s) => {
+          const url = mirrors.current(s.id);
+          return (
+            <Fragment key={s.id}>
+              <dt>{s.label}</dt>
+              <dd className="mono">{url ? new URL(url).host : 'not opened yet'}</dd>
+            </Fragment>
+          );
+        })}
+        <dt>Source</dt>
+        <dd><a href={SKY_IMAGERY.link!} target="_blank" rel="noopener noreferrer">{SKY_IMAGERY.source}</a></dd>
+      </dl>
+    </>
   );
 }
 
