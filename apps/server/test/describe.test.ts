@@ -6,13 +6,15 @@ import Fastify from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerApi } from '../src/api';
 import { loadConfig } from '../src/config';
-import { DescribeService, ERROR_TTL_MS, HIT_TTL_MS, MAX_QUEUE, MISS_TTL_MS } from '../src/describe/service';
+import { DescribeService, ERROR_TTL_MS, HIT_TTL_MS, MISS_TTL_MS } from '../src/describe/service';
 import {
   discosUrl, parseDiscos, parseWikidataEntities, parseWikidataNameSearch, parseWikidataSearch, parseWikipediaSummary, pickWikidataItem,
   uniqueSpaceCandidate, wikidataEntitiesUrl, wikidataSearchUrl, wikipediaSummaryUrl,
 } from '../src/describe/sources';
 import { Http } from '../src/http';
 import { Hub } from '../src/hub';
+import { Limiter } from '../src/net/limiter';
+import { LIMITS } from '../src/net/limits';
 import { Store } from '../src/store';
 
 const fx = (name: string): string => readFileSync(join(__dirname, 'fixtures', name), 'utf8');
@@ -135,10 +137,10 @@ describe('DescribeService', () => {
   const reply = (body: string, status = 200) => () => new Response(body, { status });
   const urls = () => fetchMock.mock.calls.map((c) => String(c[0]));
 
-  const make = (env: NodeJS.ProcessEnv = {}) => {
+  const make = (env: NodeJS.ProcessEnv = {}, limiter?: Limiter) => {
     const config = loadConfig(env);
-    const http = new Http(store, { fetch: fetchMock, offline: config.offline });
-    const svc = new DescribeService({ store, http, config, hub }, { spacingMs: { wikipedia: 0, discos: 0 }, sleep: async () => {}, now: () => now });
+    const http = new Http(store, { fetch: fetchMock, offline: config.offline, limiter });
+    const svc = new DescribeService({ store, http, config, hub }, { now: () => now });
     return { config, svc };
   };
 
@@ -240,14 +242,45 @@ describe('DescribeService', () => {
     expect(b).toBe(c);
   });
 
-  it('spaces requests to one source', async () => {
+  it('keeps the 1.5 s spacing between the requests of one lookup: only follow-ups wait, and only up to 2 s', async () => {
     const sleeps: number[] = [];
-    const config = loadConfig({});
-    const http = new Http(store, { fetch: fetchMock });
-    const svc = new DescribeService({ store, http, config, hub }, { spacingMs: { wikipedia: 600, discos: 0 }, sleep: async (ms) => void sleeps.push(ms), now: () => now });
-    await svc.describe(iss);
-    expect(sleeps.length).toBe(2);
-    expect(sleeps.every((ms) => ms === 600)).toBe(true);
+    let t = now;
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => t, sleep: async (ms) => { sleeps.push(ms); t += ms; } });
+    const { svc } = make({}, limiter);
+    const d = await svc.describe(iss);
+    expect(d.sources).toMatchObject({ wikidata: 'ok', wikipedia: 'ok' });
+    expect(urls()).toHaveLength(3);
+    expect(sleeps).toEqual([1500, 1500]); // the first request went at once
+    expect(d.limitedUntil).toBeUndefined();
+  });
+
+  it('answers limited at once, without a request, sleep or cache entry, while the source is blocked', async () => {
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => now, sleep: async (ms) => void (now += ms) });
+    limiter.block('wikimedia', 600_000, 'HTTP 429');
+    const { svc } = make({}, limiter);
+    const blockedUntil = now + 600_000;
+    const d = await svc.describe(iss);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(d.sources.wikidata).toBe('limited');
+    expect(d.limitedUntil).toBe(blockedUntil);
+    expect(d.fallback).toBeTruthy();
+    expect(store.get(`describe:v1:${iss.id}`)).toBeUndefined();
+    expect(hub.healthOf('wikipedia').failures ?? 0).toBe(0);
+    // once the block is over the same object is looked up for real
+    now = blockedUntil + 1;
+    const again = await svc.describe(iss);
+    expect(again.sources.wikidata).toBe('ok');
+    expect(again.limitedUntil).toBeUndefined();
+  });
+
+  it('a burst of lookups: one goes out, the rest answer limited immediately and none is cached', async () => {
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => now, sleep: async () => { throw new Error('a demand lookup must not sleep'); } });
+    const { svc } = make({}, limiter);
+    const recs = Array.from({ length: 8 }, (_, i): EntityRecord => ({ ...iss, id: `sat-${70000 + i}`, aliases: { norad: String(70000 + i) } }));
+    const done = await Promise.all(recs.map((r) => svc.describe(r)));
+    expect(done.filter((d) => d.sources.wikidata === 'limited').length).toBe(7);
+    expect(urls().length).toBeLessThanOrEqual(1);
+    for (const d of done.filter((x) => x.limitedUntil !== undefined)) expect(store.get(`describe:v1:${d.entityId}`)).toBeUndefined();
   });
 
   it('keeps a source error out of the long cache, reports it in health, and closes the gate after a 429', async () => {
@@ -295,7 +328,7 @@ describe('DescribeService', () => {
 
   it('does not cache an OFFLINE answer: back online the same object is looked up for real', async () => {
     const config = loadConfig({ OFFLINE: '1' });
-    const off = new DescribeService({ store, http: new Http(store, { fetch: fetchMock, offline: true }), config, hub }, { spacingMs: { wikipedia: 0, discos: 0 }, sleep: async () => {}, now: () => now });
+    const off = new DescribeService({ store, http: new Http(store, { fetch: fetchMock, offline: true }), config, hub }, { now: () => now });
     expect((await off.describe(iss)).sources.wikipedia).toBe('off');
     expect(fetchMock).not.toHaveBeenCalled();
     const { svc } = make();
@@ -323,27 +356,6 @@ describe('DescribeService', () => {
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('discosweb'))).toBe(true);
   });
 
-  it('answers "error" without caching when a source queue is full, and re-checks the gate for queued requests', async () => {
-    let release!: () => void;
-    const hold = new Promise<void>((r) => (release = r));
-    routes['list=search'] = () => new Response(SEARCH);
-    fetchMock.mockImplementation(async (input) => {
-      await hold;
-      const url = String(input);
-      const key = Object.keys(routes).find((k) => url.includes(k));
-      return key ? routes[key]() : new Response('x', { status: 404 });
-    });
-    const { svc } = make();
-    const recs = Array.from({ length: MAX_QUEUE + 5 }, (_, i): EntityRecord => ({ ...iss, id: `sat-${70000 + i}`, aliases: { norad: String(70000 + i) } }));
-    const all = recs.map((r) => svc.describe(r));
-    await new Promise((r) => setTimeout(r, 0));
-    release();
-    const done = await Promise.all(all);
-    const busy = done.filter((d) => d.sources.wikidata === 'error');
-    expect(busy.length).toBeGreaterThan(0);
-    for (const d of busy) expect(store.get(`describe:v1:${d.entityId}`)).toBeUndefined();
-    expect(hub.healthOf('wikipedia').status).not.toBe('error');
-  });
 
   it('under OFFLINE=1 serves the fallback with no request', async () => {
     const { svc } = make({ OFFLINE: '1' });
@@ -366,7 +378,7 @@ describe('GET /api/describe/:entityId', () => {
     });
     const config = loadConfig({});
     const http = new Http(store, { fetch: fetchMock });
-    const svc = new DescribeService({ store, http, config, hub }, { spacingMs: { wikipedia: 0, discos: 0 }, sleep: async () => {} });
+    const svc = new DescribeService({ store, http, config, hub }, {});
     const app = Fastify();
     registerApi(app, hub, http, store, undefined, undefined, svc);
     const ok = await app.inject({ url: '/api/describe/sat-25544' });

@@ -1,7 +1,7 @@
 import type { EntityRecord } from './types';
 
 /** Outcome of one source in a description lookup. */
-export type DescribeSourceState = 'ok' | 'miss' | 'off' | 'error';
+export type DescribeSourceState = 'ok' | 'miss' | 'off' | 'error' | 'limited';
 
 /** One line of the DISCOS facts table. */
 export interface DescribeFact {
@@ -38,6 +38,11 @@ export interface Description {
   fetchedAt: number;
   /** served from the local cache */
   fromCache?: boolean;
+  /**
+   * A source was not asked because its request limit applies (a source state is `limited`): ms since epoch when asking
+   * is possible again. A description with this field is never cached; the About tab shows "rate limited, try again at HH:MM".
+   */
+  limitedUntil?: number;
 }
 
 const noradOf = (rec: EntityRecord): number | undefined => {

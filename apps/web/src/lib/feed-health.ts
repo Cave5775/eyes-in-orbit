@@ -54,6 +54,24 @@ export interface FeedView {
   retry?: string;
   /** hover text: badge, reason, note and retry time on separate lines */
   title: string;
+  /** request budget of the feed's source, "3 of 7 requests this hour"; absent for a feed without caps */
+  budget?: string;
+  /** "rate limited until 14:30Z" while the server holds requests back (the limiter's block time), else absent */
+  limited?: string;
+}
+
+const WINDOW_WORDS = { minute: 'this minute', hour: 'this hour', day: 'today' } as const;
+
+/** "3 of 7 requests this hour", or undefined when the feed has no counted caps. */
+export function budgetText(h: ConnectorHealth): string | undefined {
+  const l = h.limit;
+  return l ? `${l.used} of ${l.cap} requests ${WINDOW_WORDS[l.window]}` : undefined;
+}
+
+/** "rate limited until 14:30Z" while a block is in force at `now`. */
+export function limitedText(h: ConnectorHealth, now = Date.now()): string | undefined {
+  const until = h.limit?.blockedUntil;
+  return until !== undefined && until > now ? `rate limited until ${hhmmZ(until)}` : undefined;
 }
 
 const hhmmZ = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
@@ -64,9 +82,11 @@ export function feedView(h: ConnectorHealth): FeedView {
   const words = REASON_WORDS[f.reason];
   const badge = FEED_BADGE[f.level];
   const note = f.note;
-  const title = [`${badge}: ${words}`, note, retry ? `${f.retryUtc ? 'waiting until' : 'next try'} ${retry}` : undefined, h.fromCache ? 'served from the local cache' : undefined]
+  const budget = budgetText(h);
+  const limited = limitedText(h);
+  const title = [`${badge}: ${words}`, note, retry ? `${f.retryUtc ? 'waiting until' : 'next try'} ${retry}` : undefined, limited, budget, h.fromCache ? 'served from the local cache' : undefined]
     .filter(Boolean).join('\n');
-  return { level: f.level, reason: f.reason, tone: FEED_TONE[f.level], badge, words, note, retry, title };
+  return { level: f.level, reason: f.reason, tone: FEED_TONE[f.level], badge, words, note, retry, title, ...(budget ? { budget } : {}), ...(limited ? { limited } : {}) };
 }
 
 /** Red first, then orange, green and grey; the original order is kept inside a level. */
