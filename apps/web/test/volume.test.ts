@@ -34,6 +34,8 @@ describe('volume arithmetic', () => {
     expect(muted).toEqual({ volume: 60, muted: true });
     expect(toggleMute(muted)).toEqual({ volume: 60, muted: false });
     expect(toggleMute({ volume: 0, muted: true })).toEqual({ volume: 10, muted: false });
+    // wheeled down to silence while unmuted: the click raises it instead of muting nothing
+    expect(toggleMute({ volume: 0, muted: false })).toEqual({ volume: 10, muted: false });
   });
   it('bar heights rise to full', () => {
     const h = barHeights();

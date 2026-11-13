@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { providerOfEmbed, safeHref } from '../lib/stream-url';
 import { YT_ORIGIN, parseWidgetMessage, widgetCommand, widgetListen, withNativeControls, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
 import { usePlayerPrefs } from '../state/player';
@@ -101,7 +101,11 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
     send(playing ? 'pauseVideo' : 'playVideo');
     setInfo((p) => ({ ...p, playerState: playing ? 2 : 1 }));
   };
+  // the latest state, also between renders: several wheel events can arrive before React redraws, each must start from the last
+  const stateRef = useRef<VolumeState>({ volume, muted });
+  stateRef.current = { volume, muted };
   const apply = (from: VolumeState, to: VolumeState) => {
+    stateRef.current = to;
     if (to.volume !== from.volume) send('setVolume', [to.volume]);
     if (to.muted !== from.muted) send(to.muted ? 'mute' : 'unMute');
     setVolume(to.volume);
@@ -111,9 +115,15 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
     const from = { volume, muted };
     apply(from, toggledMute(from));
   };
+  // arrow keys on the focused button change the level like the wheel (up/right louder), so it is not mouse-only
+  const onVolumeKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    const dir = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? -1 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? 1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    const from = stateRef.current;
+    apply(from, wheelVolume(from, dir));
+  };
   // non-passive, so preventDefault keeps the page from scrolling and the globe from zooming
-  const stateRef = useRef<VolumeState>({ volume, muted });
-  stateRef.current = { volume, muted };
   const applyRef = useRef(apply);
   applyRef.current = apply;
   useEffect(() => {
@@ -154,7 +164,7 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
           <div className="stream-cover" onMouseEnter={() => setHot(true)} onClick={() => setHot(true)} />
           <div className="stream-strip">
             <button className="btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>{playing ? 'Pause' : 'Play'}</button>
-            <button ref={muteBtn} className="btn vol-btn" onClick={toggleMute} title={`${muted ? 'Unmute' : 'Mute'}; scroll the wheel to change the volume (${muted ? 0 : volume}%)`} aria-label={muted ? 'Unmute' : 'Mute'}>
+            <button ref={muteBtn} className="btn vol-btn" onClick={toggleMute} onKeyDown={onVolumeKey} title={`${muted ? 'Unmute' : 'Mute'}; scroll the wheel to change the volume (${muted ? 0 : volume}%)`} aria-label={muted ? 'Unmute' : 'Mute'}>
               <span className="vol-bars" aria-hidden="true">
                 {barHeights().map((h, i) => <span key={i} className={i < lit ? 'on' : ''} style={{ height: `${h * 100}%` }} />)}
               </span>

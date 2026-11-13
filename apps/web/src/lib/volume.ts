@@ -31,10 +31,11 @@ export function wheelVolume(s: VolumeState, deltaY: number): VolumeState {
   return { volume: next, muted: s.muted };
 }
 
-/** Click: mute keeps the level; unmute restores it (a remembered 0 comes back as one tick, not silence). */
+/** Click: mute keeps the level; unmute restores it. Level 0 comes back as one tick, whether the click was on a muted or an unmuted player (never a click that changes nothing audible). */
 export function toggleMute(s: VolumeState): VolumeState {
   const volume = clampVolume(s.volume);
-  if (!s.muted) return { volume, muted: true };
+  // already silent at level 0: a click raises it, there is nothing to mute
+  if (!s.muted) return volume === 0 ? { volume: VOLUME_STEP, muted: false } : { volume, muted: true };
   return { volume: volume === 0 ? VOLUME_STEP : volume, muted: false };
 }
 
