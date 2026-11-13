@@ -7,6 +7,7 @@ import { SPEEDS, fmtRateLabel, signedRate, splitRate, type RatePref } from '../l
 import { clock } from '../state/runtime';
 import { useStore } from '../state/store';
 import { CredentialsPanel } from './CredentialsPanel';
+import { DataStreams } from './DataStreams';
 import { HealthIndicator } from './HealthIndicator';
 import { useSimNow } from './hooks';
 import { ViewMenu } from './ViewMenu';
@@ -164,6 +165,7 @@ export function TopBar() {
 
       <div className="topbar-end">
         <ViewMenu />
+        <DataStreams />
         <CredentialsPanel />
         <HealthIndicator />
       </div>

@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { usePanels } from './state/panels';
 import { useStore } from './state/store';
 import { DetailPanel } from './ui/DetailPanel';
-import { DsnPanel } from './ui/DsnPanel';
 import { EntityBrowser } from './ui/EntityBrowser';
 import { FloatingLayer } from './ui/FloatingLayer';
 import { LaunchBoard } from './ui/LaunchBoard';
@@ -31,11 +30,10 @@ export function App() {
         <EntityBrowser />
         <SceneView />
         <DetailPanel />
-        {/* the bottom row exists only while the launch board or the DSN panel is shown (PANELS menu) */}
-        {(panels.board || panels.dsn) && (
-          <div className={panels.board && panels.dsn ? 'bottom' : 'bottom solo'}>
-            {panels.board && <LaunchBoard />}
-            {panels.dsn && <DsnPanel />}
+        {/* the bottom row exists only while the launch board is shown (View menu) */}
+        {panels.board && (
+          <div className="bottom">
+            <LaunchBoard />
           </div>
         )}
         {panels.ticker && <NewsTicker />}

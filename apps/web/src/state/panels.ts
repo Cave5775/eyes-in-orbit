@@ -1,21 +1,20 @@
 import { create } from 'zustand';
 
 /** Panels the PANELS menu can show and hide. */
-export type PanelId = 'dsn' | 'board' | 'ticker' | 'legend';
+export type PanelId = 'board' | 'ticker' | 'legend';
 export type PanelVisibility = Record<PanelId, boolean>;
 
-export const PANEL_IDS: readonly PanelId[] = ['dsn', 'board', 'ticker', 'legend'];
+export const PANEL_IDS: readonly PanelId[] = ['board', 'ticker', 'legend'];
 
 /** What the menu shows for each panel (label, one-line hint). */
 export const PANEL_INFO: Record<PanelId, { label: string; hint: string }> = {
-  dsn: { label: 'Deep Space Network', hint: 'Dishes, links and ranges' },
   board: { label: 'Launches', hint: 'Upcoming launches with countdowns' },
   ticker: { label: 'News ticker', hint: 'Scrolling spaceflight headlines' },
   legend: { label: 'Colour legend', hint: 'Category colours, bottom left of the scene' },
 };
 
-/** The DSN panel starts hidden; the rest start shown. */
-export const DEFAULT_PANELS: PanelVisibility = { dsn: false, board: true, ticker: true, legend: true };
+/** All panels start shown. (Older stored state may carry a `dsn` key: the DSN moved to the Data streams popup, and unknown keys are dropped.) */
+export const DEFAULT_PANELS: PanelVisibility = { board: true, ticker: true, legend: true };
 
 export const PANELS_STORAGE_KEY = 'eio.panels.v1';
 
@@ -81,7 +80,7 @@ interface PanelsState {
   togglePanel(id: PanelId): void;
 }
 
-/** Panel visibility, remembered in this browser. Call `setPanel('dsn', true)` to open a panel from code. */
+/** Panel visibility, remembered in this browser. Call `setPanel('board', true)` to open a panel from code. */
 export const usePanels = create<PanelsState>((set, get) => {
   const apply = (visible: PanelVisibility) => {
     set({ visible });

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { feedCounts, feedView, sortFeeds } from '../lib/feed-health';
 import { fmtAgo } from '../lib/format';
+import { useDataStreams } from '../state/data-streams';
 import { useStore, type ConnState } from '../state/store';
 import { useWallNow } from './hooks';
 
@@ -12,11 +13,12 @@ const CONN_LABEL: Record<ConnState, [string, string]> = {
   mock: ['Mock data', 'accent'],
 };
 
-/** Connection state plus per-connector freshness from `/api/health`; the dot colour of each connector comes from `lib/feed-health.ts`. */
+/** Connection state plus per-connector freshness from `/api/health` (a row opens the Data streams popup on that feed); the dot colour of each connector comes from `lib/feed-health.ts`. */
 export function HealthIndicator() {
   const conn = useStore((s) => s.conn);
   const health = useStore((s) => s.health);
   const [open, setOpen] = useState(false);
+  const openFeed = useDataStreams((s) => s.openOn);
   const now = useWallNow(1000);
   const [label, tone] = CONN_LABEL[conn];
   const { red, orange } = feedCounts(health);
@@ -36,14 +38,14 @@ export function HealthIndicator() {
           {sortFeeds(health).map((h) => {
             const v = feedView(h);
             return (
-              <div key={h.id} className="health-row" title={v.title} data-level={v.level}>
+              <button key={h.id} className="health-row" title={`${v.title}\nClick for details`} data-level={v.level} onClick={() => { setOpen(false); openFeed(h.id); }}>
                 <i className={`dot ${v.tone}`} />
                 <span className="health-id">{h.id}</span>
                 <span className={`mono health-badge ${v.tone}`}>{v.level === 'ok' ? `${v.badge} ${fmtAgo(h.lastOkAt, now)}` : v.badge}</span>
                 <span className="health-note dim">
                   {v.level === 'ok' ? (v.note ?? '') : `${v.words}${v.retry ? ` (${v.retry})` : ''}${v.note ? `: ${v.note}` : ''}`}
                 </span>
-              </div>
+              </button>
             );
           })}
         </div>

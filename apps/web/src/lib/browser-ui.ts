@@ -34,9 +34,8 @@ export function bodyFacts(rec: Pick<EntityRecord, 'attrs' | 'bodyId' | 'parentId
   return out;
 }
 
-/** The detail panel's empty text; the DSN panel is named only while it is shown (it is hidden by default). */
-export const emptyHint = (dsnShown: boolean): string =>
-  `Select an object on the globe, in the entity list or the launch board${dsnShown ? ' or the DSN panel' : ''}.`;
+/** The detail panel's empty text. */
+export const emptyHint = (): string => 'Select an object on the globe, in the entity list or the launch board.';
 
 // ---------------------------------------------------------------- general categories (the browser's chips)
 

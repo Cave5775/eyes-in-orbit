@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { emptyHint } from '../lib/browser-ui';
 import { kindLabel, launchOf } from '../lib/entity';
 import { modelDef } from '../scene/models/registry';
-import { usePanels } from '../state/panels';
 import { runtime } from '../state/runtime';
 import { useStore } from '../state/store';
 import { LaunchTab } from './detail/LaunchTab';
@@ -21,7 +20,6 @@ export function DetailPanel() {
   const frameLocked = useStore((s) => s.frameLocked);
   const setFrame = useStore((s) => s.setFrame);
   const setFrameLocked = useStore((s) => s.setFrameLocked);
-  const dsnShown = usePanels((s) => s.visible.dsn);
   const follow = useStore((s) => s.follow);
   const setFollow = useStore((s) => s.setFollow);
   const model = modelDef(rec?.render?.model);
@@ -47,7 +45,7 @@ export function DetailPanel() {
     return (
       <aside className="panel right">
         <div className="panel-head"><span>Selection</span></div>
-        <div className="empty big">{emptyHint(dsnShown)}</div>
+        <div className="empty big">{emptyHint()}</div>
       </aside>
     );
   }

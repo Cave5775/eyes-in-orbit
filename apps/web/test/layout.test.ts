@@ -48,7 +48,7 @@ describe('defaults and clamping', () => {
   it('never returns a cap below the minimum on tiny viewports', () => {
     const tiny = { w: 500, h: 300 };
     const sizes = resolveSizes({}, tiny);
-    for (const k of ['left', 'right', 'bottom', 'dsn'] as const) {
+    for (const k of ['left', 'right', 'bottom'] as const) {
       expect(maxSize(k, sizes, tiny)).toBeGreaterThanOrEqual(PANELS[k].min);
     }
   });
@@ -91,7 +91,7 @@ describe('persistence', () => {
     expect(parseSizes(null)).toEqual({});
     expect(parseSizes('not json')).toEqual({});
     expect(parseSizes('[1,2]')).toEqual({});
-    expect(parseSizes('{"left":"wide","right":5,"bottom":200,"extra":1,"dsn":null}')).toEqual({ bottom: 200 });
+    expect(parseSizes('{"left":"wide","right":5,"bottom":200,"extra":1,"dsn":300}')).toEqual({ bottom: 200 });
     expect(parseSizes(`{"left":${PANELS.left.max + 1}}`)).toEqual({});
   });
 

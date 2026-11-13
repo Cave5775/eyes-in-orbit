@@ -18,13 +18,20 @@ const broken: StorageLike = {
 };
 
 describe('panel visibility defaults', () => {
-  it('hides the DSN panel and shows the rest', () => {
-    expect(DEFAULT_PANELS).toEqual({ dsn: false, board: true, ticker: true, legend: true });
+  it('shows every panel', () => {
+    expect(DEFAULT_PANELS).toEqual({ board: true, ticker: true, legend: true });
   });
 
   it('keeps stored state from before the legend existed working (missing key takes its default)', () => {
-    expect(parsePanels('{"dsn":true,"board":false,"ticker":true}')).toEqual({ dsn: true, board: false, ticker: true, legend: true });
-    expect(parsePanels('{"legend":false}')).toEqual({ dsn: false, board: true, ticker: true, legend: false });
+    expect(parsePanels('{"board":false,"ticker":true}')).toEqual({ board: false, ticker: true, legend: true });
+    expect(parsePanels('{"legend":false}')).toEqual({ board: true, ticker: true, legend: false });
+  });
+
+  it('drops the dsn key of older stored state (the DSN moved to the Data streams popup)', () => {
+    const p = parsePanels('{"dsn":true,"board":false,"ticker":true,"legend":true}');
+    expect(p).toEqual({ board: false, ticker: true, legend: true });
+    expect('dsn' in p).toBe(false);
+    expect(JSON.parse(serialisePanels(p))).toEqual({ board: false, ticker: true, legend: true });
   });
 
   it('falls back to the defaults for empty, malformed or non-object input', () => {
@@ -34,29 +41,29 @@ describe('panel visibility defaults', () => {
 
 describe('parse and serialise', () => {
   it('round-trips every combination', () => {
-    for (let n = 0; n < 16; n++) {
-      const state = { dsn: !!(n & 1), board: !!(n & 2), ticker: !!(n & 4), legend: !!(n & 8) };
+    for (let n = 0; n < 8; n++) {
+      const state = { board: !!(n & 1), ticker: !!(n & 2), legend: !!(n & 4) };
       expect(parsePanels(serialisePanels(state))).toEqual(state);
     }
   });
 
   it('takes valid booleans, keeps the default for the rest and drops unknown keys', () => {
-    expect(parsePanels('{"dsn":true,"board":"no","ticker":0,"extra":true}')).toEqual({ dsn: true, board: true, ticker: true, legend: true });
-    expect(parsePanels('{"board":false}')).toEqual({ dsn: false, board: false, ticker: true, legend: true });
-    expect(Object.keys(parsePanels('{"extra":1}'))).toEqual(['dsn', 'board', 'ticker', 'legend']);
+    expect(parsePanels('{"board":"no","ticker":0,"extra":true}')).toEqual({ board: true, ticker: true, legend: true });
+    expect(parsePanels('{"board":false}')).toEqual({ board: false, ticker: true, legend: true });
+    expect(Object.keys(parsePanels('{"extra":1}'))).toEqual(['board', 'ticker', 'legend']);
   });
 
   it('serialises only the known keys', () => {
-    expect(JSON.parse(serialisePanels({ dsn: true, board: false, ticker: true, legend: false, extra: 1 } as never))).toEqual({ dsn: true, board: false, ticker: true, legend: false });
+    expect(JSON.parse(serialisePanels({ board: false, ticker: true, legend: false, extra: 1 } as never))).toEqual({ board: false, ticker: true, legend: false });
   });
 });
 
 describe('storage access', () => {
   it('saves under the documented key and loads it back', () => {
     const s = memoryStorage();
-    expect(savePanels({ dsn: true, board: true, ticker: false, legend: false }, s)).toBe(true);
+    expect(savePanels({ board: true, ticker: false, legend: false }, s)).toBe(true);
     expect(Object.keys(s.data)).toEqual([PANELS_STORAGE_KEY]);
-    expect(loadPanels(s)).toEqual({ dsn: true, board: true, ticker: false, legend: false });
+    expect(loadPanels(s)).toEqual({ board: true, ticker: false, legend: false });
   });
 
   it('never throws when storage is missing or denies access', () => {
@@ -68,20 +75,20 @@ describe('storage access', () => {
 
   it('returns a fresh object, so callers cannot change the defaults', () => {
     const a = loadPanels(null);
-    a.dsn = true;
-    expect(DEFAULT_PANELS.dsn).toBe(false);
+    a.board = false;
+    expect(DEFAULT_PANELS.board).toBe(true);
   });
 });
 
 describe('usePanels store', () => {
   it('toggles and sets a panel (storage is absent in node, so only memory changes)', () => {
     const { setPanel, togglePanel } = usePanels.getState();
-    expect(usePanels.getState().visible.dsn).toBe(false);
-    togglePanel('dsn');
-    expect(usePanels.getState().visible.dsn).toBe(true);
-    setPanel('dsn', true);
-    expect(usePanels.getState().visible.dsn).toBe(true);
-    setPanel('dsn', false);
+    expect(usePanels.getState().visible.ticker).toBe(true);
+    togglePanel('ticker');
+    expect(usePanels.getState().visible.ticker).toBe(false);
+    setPanel('ticker', false);
+    expect(usePanels.getState().visible.ticker).toBe(false);
+    setPanel('ticker', true);
     expect(usePanels.getState().visible).toEqual(DEFAULT_PANELS);
   });
 });

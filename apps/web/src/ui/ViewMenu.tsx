@@ -4,7 +4,7 @@ import { useStore } from '../state/store';
 import { useView } from '../state/view';
 
 /** Optional panels the menu lists under "Panels" (the colour legend is a scene setting, listed under "Scene"). */
-const PANEL_ROWS: readonly PanelId[] = ['board', 'dsn', 'ticker'];
+const PANEL_ROWS: readonly PanelId[] = ['board', 'ticker'];
 
 interface Row { key: string; label: string; hint: string; on: boolean; toggle(): void }
 

@@ -87,9 +87,9 @@ describe('bodyFacts', () => {
 });
 
 describe('emptyHint', () => {
-  it('names the DSN panel only while it is shown', () => {
-    expect(emptyHint(false)).not.toMatch(/DSN/);
-    expect(emptyHint(true)).toMatch(/DSN panel/);
+  it('names the places an object can be selected, not the DSN panel (it moved to the Data streams popup)', () => {
+    expect(emptyHint()).toMatch(/globe.*entity list.*launch board/);
+    expect(emptyHint()).not.toMatch(/DSN/);
   });
 });
 
