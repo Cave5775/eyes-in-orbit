@@ -11,7 +11,7 @@ import { orbitPeriodSec } from '../lib/orbit';
 import { orbitLines, type OrbitRole } from '../lib/orbit-lines';
 import { focusTarget } from '../lib/focus-target';
 import { viewClass } from '../lib/view-class';
-import { EARTH_CENTRE, centreLabel, distanceFromCentre, graphLookup, isEarthCentre, type Centre } from '../lib/frame';
+import { EARTH_CENTRE, centreLabel, distanceFromCentre, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';

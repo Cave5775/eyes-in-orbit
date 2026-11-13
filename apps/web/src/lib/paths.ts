@@ -212,7 +212,7 @@ export function liftNearSurface(r: Vec3, liftKm = GROUND_LIFT_KM): Vec3 {
 }
 
 /** Phase labels of a composite spec, in order. */
-export function compositePhases(spec: ProviderSpec | undefined): CompositeSegment[] {
+function compositePhases(spec: ProviderSpec | undefined): CompositeSegment[] {
   return spec?.type === 'composite' ? [...spec.segments].sort((a, b) => a.fromMs - b.fromMs) : [];
 }
 

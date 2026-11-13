@@ -1,4 +1,4 @@
-import { bodyEntityId, defaultBodies, isBodyEntity, type EntityRecord } from '@eio/core';
+import { defaultBodies, isBodyEntity, type EntityRecord } from '@eio/core';
 import { listedParent } from './listed-parent';
 
 /**
@@ -42,6 +42,3 @@ export function viewClass(rec: Rec, geocentricKm?: number): ViewClass {
 
 /** The primary body an orbiter is measured from (registry id), or undefined for any other class. */
 export const primaryOf = (rec: Rec): string | undefined => (viewClass(rec) === 'orbiter' ? listedParent(rec) : undefined);
-
-/** The entity id of a record's primary body (`body-mars`). */
-export const primaryEntityId = (rec: Pick<EntityRecord, 'bodyId'> & Partial<Pick<EntityRecord, 'provider'>>): string => bodyEntityId(listedParent(rec));

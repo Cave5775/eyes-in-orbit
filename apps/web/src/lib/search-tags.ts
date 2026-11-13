@@ -78,7 +78,7 @@ const isEmptyTag = (word: string): boolean => {
 
 export const tagToken = (key: TagKey, value: string, negated = false): string => `${negated ? '-' : ''}${key}:${value}`;
 /** The canonical word of a parsed token (`#starlink` gives `group:starlink`). */
-export const tokenWord = (t: TagToken): string => tagToken(t.key, t.value, t.negated);
+const tokenWord = (t: TagToken): string => tagToken(t.key, t.value, t.negated);
 
 const add = (v: TagValues, key: TagKey, value: string): void => {
   const list = (v[key] ??= []);

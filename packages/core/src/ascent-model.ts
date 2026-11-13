@@ -270,7 +270,7 @@ const STAGE2_ALT_K = 4.3;
 const STAGE2_MASS_RATIO = 5.4;
 const G_KM_S2 = 0.0094;
 
-export function defaultTimeline(profile: 'starlink' | 'generic' = 'starlink'): Falcon9Timeline {
+function defaultTimeline(profile: 'starlink' | 'generic' = 'starlink'): Falcon9Timeline {
   return {
     maxQSec: 70, mecoSec: REF_MECO.sec, mecoAltKm: REF_MECO.alt, mecoSpeedKmS: REF_MECO.speed,
     sepDelaySec: 3, sesDelaySec: 8, fairingSec: 210, secoSec: 510,
@@ -279,7 +279,7 @@ export function defaultTimeline(profile: 'starlink' | 'generic' = 'starlink'): F
 }
 
 /** Inertial speed at perigee of a `secoAlt x apogee` orbit (vis-viva). */
-export function secoInertialSpeedKmS(t: Pick<Falcon9Timeline, 'secoAltKm' | 'apogeeKm'>): number {
+function secoInertialSpeedKmS(t: Pick<Falcon9Timeline, 'secoAltKm' | 'apogeeKm'>): number {
   const r = R_EARTH + t.secoAltKm;
   const a = R_EARTH + (t.secoAltKm + t.apogeeKm) / 2;
   return Math.sqrt(EARTH.gm * (2 / r - 1 / a));
@@ -704,7 +704,7 @@ export function ascentCompositeSegments(
 }
 
 /** Segment boundaries (named for the globe path labels) of a modeled ascent. */
-export function modeledSegmentBoundaries(m: ModeledAscent): AscentSegmentBoundary[] {
+function modeledSegmentBoundaries(m: ModeledAscent): AscentSegmentBoundary[] {
   const names: Record<AscentPhaseSpan['id'], string> = {
     'first-stage': 'stage 1 ascent', staging: 'staging', 'second-stage': 'stage 2 burn', 'orbit-coast': 'orbit (held)',
   };
@@ -771,12 +771,6 @@ const landingOf = (launch: Launch): Recovery => {
   if (/rtls/i.test(l.type ?? '') || /^lz/i.test(l.location ?? '')) return 'rtls';
   return 'droneship';
 };
-
-/** True for Falcon 9 launches (not Falcon Heavy) the model applies to. */
-export function isFalcon9(launch: Pick<Launch, 'vehicle' | 'name'>): boolean {
-  const text = `${launch.vehicle ?? ''} ${launch.name}`;
-  return /falcon\s*9/i.test(text) && !/heavy/i.test(text);
-}
 
 /** Nominal ascent for a launch of a vehicle with a profile (Falcon 9, Electron) and a known pad, else null. Inclination comes from `defaultInclination`. */
 export function modeledAscentForLaunch(launch: Launch): ModeledAscent | null {

@@ -98,7 +98,7 @@ export interface CoverDisc {
 }
 
 /** Is the screen point inside one of the discs? */
-export function inCover(covers: readonly CoverDisc[], sx: number, sy: number): boolean {
+function inCover(covers: readonly CoverDisc[], sx: number, sy: number): boolean {
   for (const c of covers) if (Math.hypot(sx - c.sx, sy - c.sy) <= c.r) return true;
   return false;
 }

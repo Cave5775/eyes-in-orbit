@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  Clock, CompositeProvider, EntityGraph, EARTH, GeodeticProvider, KeplerianProvider, RelativeProvider,
+  Clock, CompositeProvider, EntityGraph, EARTH, GeodeticProvider, KeplerianProvider,
   SampledProvider, Sgp4Provider, DEG, convert, deriveMissionState, formatCountdown, fixedToGeodetic,
   geodeticToFixed, gmstRad, missionTimingFor, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS, MARS, MOON,
   type Omm, type Sample,

@@ -213,8 +213,3 @@ export function readingAt(s: AscentSeries, tSec: number): Reading | null {
   }
   return null;
 }
-
-/** Whether `tSec` lies within the powered-ascent window worth following with a cursor. */
-export function inFlightWindow(tSec: number, tMax: number): boolean {
-  return tSec >= 0 && tSec <= tMax;
-}
