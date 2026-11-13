@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  FLOAT_HEAD_PX, MAX_FLOATS, MIN_FLOAT_W, closeFloatWindow, defaultRect, dragRect, fitRect, focusFloatWindow, frameHeight,
+  FLOAT_HEAD_PX, MAX_FLOATS, MINI_W, shownRect, dragMiniRect, toggleMinimized, toggleMinimizedOne, MIN_FLOAT_W, closeFloatWindow, defaultRect, dragRect, fitRect, focusFloatWindow, frameHeight,
   isFloatableUrl, loadFloats, openFloatWindow, parseFloats, resizeRect, saveFloats, setFloatRect, totalHeight, type FloatWindow,
   type StorageLike,
 } from '../src/lib/floating';
@@ -240,5 +240,60 @@ describe('floating windows: persistence', () => {
     expect(saveFloats([], memoryStorage({ throwOn: 'remove' }))).toBe(false);
     expect(loadFloats(null)).toEqual([]);
     expect(saveFloats([win(A, 1)], null)).toBe(false);
+  });
+});
+
+describe('minimized windows', () => {
+  it('toggleMinimized flips only the flag, keeps rect and z, and is a no-op for an unknown url or an unchanged force', () => {
+    const list = [win(A, 1), win(B, 2)];
+    const on = toggleMinimized(list, A);
+    expect(on[0]).toEqual({ ...list[0], minimized: true });
+    expect(on[1]).toBe(list[1]);
+    expect(toggleMinimized(on, A)[0].minimized).toBe(false);
+    expect(toggleMinimized(list, C)).toBe(list);
+    expect(toggleMinimized(on, A, true)).toBe(on);
+    expect(toggleMinimized(list, A, false)).toBe(list);
+    expect(toggleMinimizedOne(null)).toBeNull();
+  });
+
+  it('shownRect is the full rect or a MINI_W x title-bar tab at the same corner, inside the viewport', () => {
+    expect(shownRect(win(A, 1), VP)).toEqual(fitRect(win(A, 1), VP));
+    expect(shownRect(win(A, 1, { minimized: true }), VP)).toEqual({ x: 10, y: 10, w: MINI_W, h: FLOAT_HEAD_PX });
+    const edge = shownRect(win(A, 1, { x: 1500, y: 880, minimized: true }), VP);
+    expect(edge).toEqual({ x: VP.w - MINI_W, y: VP.h - FLOAT_HEAD_PX, w: MINI_W, h: FLOAT_HEAD_PX });
+  });
+
+  it('dragging a tab moves it inside the viewport; setFloatRect keeps the full width of a minimized window', () => {
+    expect(dragMiniRect({ x: 10, y: 10 }, -50, 5000, VP)).toEqual({ x: 0, y: VP.h - FLOAT_HEAD_PX });
+    const list = toggleMinimized([win(A, 1, { w: 400, h: totalHeight(400) })], A);
+    const moved = setFloatRect(list, A, { x: 1500, y: 20, w: MINI_W }, VP)[0];
+    expect(moved.w).toBe(400);
+    expect(moved.x).toBe(VP.w - MINI_W);
+    expect(moved.minimized).toBe(true);
+    // restored, it fits the viewport at its old width
+    const back = toggleMinimized([moved], A)[0];
+    expect(inside(shownRect(back, VP))).toBe(true);
+    expect(shownRect(back, VP).w).toBe(400);
+  });
+
+  it('a minimized window still counts toward the cap', () => {
+    let list: FloatWindow[] = [];
+    for (const u of [A, B, C, D]) list = openFloatWindow(list, u, 't', VP);
+    list = toggleMinimized(list, A, true);
+    expect(openFloatWindow(list, E, 't', VP)).toBe(list);
+    expect(list).toHaveLength(MAX_FLOATS);
+  });
+
+  it('persists the flag; an old list without it loads as not minimized; junk values are ignored', () => {
+    const store = memoryStorage();
+    saveFloats([win(A, 1, { minimized: true }), win(B, 2)], store);
+    const raw = JSON.parse(store.data.get('eio.float.v1')!);
+    expect(raw[0].minimized).toBe(true);
+    expect('minimized' in raw[1]).toBe(false);
+    const back = loadFloats(store);
+    expect(back[0].minimized).toBe(true);
+    expect(back[1].minimized).toBeUndefined();
+    const old = JSON.stringify([{ url: A, title: 'x', x: 1, y: 2, w: 300, z: 1 }, { url: B, title: 'y', x: 1, y: 2, w: 300, minimized: 'yes' }]);
+    expect(parseFloats(old).map((f) => !!f.minimized)).toEqual([false, false]);
   });
 });

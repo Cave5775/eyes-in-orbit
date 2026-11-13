@@ -11,7 +11,7 @@ import {
 } from '../lib/query';
 import type { TagKey } from '../lib/search-tags';
 import {
-  closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, viewportNow,
+  closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, toggleMinimized, toggleMinimizedOne, viewportNow,
   type FloatWindow,
 } from '../lib/floating';
 import { addRecent, loadRecent, removeRecent, saveRecent, type RecentLink } from '../lib/recent-links';
@@ -94,6 +94,9 @@ interface State {
   /** Close a floating window (the Stream tab's "Dock back" uses this too; the tab then plays the stream again). */
   closeFloat(url: string): void;
   focusFloat(url: string): void;
+  /** Minimize a window to its title-bar tab or restore it (the player stays mounted and keeps playing). Still counts toward the cap. */
+  toggleFloatMinimized(url: string): void;
+  toggleSkyMinimized(): void;
   /** Open the Sky view for an observatory entity, or retarget the open one; false when the window cap is reached. */
   openSky(obsId: string, title: string): boolean;
   closeSky(): void;
@@ -287,6 +290,8 @@ export const useStore = create<State>((set, get) => ({
     return true;
   },
   closeSky: () => set({ sky: null }),
+  toggleFloatMinimized: (url) => set((s) => ({ floats: toggleMinimized(s.floats, url) })),
+  toggleSkyMinimized: () => set((s) => ({ sky: toggleMinimizedOne(s.sky) })),
   focusSky: () => set((s) => (s.sky ? { sky: focusSkyWindow(s.sky, s.floats) } : {})),
   setSkyRect: (rect) => set((s) => ({ sky: setSkyRect(s.sky, rect, viewportNow()) })),
   closeFloat: (url) => set((s) => ({ floats: closeFloatWindow(s.floats, url) })),

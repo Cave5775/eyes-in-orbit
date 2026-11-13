@@ -14,6 +14,8 @@ export const MIN_FLOAT_W = 240;
 export const FLOAT_HEAD_PX = 28;
 export const ASPECT_W = 16;
 export const ASPECT_H = 9;
+/** Width of a minimized tab (title, restore and close buttons), px. */
+export const MINI_W = 190;
 export const FLOAT_STORAGE_KEY = 'eio.float.v1';
 
 export interface Viewport {
@@ -35,6 +37,8 @@ export interface FloatWindow extends FloatRect {
   title: string;
   /** stacking order: higher is in front */
   z: number;
+  /** collapsed to a title-bar tab (MINI_W wide); `w` keeps the full width for the restore. The player stays mounted and keeps playing. */
+  minimized?: boolean;
 }
 
 export function viewportNow(): Viewport {
@@ -71,6 +75,25 @@ export function fitRect(r: { x: number; y: number; w: number }, vp: Viewport): F
   const x = clampNum(Number.isFinite(r.x) ? Math.round(r.x) : 0, 0, Math.max(0, vp.w - w));
   const y = clampNum(Number.isFinite(r.y) ? Math.round(r.y) : 0, 0, Math.max(0, vp.h - h));
   return { x, y, w, h };
+}
+
+/** What a window occupies on screen: its full rect, or the tab (MINI_W x FLOAT_HEAD_PX) at the same top-left corner, kept inside the viewport. */
+export function shownRect(f: { x: number; y: number; w: number; minimized?: boolean }, vp: Viewport): FloatRect {
+  if (!f.minimized) return fitRect(f, vp);
+  return miniRect(f, vp);
+}
+
+function miniRect(p: { x: number; y: number }, vp: Viewport): FloatRect {
+  const w = Math.min(MINI_W, Math.max(0, vp.w));
+  const x = clampNum(Number.isFinite(p.x) ? Math.round(p.x) : 0, 0, Math.max(0, vp.w - w));
+  const y = clampNum(Number.isFinite(p.y) ? Math.round(p.y) : 0, 0, Math.max(0, vp.h - FLOAT_HEAD_PX));
+  return { x, y, w, h: FLOAT_HEAD_PX };
+}
+
+/** Drag a minimized tab: only the position changes, clamped for the tab's own size. */
+export function dragMiniRect(start: { x: number; y: number }, dx: number, dy: number, vp: Viewport): { x: number; y: number } {
+  const { x, y } = miniRect({ x: start.x + dx, y: start.y + dy }, vp);
+  return { x, y };
 }
 
 /** Move a window from its drag-start position by the pointer delta, clamped to the viewport. */
@@ -130,9 +153,30 @@ export function closeFloatWindow(list: FloatWindow[], url: string): FloatWindow[
   return list.some((f) => f.url === url) ? list.filter((f) => f.url !== url) : list;
 }
 
-/** Store a window's new position and width, clamped to the viewport. Keeps its title and stacking order. */
+/**
+ * Store a window's new position and width, clamped to the viewport. Keeps its title and stacking order.
+ * A minimized window only takes the position (clamped for the tab); its full width is kept for the restore.
+ */
 export function setFloatRect(list: FloatWindow[], url: string, r: { x: number; y: number; w: number }, vp: Viewport): FloatWindow[] {
-  return list.map((f) => (f.url === url ? { ...f, ...fitRect(r, vp) } : f));
+  return list.map((f) => {
+    if (f.url !== url) return f;
+    if (f.minimized) return { ...f, ...dragMiniRect(r, 0, 0, vp) };
+    return { ...f, ...fitRect(r, vp) };
+  });
+}
+
+/** Minimize or restore one window (`force` sets it explicitly). Same array when the URL is not open or nothing changes. Position and width are untouched. */
+export function toggleMinimized<T extends FloatWindow>(list: T[], url: string, force?: boolean): T[] {
+  const f = list.find((w) => w.url === url);
+  if (!f) return list;
+  const next = force ?? !f.minimized;
+  if (next === !!f.minimized) return list;
+  return list.map((w) => (w.url === url ? { ...w, minimized: next } : w));
+}
+
+/** The same toggle for a single window (the Sky view). */
+export function toggleMinimizedOne<T extends FloatWindow>(f: T | null, force?: boolean): T | null {
+  return f ? toggleMinimized([f], f.url, force)[0] : f;
 }
 
 /** Parse persisted windows; anything malformed is dropped, the rest keep their order, at most MAX_FLOATS. */
@@ -149,7 +193,7 @@ export function parseFloats(raw: string | null | undefined): FloatWindow[] {
   const seen = new Set<string>();
   for (const item of data) {
     if (!item || typeof item !== 'object') continue;
-    const { url, title, x, y, w } = item as Record<string, unknown>;
+    const { url, title, x, y, w, minimized } = item as Record<string, unknown>;
     if (typeof url !== 'string' || !isFloatableUrl(url) || seen.has(url)) continue;
     if (typeof x !== 'number' || typeof y !== 'number' || typeof w !== 'number') continue;
     if (![x, y, w].every(Number.isFinite) || w < MIN_FLOAT_W) continue;
@@ -163,6 +207,7 @@ export function parseFloats(raw: string | null | undefined): FloatWindow[] {
       w: width,
       h: totalHeight(width),
       z: out.length + 1,
+      ...(minimized === true ? { minimized: true } : {}),
     });
     if (out.length >= MAX_FLOATS) break;
   }
@@ -197,7 +242,7 @@ export function saveFloats(list: readonly FloatWindow[], storage: StorageLike | 
     if (!storage) return false;
     if (list.length === 0) storage.removeItem?.(FLOAT_STORAGE_KEY);
     else {
-      const rows = list.map(({ url, title, x, y, w, z }) => ({ url, title, x, y, w, z }));
+      const rows = list.map(({ url, title, x, y, w, z, minimized }) => ({ url, title, x, y, w, z, ...(minimized ? { minimized: true } : {}) }));
       storage.setItem(FLOAT_STORAGE_KEY, JSON.stringify(rows));
     }
     return true;
