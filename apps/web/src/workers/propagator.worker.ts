@@ -59,6 +59,7 @@ function tick(): void {
   lastPostedSim = simMs;
 
   const n = recs.length;
+  const t0 = performance.now();
   const buf = pool.pop() ?? new Float64Array(n * 3);
   for (let i = 0; i < n; i++) {
     const s = recs[i];
@@ -72,7 +73,7 @@ function tick(): void {
       buf[i * 3] = buf[i * 3 + 1] = buf[i * 3 + 2] = 0;
     }
   }
-  ctx.postMessage({ type: 'positions', version, simMs, buffer: buf } satisfies FromWorker, [buf.buffer]);
+  ctx.postMessage({ type: 'positions', version, simMs, buffer: buf, ms: performance.now() - t0 } satisfies FromWorker, [buf.buffer]);
 }
 
 ctx.onmessage = (ev: MessageEvent<ToWorker>) => {

@@ -1,4 +1,5 @@
 import type { ClockSnapshot } from '@eio/core';
+import { perf } from '../lib/perf';
 import type { FromWorker, SatInit, ToWorker } from '../workers/protocol';
 
 /** Main-thread handle on the SGP4 worker; `positions` always matches `ids` (TEME xyz, km). */
@@ -22,7 +23,13 @@ export class PropagatorClient {
         this.positions = new Float64Array(m.ids.length * 3);
         this.onLayout(m.ids);
       } else if (m.version === this.version) {
+        const t0 = perf.on ? performance.now() : 0;
         this.positions.set(m.buffer);
+        if (perf.on) {
+          perf.time('positionsCopy', performance.now() - t0);
+          perf.time('propagate', m.ms);
+          if (!perf.firstPositionsMs && m.buffer.length) perf.firstPositionsMs = performance.now();
+        }
         this.simMs = m.simMs;
         this.dirty = true;
         this.post({ type: 'recycle', buffer: m.buffer }, [m.buffer.buffer]);

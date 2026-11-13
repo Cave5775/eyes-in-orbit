@@ -682,3 +682,8 @@ video.stream-frame { background: #000; object-fit: contain; }
 .vlist-pin { position: absolute; left: 0; right: 0; background: var(--panel); }
 .vlist-pin.last { box-shadow: 0 1px 0 var(--line-2), 0 5px 7px -3px rgba(0, 0, 0, 0.6); }
 /* ==== end STICKY TREE ==== */
+
+/* ---- ?perf=1 readout ---- */
+.perf-overlay { position: fixed; right: 8px; bottom: 8px; z-index: 50; min-width: 230px; padding: 6px 8px; background: rgba(8, 12, 20, 0.82); border: 1px solid var(--line); font: 11px/1.5 ui-monospace, Consolas, monospace; color: var(--ink-2); pointer-events: none; }
+.perf-row { display: flex; justify-content: space-between; gap: 12px; }
+.perf-row b { color: var(--ink); font-weight: 500; }

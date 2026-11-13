@@ -37,6 +37,7 @@ import { nearestOnPath, type PathHit } from '../lib/path-pick';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
 import { ModelLayer, type ModelFrame } from './models/ModelLayer';
+import { perf } from '../lib/perf';
 import { IssArrayTracker, arraySources, issJoints, type ArraySources, type IssJoints } from '../lib/arrays';
 
 // Colours and sizes are authored in display space; skip three's linear workflow.
@@ -404,6 +405,16 @@ export class SceneController {
 
   /** Reconcile with the entity catalog: new/changed SGP4 records go to the worker, the rest to the main-thread graph. */
   setEntities(map: Map<string, EntityRecord>): void {
+    const t0 = perf.on ? performance.now() : 0;
+    this.reconcile(map);
+    if (perf.on) {
+      perf.time('sceneEntities', performance.now() - t0);
+      perf.entities = this.recs.size;
+      perf.satellites = this.satSet.size;
+    }
+  }
+
+  private reconcile(map: Map<string, EntityRecord>): void {
     const upserts: { id: string; omm: Omm }[] = [];
     const gone: string[] = [];
     let dynChanged = false;
@@ -1426,8 +1437,13 @@ export class SceneController {
     if (this.disposed) return;
     const wall = performance.now();
     this.fps += ((1000 / Math.max(1, wall - this.lastFrame)) - this.fps) * 0.05;
+    if (perf.on && this.lastFrame) perf.time('frame', wall - this.lastFrame);
     this.lastFrame = wall;
     this.draw(wall);
+    if (perf.on) {
+      perf.time('draw', performance.now() - wall);
+      perf.frameDone();
+    }
   }
 
   /** Advance everything to the current sim time and render one frame. */
@@ -1475,7 +1491,9 @@ export class SceneController {
 
     this.prepareRender(gmst, t);
     this.updateModels(t);
+    const tScope = perf.on ? performance.now() : 0;
     this.refreshScope(wall);
+    if (perf.on && this.lastScopeAt === wall) perf.time('scope', performance.now() - tScope);
 
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
       this.lastPickAt = wall;
@@ -1532,12 +1550,14 @@ export class SceneController {
     });
 
     this.celestial.updateMarkers(this.camera.fov, this.container.clientHeight); // glyphs of the bodies too small to see
+    const tUp = perf.on ? performance.now() : 0;
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);
     this.pads.pos.upload(f);
     this.hi.pos.upload(f);
     this.overlays.forEach((o) => o.uploadFrame(f));
     this.pathOverlay?.uploadFrame(f);
+    if (perf.on) perf.time('upload', performance.now() - tUp);
   }
 
   private makeModelFrame(): ModelFrame {

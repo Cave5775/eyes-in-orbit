@@ -3,6 +3,7 @@ import { bodyEntityRecords } from '@eio/core';
 import type {
   Article, ClockSnapshot, ConnectorHealth, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch, TelemetryPoint,
 } from '@eio/core';
+import { perf } from '../lib/perf';
 import { rankEntities, type SearchHit } from '../lib/filters';
 import {
   NO_QUERY, addTerms, legacyHiddenTerms, parseStoredQuery, removeTerm, sameQuery, serialiseQuery, setTermEffect, textOf, toggleTerm,
@@ -177,8 +178,11 @@ const NO_TEXT: TextState = { textHits: null, textIds: null };
 /** The text term looked up once, here, not per frame: every entity the text matches, best first. */
 function lookUpText(text: string, entities: ReadonlyMap<string, EntityRecord>): TextState {
   if (!text) return NO_TEXT;
+  const t0 = perf.on ? performance.now() : 0;
   const textHits = rankEntities(entities.values(), text, Infinity);
-  return { textHits, textIds: new Set(textHits.map((h) => h.id)) };
+  const textIds = new Set(textHits.map((h) => h.id));
+  if (perf.on) perf.time('textSearch', performance.now() - t0);
+  return { textHits, textIds };
 }
 /** the remembered frame is restored once, when the first full catalog arrives */
 let frameRestorePending = true;
@@ -221,6 +225,7 @@ export const useStore = create<State>((set, get) => ({
   floats: loadFloats(),
 
   upsertEntities(records, replace = false) {
+    const t0 = perf.on ? performance.now() : 0;
     const next = replace ? new Map<string, EntityRecord>() : new Map(get().entities);
     for (const r of records) next.set(r.id, r);
     const patch: Partial<State> = { entities: next };
@@ -234,6 +239,11 @@ export const useStore = create<State>((set, get) => ({
     const text = textOf(get().query);
     if (text && (replace || next.size !== get().entities.size)) Object.assign(patch, lookUpText(text, next));
     set(patch);
+    if (perf.on) {
+      perf.time('ingest', performance.now() - t0);
+      perf.storeUpdate();
+      if (!perf.firstIngestMs) perf.firstIngestMs = performance.now();
+    }
     // the first full catalog is the moment to restore the remembered frame (its entity or body must exist)
     if (replace && frameRestorePending && next.size > 0) {
       frameRestorePending = false;
