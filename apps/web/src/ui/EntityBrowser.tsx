@@ -13,6 +13,7 @@ import {
 import {
   acceptTag, activeTag, backspaceRemovesChip, parseQuery, splitCommitted, suggestTags, type TagKey, type TagSuggestion,
 } from '../lib/search-tags';
+import { perf } from '../lib/perf';
 import { runtime } from '../state/runtime';
 import { useStore } from '../state/store';
 import { VirtualList, type VirtualListHandle } from './VirtualList';
@@ -137,8 +138,11 @@ export function EntityBrowser() {
   const ordered = useMemo(() => [...entities.values()].sort(browseOrder), [entities]);
   const rows: SearchHit[] = useMemo(() => {
     const ctx: Ctx = { focus: NO_FOCUS, text: textIds };
+    const t0 = perf.on ? performance.now() : 0;
     const pass = (r: SearchHit) => isDrawn(classify(entities.get(r.id) ?? r, query, ctx));
-    return (textOf(query) && textHits ? textHits : ordered).filter(pass);
+    const out = (textOf(query) && textHits ? textHits : ordered).filter(pass);
+    if (perf.on) perf.time('rows', performance.now() - t0);
+    return out;
   }, [entities, ordered, query, textHits, textIds]);
 
   // the tree: the same filtered, ordered rows, nested under their primary body and flattened to the rows that are open
@@ -156,11 +160,14 @@ export function EntityBrowser() {
     });
     const recOf = (r: { id: string }) => entities.get(r.id);
     const frameRec = entities.get(frame);
-    return buildTreeRows(rows, {
+    const t0 = perf.on ? performance.now() : 0;
+    const built = buildTreeRows(rows, {
       bodies, frameId: frame, frameBodyId: frameRec ? bodyOf(frameRec) ?? frameRec.bodyId : undefined,
       openAll: filtering, skeleton: !filtering, overrides, kindName: kindLabel, bodyOf: (r) => { const e = recOf(r); return e && listedParent(e); },
       standsForBody: (r) => { const p = recOf(r)?.provider; return p?.type === 'body' ? p.bodyId : undefined; },
     });
+    if (perf.on) perf.time('tree', performance.now() - t0);
+    return built;
   }, [mode, rows, entities, frame, filtering, overrides]);
 
   /** the rows pinned at the top of the tree while a row is the first in view: its ancestors (the body chain and the kind group) */

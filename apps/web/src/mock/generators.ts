@@ -17,6 +17,16 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
+/** Upper bound of `?mock=1&n=` (a 2 M catalog already needs several GB of heap in the browser). */
+export const MOCK_MAX_SATS = 2_000_000;
+export const MOCK_DEFAULT_SATS = 2000;
+
+/** `n` from the URL: a positive integer up to MOCK_MAX_SATS, otherwise undefined (the default catalog). */
+export function clampMockCount(n: number): number | undefined {
+  if (!Number.isFinite(n) || n < 1) return undefined;
+  return Math.min(MOCK_MAX_SATS, Math.floor(n));
+}
+
 const MU = EARTH.gm;
 const MIN = 60_000;
 const HOUR = 3_600_000;
@@ -94,7 +104,8 @@ function satRecord(omm: Omm, kind: string, group: string, colorKey: NonNullable<
 const GENERIC_NAMES = ['NOAA', 'METEOSAT', 'GOES', 'SENTINEL', 'LANDSAT', 'ONEWEB', 'IRIDIUM', 'GLOBALSTAR', 'COSMOS', 'YAOGAN', 'TIANHUI', 'USA', 'ORBCOMM', 'SPIRE LEMUR', 'PLANET SKYSAT'];
 
 /** ~`count` SGP4 satellites: ISS and CSS, a Starlink-like constellation, assorted LEO/MEO/GEO/HEO, debris clouds. */
-export function mockSatellites(nowMs: number, count = 2000, seed = 7): EntityRecord[] {
+export function mockSatellites(nowMs: number, count = MOCK_DEFAULT_SATS, seed = 7): EntityRecord[] {
+  count = Math.min(MOCK_MAX_SATS, count);
   const rnd = mulberry32(seed);
   const pick = (a: number, b: number) => a + (b - a) * rnd();
   const out: EntityRecord[] = [];

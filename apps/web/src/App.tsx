@@ -5,6 +5,7 @@ import { DetailPanel } from './ui/DetailPanel';
 import { EntityBrowser } from './ui/EntityBrowser';
 import { FloatingLayer } from './ui/FloatingLayer';
 import { LaunchBoard } from './ui/LaunchBoard';
+import { PerfOverlay } from './ui/PerfOverlay';
 import { NewsTicker } from './ui/NewsTicker';
 import { ResizableLayout } from './ui/ResizableLayout';
 import { SceneView } from './ui/SceneView';
@@ -40,6 +41,7 @@ export function App() {
       </ResizableLayout>
       {/* outside the grid: floating stream windows sit above the whole app */}
       <FloatingLayer />
+      <PerfOverlay />
     </>
   );
 }

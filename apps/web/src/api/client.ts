@@ -1,5 +1,6 @@
 import type { Article, AscentSeries, CredentialInfo, Launch, ServerMessage } from '@eio/core';
 import { isIss } from '../lib/entity';
+import { clampMockCount } from '../mock/generators';
 import { createMockApi } from '../mock/mock-api';
 import { useStore } from '../state/store';
 import { withBodyEntities } from './body-entities';
@@ -111,8 +112,8 @@ function startReal(): void {
 }
 
 function startMock(): void {
-  // ?n=12000 stress-tests the catalog size
-  const n = Number(new URLSearchParams(location.search).get('n')) || undefined;
+  // ?n=12000 stress-tests the catalog size (capped at MOCK_MAX_SATS)
+  const n = clampMockCount(Number(new URLSearchParams(location.search).get('n')));
   api = createMockApi(Date.now(), n);
   store().setConn('mock');
   void loadAll(true);
