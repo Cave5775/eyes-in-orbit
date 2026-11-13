@@ -147,7 +147,7 @@ export const issLive: Connector = {
   async run(ctx) {
     // one connection at a time, at least 30 s between connect attempts, at most 12 per hour (`net/limits.ts`, source `iss-live`)
     const socket = await guardedWebSocket(ctx.http.limiter, 'iss-live', URL, PROTOCOL);
-    if ('limited' in socket) throw new LimitedError('iss-live', socket.retryAt, socket.reason, socket.kind);
+    if ('limited' in socket) throw new LimitedError('iss-live', socket.retryAt, socket.reason, socket.kind, socket.blockKind);
     const ws = socket.ws;
     return new Promise<void>((resolve, reject) => {
       const state = ISS_ITEMS.map(() => [null, null] as (string | null)[]);

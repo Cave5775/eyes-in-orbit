@@ -65,7 +65,7 @@ export class Http {
         headers: requestHeaders(headers),
         signal: AbortSignal.timeout(this.opts.timeoutMs ?? TIMEOUT_MS),
       }, { mode: ro.mode ?? 'poll', fetch: this.opts.fetch, waitMs: ro.waitMs });
-      if ('limited' in r) throw new LimitedError(source, r.retryAt, r.reason, r.kind);
+      if ('limited' in r) throw new LimitedError(source, r.retryAt, r.reason, r.kind, r.blockKind);
       return { res: r.response, body: await r.response.text() };
     } catch (err) {
       if (err instanceof LimitedError) throw err;

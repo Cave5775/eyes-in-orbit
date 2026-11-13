@@ -62,6 +62,7 @@ export function AboutBody({ d, now }: { d: Description; now: number }) {
 
 /** One lookup per object per minute, however often the tab is opened (`lib/describe-cache.ts`). */
 const describeCache = createDescribeCache((id) => api.describe(id));
+export const clearDescribeCache = (): void => describeCache.clear();
 
 /** About: a description of the selected object, looked up by the server only now (Wikipedia via Wikidata, ESA DISCOS with a token). */
 export function AboutTab({ rec }: { rec: EntityRecord }) {

@@ -303,9 +303,9 @@ describe('status and tables', () => {
     expect(LIMITS['spacetrack:query'].minSpacingMs).toBe(2 * H);
     expect(LIMITS.ll2).toMatchObject({ perHour: 7, blockOn: { 429: H } });
     expect(LIMITS.snapi).toMatchObject({ demandPerHour: 20, minSpacingMs: 2000 });
-    expect(LIMITS.dsn.perHour).toBe(720);
-    expect(LIMITS.horizons).toMatchObject({ minSpacingMs: 1500, perHour: 60, blockOn: { 503: 15 * 60_000 } });
-    expect(LIMITS.wheretheiss.perHour).toBe(1800);
+    expect(LIMITS.dsn.perHour).toBe(800);
+    expect(LIMITS.horizons).toMatchObject({ minSpacingMs: 1500, perHour: 120, blockOn: { 503: 15 * 60_000 } });
+    expect(LIMITS.wheretheiss.perHour).toBe(1900);
     expect(LIMITS['iss-live']).toMatchObject({ minSpacingMs: 30_000, perHour: 12 });
     expect(LIMITS.wikimedia).toMatchObject({ minSpacingMs: 1500, perHour: 600, perDay: 5000 });
     expect(LIMITS.discos).toMatchObject({ perMinute: 10, perHour: 200 });

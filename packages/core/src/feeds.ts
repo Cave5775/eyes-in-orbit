@@ -119,6 +119,8 @@ export interface FeedLimit {
   nextAllowedAt?: number;
   /** no request before this time (403/429, Retry-After, failed login, repeated failures) */
   blockedUntil?: number;
+  /** why: `rate` = the source or a cap refused us (orange rate-limited), `failure` = our own backoff after failures (the normal failure mapping applies) */
+  blockKind?: 'rate' | 'failure';
 }
 
 export interface ConnectorHealth {

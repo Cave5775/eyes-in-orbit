@@ -8,6 +8,7 @@ import { DSN_STATIONS, DSN_STATION_OBSERVATORY, DSN_TARGETS, probeEntity, probeI
 const POLL_MS = 5000;
 /** The second URL is tried only once the source has failed this many requests in a row (persisted by the limiter). */
 export const FALLBACK_AFTER_FAILURES = 3;
+const PARSE_FAILURES_KEY = 'dsn:parse-failures';
 /** probe attrs change with every range tick; republishing them at most this often keeps `entities.changed` quiet */
 const ATTR_REFRESH_MS = 60_000;
 const C_KM_S = 299_792.458;
@@ -117,14 +118,25 @@ export const dsn: Connector = {
     // row (persisted by the limiter, with its backoff); from then on the attempts rotate through the other URLs. Trying two
     // URLs in one run would double the request rate of a 5 s poll, and a failed request blocks the source anyway.
     const ordered = workingUrl ? [workingUrl, ...ctx.config.dsnUrls.filter((u) => u !== workingUrl)] : ctx.config.dsnUrls;
-    const failures = ctx.http.limiter.consecutiveFailures('dsn');
+    // a 200 that does not parse also counts (the limiter only sees the HTTP answer)
+    const badParses = ctx.store.get<number>(PARSE_FAILURES_KEY)?.value ?? 0;
+    const failures = Math.max(ctx.http.limiter.consecutiveFailures('dsn'), badParses);
     const candidates = failures >= FALLBACK_AFTER_FAILURES ? [ordered[(failures - FALLBACK_AFTER_FAILURES + 1) % ordered.length]] : ordered.slice(0, 1);
     const errors: string[] = [];
     let snapshot: DsnSnapshot | undefined;
     for (const url of candidates) {
       try {
         // the feed is behind a CDN; the query string defeats stale copies
-        snapshot = parseDsn(await ctx.http.text(`${url}${url.includes('?') ? '&' : '?'}r=${Date.now()}`, {}, { source: 'dsn', mode: 'poll' }));
+        const text = await ctx.http.text(`${url}${url.includes('?') ? '&' : '?'}r=${Date.now()}`, {}, { source: 'dsn', mode: 'poll' });
+        try {
+          snapshot = parseDsn(text);
+        } catch (err) {
+          const n = badParses + 1;
+          ctx.store.set(PARSE_FAILURES_KEY, n, 86_400_000);
+          ctx.http.limiter.block('dsn', Math.min(30_000 * 2 ** (Math.min(n, 20) - 1), 10 * 60_000), `backoff after ${n} unreadable answer${n === 1 ? '' : 's'}`, 'failure');
+          throw err;
+        }
+        ctx.store.delete(PARSE_FAILURES_KEY);
         workingUrl = url;
         break;
       } catch (err) {

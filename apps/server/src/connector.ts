@@ -199,6 +199,7 @@ export class Scheduler {
       slot.failures = 0;
       Object.assign(ctx.health, { status: 'ok', lastOkAt: Date.now(), failures: 0 });
       if (!slot.stale) ctx.health.lastError = undefined;
+      if (/^waiting for the request spacing/.test(ctx.health.note ?? '')) ctx.health.note = undefined;
     } catch (err) {
       if (err instanceof LimitedError) this.limited(slot, err);
       else this.fail(slot, err);
@@ -232,6 +233,11 @@ export class Scheduler {
   private limited(slot: Slot, err: LimitedError): void {
     const { health } = slot.ctx;
     slot.limitedUntil = err.retryAt;
+    if (err.blockKind === 'failure') {
+      // our own backoff after real failures: the feed is still failing, so it counts like a failed run (it can go red "repeated")
+      this.fail(slot, err);
+      return;
+    }
     if (err.kind === 'spacing') {
       health.note = `waiting for the request spacing (${err.reason})`;
       return;

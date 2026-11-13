@@ -82,7 +82,7 @@ describe('each connector goes through the limiter under its own source key', () 
     await vi.advanceTimersByTimeAsync(1000);
     scheduler.stop();
     expect(calls).toHaveLength(1);
-    expect(limiter.status('dsn')).toMatchObject({ used: 1, cap: 720 });
+    expect(limiter.status('dsn')).toMatchObject({ used: 1, cap: 800 });
   });
 
   it('horizons: one request at a time, 1.5 s apart, on `horizons`', async () => {
@@ -91,7 +91,7 @@ describe('each connector goes through the limiter under its own source key', () 
     await vi.advanceTimersByTimeAsync(60_000);
     scheduler.stop();
     expect(calls.length).toBeGreaterThan(5);
-    expect(limiter.status('horizons')).toMatchObject({ used: calls.length, cap: 60 });
+    expect(limiter.status('horizons')).toMatchObject({ used: calls.length, cap: 120 });
     expect(limiter.state('horizons').nextAllowedAt - (Date.now() - 1)).toBeLessThanOrEqual(1500);
   });
 });
@@ -111,7 +111,7 @@ describe('iss-rest (wheretheiss.at)', () => {
     scheduler.stop();
     expect(calls.length).toBeGreaterThanOrEqual(5);
     expect(calls.length).toBeLessThanOrEqual(6); // 1 per 2 s, not 1 per second
-    expect(limiter.status('wheretheiss')).toMatchObject({ cap: 1800, window: 'hour' });
+    expect(limiter.status('wheretheiss')).toMatchObject({ cap: 1900, window: 'hour' });
   });
 
   it('honours X-Rate-Limit-Remaining: 0 by pausing until the reset', async () => {
@@ -134,13 +134,13 @@ describe('launchlibrary stays under its cap', () => {
     store.set('ll2:previous', JSON.parse(fx('ll2-2.3.0-launch.json')).results, 55 * 60_000, now - 3 * H);
   };
 
-  it('a failing source with a stale cache is retried at the poll interval (10 min), never every 5 min', async () => {
+  it('a failing source with a stale cache is retried at the poll interval (15 min), never every 5 min', async () => {
     const { store, calls, scheduler, hub } = setup([launchlibrary], () => new Response('down', { status: 500 }));
     stale(store);
     await scheduler.start();
     await vi.advanceTimersByTimeAsync(20_000);
     expect(calls).toHaveLength(2);
-    expect(hub.healthOf('launchlibrary').nextRunAt! - Date.now()).toBeGreaterThanOrEqual(9 * 60_000);
+    expect(hub.healthOf('launchlibrary').nextRunAt! - Date.now()).toBeGreaterThanOrEqual(14 * 60_000);
     await vi.advanceTimersByTimeAsync(5.5 * 60_000);
     expect(calls).toHaveLength(2); // the old 5 min stale retry would have fired here
     scheduler.stop();

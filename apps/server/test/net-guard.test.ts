@@ -19,8 +19,14 @@ const FORBIDDEN: { name: string; re: RegExp }[] = [
   { name: '.fetch(', re: /\b(globalThis|window|global)\.fetch\s*\(/ },
   { name: '?? fetch (a default fetch)', re: /\?\?\s*fetch\b/ },
   { name: 'new WebSocket', re: /\bnew\s+WebSocket\b/ },
-  { name: 'a raw http client import', re: /from\s+['"](node:)?(https?|undici|axios|node-fetch|got)['"]/ },
+  { name: 'a raw http client import', re: /(^|;)\s*import\s+(?!type\b)[^;]*from\s+['"](node:)?(https?|http2|net|tls|undici|ws|axios|node-fetch|got)['"]/ },
+  { name: 'require(/import( of a network module', re: /\b(require|import)\s*\(\s*['"](node:)?(https?|http2|net|tls|undici|ws)['"]/ },
+  { name: 'a fetch-named call', re: /\bfetch\w*\s*\(/ },
 ];
+
+/** fetch-named functions that are not the network (they call `Http`/the guard); anything else matching `fetch*(` fails. */
+const FETCH_NAMES_OK = ['fetchSpaceTrackGp', 'fetchSummary'];
+const stripOk = (line: string): string => FETCH_NAMES_OK.reduce((l, n) => l.split(n).join('_'), line);
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -45,7 +51,7 @@ describe('single network choke point', () => {
         const rel = relative(ROOT, file).split(sep).join('/');
         if (rel.startsWith('apps/server/src/net/') || ALLOW[rel]) continue;
         codeLines(readFileSync(file, 'utf8')).forEach((line, i) => {
-          for (const f of FORBIDDEN) if (f.re.test(line)) offenders.push(`${rel}:${i + 1} uses ${f.name}`);
+          for (const f of FORBIDDEN) if (f.re.test(stripOk(line))) offenders.push(`${rel}:${i + 1} uses ${f.name}`);
         });
       }
     }
@@ -57,9 +63,13 @@ describe('single network choke point', () => {
   });
 
   it('the guard does catch a violation (self-test of the patterns)', () => {
-    const bad = ["const r = await fetch(url);", "const f = opts.fetch ?? fetch;", "const ws = new WebSocket(u);", "import https from 'node:https';"];
+    const bad = [
+      "const r = await fetch(url);", "const f = opts.fetch ?? fetch;", "const ws = new WebSocket(u);", "import https from 'node:https';",
+      "const x = await fetchJson(url);", "import { WebSocket } from 'ws';", "const h = require('node:http2');", "const u = await import('undici');",
+    ];
     for (const line of bad) expect(FORBIDDEN.some((f) => f.re.test(line)), line).toBe(true);
-    const fine = ["await ctx.cachedFetch(key, url);", "fetchImpl: typeof fetch;", "this.opts.fetch", "doFetch(url)"];
-    for (const line of fine) expect(FORBIDDEN.some((f) => f.re.test(line)), line).toBe(false);
+    const fine = ["await ctx.cachedFetch(key, url);", "fetchImpl: typeof fetch;", "this.opts.fetch", "doFetch(url)", "await fetchSpaceTrackGp(l, u, p)"];
+
+    for (const line of fine) expect(FORBIDDEN.some((f) => f.re.test(stripOk(line))), line).toBe(false);
   });
 });

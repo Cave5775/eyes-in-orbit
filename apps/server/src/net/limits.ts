@@ -62,18 +62,18 @@ export const LIMITS: Record<string, SourceLimit> = {
   },
   dsn: {
     label: 'DSN Now', policy: 'unpublished',
-    minSpacingMs: 4000, perHour: 720,
+    minSpacingMs: 4000, perHour: 800,
     backoff: { baseMs: 30_000, maxMs: 10 * MIN },
   },
   horizons: {
     label: 'JPL Horizons', policy: 'unpublished (HTTP 503 = overloaded)',
-    minSpacingMs: 1500, perHour: 60,
+    minSpacingMs: 1500, perHour: 120,
     blockOn: { 503: 15 * MIN, 429: 15 * MIN },
   },
   // https://wheretheiss.at/w/developer : about one request per second
   wheretheiss: {
     label: 'wheretheiss.at', policy: 'https://wheretheiss.at/w/developer',
-    minSpacingMs: 1500, perHour: 1800,
+    minSpacingMs: 1500, perHour: 1900,
     blockOn: { 429: 5 * MIN },
   },
   'iss-live': {

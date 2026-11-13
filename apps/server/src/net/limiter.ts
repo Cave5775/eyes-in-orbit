@@ -27,23 +27,29 @@ export interface LimitState {
   demandHour?: Counter;
   blockedUntil?: number;
   blockReason?: string;
+  /** why the block exists: a `rate` signal from the source (403/429/Retry-After/X-Rate-Limit) or our own backoff after `failure`s */
+  blockKind?: BlockKind;
+  /** when `clearBlock` last lifted a block with a minimum interval (credential saves) */
+  lastCleared?: number;
   /** timestamps of recent failed answers (for `failureStop`) */
   failures?: number[];
   consecutiveFailures?: number;
 }
 
 export type LimitKind = 'spacing' | 'cap' | 'blocked';
+export type BlockKind = 'rate' | 'failure';
 
 export type AcquireResult =
   | { ok: true }
-  | { limited: true; retryAt: number; reason: string; kind: LimitKind };
+  | { limited: true; retryAt: number; reason: string; kind: LimitKind; blockKind?: BlockKind };
 
 export const hhmmz = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
 
 /** Thrown by `Http` when a request was not sent because a limit applies. The message is what the health record shows. */
 export class LimitedError extends Error {
-  constructor(readonly source: string, readonly retryAt: number, readonly reason: string, readonly kind: LimitKind = 'cap') {
-    super(`rate limited until ${hhmmz(retryAt)} (${reason})`);
+  constructor(readonly source: string, readonly retryAt: number, readonly reason: string, readonly kind: LimitKind = 'cap', readonly blockKind?: BlockKind) {
+    // a wait that our own failure backoff set is not a rate limit: it reads "waiting until" and classifies like any failure
+    super(blockKind === 'failure' ? `waiting until ${hhmmz(retryAt)} (${reason})` : `rate limited until ${hhmmz(retryAt)} (${reason})`);
     this.name = 'LimitedError';
   }
 }
@@ -136,7 +142,7 @@ export class Limiter {
     if (!lim) return { ok: true };
     const now = this.now();
     const s = this.rolled(this.state(source), now);
-    if (s.blockedUntil !== undefined) return { limited: true, retryAt: s.blockedUntil, reason: s.blockReason ?? 'blocked by the source', kind: 'blocked' };
+    if (s.blockedUntil !== undefined) return { limited: true, retryAt: s.blockedUntil, reason: s.blockReason ?? 'blocked by the source', kind: 'blocked', blockKind: s.blockKind ?? 'rate' };
     const capped = (name: WindowName, cap: number | undefined, label: string): AcquireResult | undefined => {
       const w = s[name];
       if (cap === undefined || !w || w.count < cap) return undefined;
@@ -194,10 +200,12 @@ export class Limiter {
     const failed = !!input.networkError || (status !== undefined && !(status >= 200 && status < 300) && status !== 304);
     let until = 0;
     let reason = '';
-    const raise = (ms: number, why: string): void => {
+    let kind: BlockKind = 'rate';
+    const raise = (ms: number, why: string, k: BlockKind = 'rate'): void => {
       if (now + ms > until) {
         until = now + ms;
         reason = why;
+        kind = k;
       }
     };
     const retryAfter = parseRetryAfter(headers?.get('retry-after'), now);
@@ -213,17 +221,18 @@ export class Limiter {
     if (failed) {
       if (backoffFailure) s.consecutiveFailures = (s.consecutiveFailures ?? 0) + 1;
       const stop = lim.failureStop;
-      if (stop) {
+      // only answers count (HTTP non-2xx); a flapping network is not the source refusing us
+      if (stop && !input.networkError) {
         const recent = [...(s.failures ?? []), now].filter((t) => now - t < stop.windowMs);
         s.failures = recent;
         if (recent.length >= stop.count) {
-          raise(stop.blockMs, `${recent.length} failed answers within ${Math.round(stop.windowMs / HOUR_MS)} h`);
+          raise(stop.blockMs, `${recent.length} failed answers within ${Math.round(stop.windowMs / HOUR_MS)} h`, 'failure');
           s.failures = [];
         }
       }
       if (b && backoffFailure) {
         const n = s.consecutiveFailures ?? 1;
-        raise(Math.min(b.baseMs * 2 ** (Math.min(n, 20) - 1), b.maxMs), `backoff after ${n} failure${n === 1 ? '' : 's'}`);
+        raise(Math.min(b.baseMs * 2 ** (Math.min(n, 20) - 1), b.maxMs), `backoff after ${n} failure${n === 1 ? '' : 's'}`, 'failure');
       }
     } else if (status !== undefined) {
       s.consecutiveFailures = 0;
@@ -231,29 +240,40 @@ export class Limiter {
     if (until > (s.blockedUntil ?? 0)) {
       s.blockedUntil = until;
       s.blockReason = reason;
+      s.blockKind = kind;
     }
     this.save(source, s);
   }
 
   /** Block `source` for `ms` (a failed Space-Track login, say). Never shortens an existing block. */
-  block(source: string, ms: number, reason: string): void {
+  block(source: string, ms: number, reason: string, kind: BlockKind = 'rate'): void {
     const now = this.now();
     const s = this.rolled(this.state(source), now);
     if (now + ms > (s.blockedUntil ?? 0)) {
       s.blockedUntil = now + ms;
       s.blockReason = reason;
+      s.blockKind = kind;
       this.save(source, s);
     }
   }
 
-  /** Drop only the failure block and failure history: spacing and counters stay, so saved credentials never skip a cap. */
-  clearBlock(source: string): void {
+  /**
+   * Drop only the failure block and failure history: spacing and counters stay, so saved credentials never skip a cap.
+   * With `minIntervalMs` a block is lifted at most that often (repeated credential saves must not fire a login per save).
+   * Returns whether it lifted anything.
+   */
+  clearBlock(source: string, minIntervalMs = 0): boolean {
     const row = this.store.get<LimitState>(limitKey(source));
-    if (!row) return;
+    if (!row) return false;
+    const now = this.now();
+    if (minIntervalMs > 0 && row.value.lastCleared !== undefined && now - row.value.lastCleared < minIntervalMs) return false;
     const s: LimitState = { ...row.value, failures: [], consecutiveFailures: 0 };
     delete s.blockedUntil;
     delete s.blockReason;
+    delete s.blockKind;
+    if (minIntervalMs > 0) s.lastCleared = now;
     this.save(source, s);
+    return true;
   }
 
   consecutiveFailures(source: string): number {
@@ -274,19 +294,29 @@ export class Limiter {
     rows.sort((a, b) => b.used / b.cap - a.used / a.cap);
     const out: FeedLimit = { ...rows[0] };
     if (s.nextAllowedAt > now) out.nextAllowedAt = s.nextAllowedAt;
-    if (s.blockedUntil !== undefined) out.blockedUntil = s.blockedUntil;
+    if (s.blockedUntil !== undefined) {
+      out.blockedUntil = s.blockedUntil;
+      out.blockKind = s.blockKind ?? 'rate';
+    }
     return out;
   }
 }
 
 const registry = new WeakMap<Store, Limiter>();
 
+/** EIO_RATE_LIMITS=off switches the limiter off, but only under the test runner (VITEST); anywhere else it is ignored. */
+export const rateLimitsOff = (env: NodeJS.ProcessEnv = process.env): boolean => env.EIO_RATE_LIMITS === 'off' && !!env.VITEST;
+
+/** A warning line when EIO_RATE_LIMITS=off is set outside the tests (it has no effect there), else undefined. */
+export function rateLimitsOffWarning(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.EIO_RATE_LIMITS === 'off' && !env.VITEST ? 'EIO_RATE_LIMITS=off is only honoured under the test runner; the request limits stay ON' : undefined;
+}
+
 /** The limiter of a store (one per cache file, shared by Http, the scripts and the credential saves). */
 export function limiterFor(store: Store): Limiter {
   let l = registry.get(store);
   if (!l) {
-    // EIO_RATE_LIMITS=off: the test suite's fixtures fire many requests in no time; production never sets it
-    l = new Limiter(store, process.env.EIO_RATE_LIMITS === 'off' ? { limits: {} } : {});
+    l = new Limiter(store, rateLimitsOff() ? { limits: {} } : {});
     registry.set(store, l);
   }
   return l;

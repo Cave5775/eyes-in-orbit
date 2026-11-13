@@ -125,7 +125,7 @@ export class ImageryCache {
           headers: { 'user-agent': USER_AGENT, accept: 'image/jpeg' },
           signal: AbortSignal.timeout(this.opts.timeoutMs ?? 20_000),
         }, { mode: 'demand', fetch: this.opts.fetch, waitMs: 1000 });
-        if ('limited' in r) throw new LimitedError('gibs', r.retryAt, r.reason, r.kind);
+        if ('limited' in r) throw new LimitedError('gibs', r.retryAt, r.reason, r.kind, r.blockKind);
         const res = r.response;
         if (!res.ok) throw new Error(`HTTP ${res.status} from GIBS for tile ${id.z}/${id.x}/${id.y}`);
         const buf = Buffer.from(await res.arrayBuffer());

@@ -91,7 +91,7 @@ export function classifyFeed(h: ConnectorHealth, now = Date.now()): FeedState {
   if (h.status === 'idle') return feed('off', 'idle', hasData, h.note);
 
   const blockedUntil = h.limit?.blockedUntil;
-  if (blockedUntil !== undefined && blockedUntil > now && !(h.status === 'error' && classifyCause(msg) === 'auth')) {
+  if (blockedUntil !== undefined && blockedUntil > now && h.limit?.blockKind !== 'failure' && !(h.status === 'error' && classifyCause(msg) === 'auth')) {
     return feed('orange', 'rate-limited', hasData, msg ?? h.note, new Date(blockedUntil).toISOString().slice(11, 16) + 'Z');
   }
   const retryUtc = retryTimeOf(msg);

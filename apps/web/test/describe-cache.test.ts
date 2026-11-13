@@ -21,6 +21,19 @@ describe('describe cache (About tab)', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it('does not reuse a rate limited answer: the next open asks again', async () => {
+    const limited = { ...desc('sat-1'), limitedUntil: 5_000_000 };
+    const load = vi.fn<(id: string) => Promise<Description>>().mockResolvedValueOnce(limited).mockImplementation(async (id) => desc(id));
+    const cache = createDescribeCache(load);
+    expect(await cache.get('sat-1')).toBe(limited);
+    await Promise.resolve();
+    const real = await cache.get('sat-1');
+    expect(real.limitedUntil).toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(2);
+    await cache.get('sat-1'); // a real answer is reused
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps entities apart and forgets a failed lookup at once', async () => {
     const load = vi.fn<(id: string) => Promise<Description>>()
       .mockRejectedValueOnce(new Error('HTTP 502'))

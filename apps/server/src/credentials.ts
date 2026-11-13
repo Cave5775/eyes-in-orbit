@@ -37,6 +37,8 @@ export const CREDENTIAL_FIELDS: readonly CredentialField[] = [
 const storeKey = (key: CredentialKey): string => `credential:${key}`;
 const TTL_MS = 10 * 365 * 86_400_000; // effectively forever; Store.prune only drops rows long past their TTL
 const MAX_LENGTH = 256;
+/** A credential save lifts a failure block at most this often: repeated saves must not fire logins at a bad account. */
+export const CLEAR_BLOCK_EVERY_MS = 3600_000;
 
 export class CredentialError extends Error {}
 
@@ -107,7 +109,7 @@ export class Credentials {
       connectors.add(field.connector);
       for (const k of field.reset?.cache ?? []) this.store.delete(k);
       for (const s of field.reset?.backoff ?? []) clearBackoff(this.store, s);
-      for (const s of field.reset?.limiter ?? []) limiterFor(this.store).clearBlock(s);
+      for (const s of field.reset?.limiter ?? []) limiterFor(this.store).clearBlock(s, CLEAR_BLOCK_EVERY_MS);
     }
     return { changed, connectors: [...connectors] };
   }

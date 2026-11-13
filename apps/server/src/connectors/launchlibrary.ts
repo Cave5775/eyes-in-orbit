@@ -7,9 +7,10 @@ import type { Hub, NewEntity } from '../hub';
 import { planAscent } from '../telemetry';
 import { matchTrajectory, type Trajectory } from '../trajectory';
 
-const POLL_MS = 10 * 60_000;
+/** 15 min: upcoming (TTL 14 min) 4 per hour plus previous 1 per hour is about 5, under the cap of 7 with headroom. */
+const POLL_MS = 15 * 60_000;
 const PHASE_TICK_MS = 15_000;
-const UPCOMING_TTL_MS = 9 * 60_000;
+const UPCOMING_TTL_MS = 14 * 60_000;
 /** past launches change rarely; a longer TTL keeps the anonymous tier (15 req/h; capped at 7 by `net/limits.ts`) comfortable */
 const PREVIOUS_TTL_MS = 55 * 60_000;
 type Json = Record<string, any>;

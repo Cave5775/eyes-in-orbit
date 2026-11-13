@@ -33,12 +33,12 @@ export async function fetchSpaceTrackGp(
   const query = opts.query ?? STARLINK_QUERY;
   const send = async (source: string, path: string, init: RequestInit) => {
     const r = await guardedFetch(limiter, source, `${BASE}${path}`, init, { mode: 'poll', fetch: opts.fetch });
-    if ('limited' in r) throw new LimitedError(source, r.retryAt, r.reason, r.kind);
+    if ('limited' in r) throw new LimitedError(source, r.retryAt, r.reason, r.kind, r.blockKind);
     return r.response;
   };
   // the query's own limit (one per 2 h) is checked before logging in, so a refused query never costs a login
   const gate = limiter.peek('spacetrack:query', 'poll');
-  if ('limited' in gate) throw new LimitedError('spacetrack:query', gate.retryAt, gate.reason, gate.kind);
+  if ('limited' in gate) throw new LimitedError('spacetrack:query', gate.retryAt, gate.reason, gate.kind, gate.blockKind);
   const login = await send('spacetrack:login', '/ajaxauth/login', {
     method: 'POST',
     headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' },
@@ -49,8 +49,8 @@ export async function fetchSpaceTrackGp(
   if (!login.ok) throw new Error(`HTTP ${login.status} from Space-Track login`);
   if (/"Login"\s*:\s*"Failed"/i.test(loginBody)) {
     // a rejected login is retried only after 6 h, whatever the poll interval; new credentials lift it (credentials.ts)
-    limiter.block('spacetrack:login', FAILED_LOGIN_WAIT_MS, 'failed login');
-    limiter.block('spacetrack:query', FAILED_LOGIN_WAIT_MS, 'failed login');
+    limiter.block('spacetrack:login', FAILED_LOGIN_WAIT_MS, 'failed login', 'failure');
+    limiter.block('spacetrack:query', FAILED_LOGIN_WAIT_MS, 'failed login', 'failure');
     throw new Error('Space-Track login failed (check SPACETRACK_USER / SPACETRACK_PASSWORD)');
   }
   const cookie = cookieHeader(login);
