@@ -83,6 +83,32 @@ export function withNativeControls(embedUrl: string, on: boolean): string {
   return u.toString();
 }
 
+/**
+ * Where a reload should resume: adds `start=<whole seconds>` to a `/embed/<id>` URL (not to a channel live embed, which
+ * has no position to return to). Under one second or a bad value leaves the URL alone.
+ */
+export function withStart(embedUrl: string, seconds: number | undefined): string {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds < 1) return embedUrl;
+  let u: URL;
+  try {
+    u = new URL(embedUrl);
+  } catch {
+    return embedUrl;
+  }
+  if (u.origin !== YT_ORIGIN || !u.pathname.startsWith('/embed/') || u.pathname === '/embed/live_stream') return embedUrl;
+  u.searchParams.set('start', String(Math.floor(seconds)));
+  return u.toString();
+}
+
+/** True for a channel live embed (`/embed/live_stream?channel=`): live by construction, before the player says so. */
+export function isLiveChannelEmbed(embedUrl: string): boolean {
+  try {
+    return new URL(embedUrl).pathname === '/embed/live_stream';
+  } catch {
+    return false;
+  }
+}
+
 /** Convert a YouTube watch/live/short URL to an embeddable iframe URL, or null if it is not YouTube. */
 export function toEmbedUrl(url: string, origin?: string): string | null {
   const id = youtubeVideoId(url);
@@ -109,7 +135,7 @@ export function resolveStream(link: StreamLink, origin?: string): { embedUrl: st
   return { embedUrl: link.kind === 'youtube' || link.kind === 'web' ? toEmbedUrl(link.url, origin) : null, href: link.url };
 }
 
-export type WidgetCommand = 'playVideo' | 'pauseVideo' | 'mute' | 'unMute' | 'setVolume';
+export type WidgetCommand = 'playVideo' | 'pauseVideo' | 'mute' | 'unMute' | 'setVolume' | 'seekTo';
 
 /** A player command as the IFrame API's postMessage form expects it. */
 export function widgetCommand(func: WidgetCommand, args: unknown[] = []): string {
@@ -127,6 +153,12 @@ export interface WidgetInfo {
   muted?: boolean;
   /** 0-100 */
   volume?: number;
+  /** seconds into the video (elapsed stream time for a live stream) */
+  currentTime?: number;
+  /** seconds; for a live stream the elapsed time since it began, 0 until known */
+  duration?: number;
+  /** `videoData.isLive` */
+  isLive?: boolean;
 }
 
 /** Read the state fields out of a player message; null for anything else. */
@@ -142,10 +174,14 @@ export function parseWidgetMessage(data: unknown): WidgetInfo | null {
   if (!msg || typeof msg !== 'object') return null;
   const { event, info } = msg as { event?: unknown; info?: unknown };
   if (event !== 'infoDelivery' || !info || typeof info !== 'object') return null;
-  const { playerState, muted, volume } = info as { playerState?: unknown; muted?: unknown; volume?: unknown };
+  const { playerState, muted, volume, currentTime, duration, videoData } = info as Record<string, unknown>;
   const out: WidgetInfo = {};
   if (typeof playerState === 'number' && Number.isFinite(playerState)) out.playerState = playerState;
   if (typeof muted === 'boolean') out.muted = muted;
   if (typeof volume === 'number' && Number.isFinite(volume)) out.volume = volume;
+  if (typeof currentTime === 'number' && Number.isFinite(currentTime) && currentTime >= 0) out.currentTime = currentTime;
+  if (typeof duration === 'number' && Number.isFinite(duration) && duration >= 0) out.duration = duration;
+  const isLive = videoData && typeof videoData === 'object' ? (videoData as { isLive?: unknown }).isLive : undefined;
+  if (typeof isLive === 'boolean') out.isLive = isLive;
   return out;
 }
