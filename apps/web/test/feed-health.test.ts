@@ -1,6 +1,6 @@
 import type { ConnectorHealth } from '@eio/core';
 import { describe, expect, it } from 'vitest';
-import { FEED_BADGE, FEED_TONE, REASON_WORDS, feedCounts, feedOf, feedView, sortFeeds } from '../src/lib/feed-health';
+import { CONN_LABEL, FEED_BADGE, FEED_TONE, REASON_WORDS, feedCounts, feedOf, feedView, sortFeeds } from '../src/lib/feed-health';
 import { mockHealth } from '../src/mock/generators';
 
 const h = (over: Partial<ConnectorHealth>): ConnectorHealth => ({ id: 'c', status: 'ok', runs: 1, lastOkAt: 1, ...over });
@@ -46,5 +46,13 @@ describe('feed level to colour and label', () => {
   it('the mock health shows every level', () => {
     const levels = new Set(mockHealth(Date.now()).map((x) => feedOf(x).level));
     expect([...levels].sort()).toEqual(['off', 'ok', 'orange', 'red']);
+  });
+});
+
+describe('connection labels', () => {
+  it('has a label and tone for every connection state', () => {
+    expect(Object.keys(CONN_LABEL).sort()).toEqual(['connecting', 'live', 'mock', 'offline', 'reconnecting']);
+    expect(CONN_LABEL.live).toEqual(['Link up', 'ok']);
+    expect(CONN_LABEL.offline[1]).toBe('bad');
   });
 });

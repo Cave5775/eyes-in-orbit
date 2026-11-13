@@ -116,3 +116,16 @@ export function feedInfo(id: string): FeedInfo {
 
 /** Ids whose popup section shows the DSN link table. */
 export const DSN_FEEDS: ReadonlySet<string> = new Set(['dsn', 'dsn-now', 'dsn-xml']);
+
+/**
+ * The server connector whose credentials (`GET /api/credentials`, `CredentialInfo.connector`) a feed's popup section edits,
+ * or null when the feed needs none. Covers the mock id of Launch Library 2.
+ */
+const CREDENTIAL_CONNECTOR: Record<string, string> = {
+  spacetrack: 'spacetrack',
+  launchlibrary: 'launchlibrary',
+  'launch-library-2': 'launchlibrary',
+};
+export function credentialConnector(feedId: string): string | null {
+  return CREDENTIAL_CONNECTOR[feedId] ?? null;
+}
