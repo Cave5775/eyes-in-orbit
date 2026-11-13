@@ -275,7 +275,6 @@ button.chip:hover { border-color: var(--ink-3); color: var(--ink); }
 @media (max-width: 1100px) {
   .utc-time { font-size: 18px; }
   .transport .mode, .key kbd { display: none; }
-  .health-btn > span:not(.chip) { display: none; }
 }
 @media (max-width: 960px) {
   .topbar { gap: 8px; padding: 0 8px; }
@@ -621,7 +620,6 @@ video.stream-frame { background: #000; object-fit: contain; }
 /* ==== end FRAME-UI ==== */
 
 /* ==== WP5 (bodies as entities): filter chip strips with every kind / group reachable ==== */
-.chips.chips-scroll { max-height: 76px; overflow-y: auto; }
 .chip.more { color: var(--accent); border-style: dashed; cursor: pointer; }
 .chip.more:hover { border-color: var(--accent); }
 /* ==== end WP5 ==== */

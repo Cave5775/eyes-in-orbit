@@ -33,7 +33,7 @@ export function inertialToFixedMatrix(body: Body, tMs: number): Mat3 {
 }
 
 /** Rotation rate of the body, rad/s (used for fixed-frame velocity terms). */
-export function bodyAngularRate(body: Body): number {
+function bodyAngularRate(body: Body): number {
   if (body.rotation.kind === 'gmst') return (360.98564736629 * DEG) / 86400;
   return (body.rotation.rateDegPerDay * DEG) / 86400;
 }

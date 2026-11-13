@@ -48,7 +48,7 @@ export const YT_ORIGIN = 'https://www.youtube.com';
  * - `autoplay=1` with `mute=1`: browsers only allow muted autoplay. A user who opened a stream gets it playing,
  *   muted; the strip unmutes it.
  */
-export function embedParams(origin?: string): URLSearchParams {
+function embedParams(origin?: string): URLSearchParams {
   const p = new URLSearchParams({
     autoplay: '1',
     mute: '1',

@@ -57,7 +57,7 @@ export class PathOverlay {
   private readonly colors: { past: THREE.Color; pastHot: THREE.Color; future: THREE.Color; futureHot: THREE.Color };
   private hot = false;
 
-  constructor(private world: THREE.Object3D, pointMaterial: THREE.Material, color: THREE.Color) {
+  constructor(world: THREE.Object3D, pointMaterial: THREE.Material, color: THREE.Color) {
     this.colors = {
       past: color.clone().multiplyScalar(0.5), pastHot: color.clone().lerp(new THREE.Color(1, 1, 1), 0.2),
       future: color.clone().lerp(new THREE.Color(1, 1, 1), 0.4), futureHot: new THREE.Color(1, 1, 1),

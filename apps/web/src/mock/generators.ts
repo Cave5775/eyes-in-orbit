@@ -34,7 +34,7 @@ const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
 /** Revolutions per day for a circular orbit at altitude `altKm`. */
-export const meanMotionForAlt = (altKm: number): number => {
+const meanMotionForAlt = (altKm: number): number => {
   const a = EARTH.radiusKm + altKm;
   return (Math.sqrt(MU / (a * a * a)) * 86400) / (2 * Math.PI);
 };
@@ -55,7 +55,7 @@ export interface OmmSpec {
 }
 
 /** COSPAR piece letters in launch order: A, B .. Z, AA, AB .. */
-export function pieceLetters(i: number): string {
+function pieceLetters(i: number): string {
   if (i < 26) return String.fromCharCode(65 + i);
   const n = i - 26;
   return String.fromCharCode(65 + (Math.floor(n / 26) % 26)) + String.fromCharCode(65 + (n % 26));

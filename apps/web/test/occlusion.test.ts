@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EARTH, geodeticToFixed } from '@eio/core';
-import { ELLIPSOID_K, MAX_OCCLUDERS, OccluderSet, chordSagKm, earthOccludes, horizonDistanceKm, sphereOccludes, sphereView, type SceneBody } from '../src/lib/occlusion';
+import { ELLIPSOID_K, OccluderSet, chordSagKm, earthOccludes, horizonDistanceKm, sphereOccludes, sphereView, type SceneBody } from '../src/lib/occlusion';
 import type { V3 } from '../src/lib/camera';
 import { glslBodyHides } from './glsl-occlusion';
 

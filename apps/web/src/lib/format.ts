@@ -83,7 +83,7 @@ export function fmtDist(km: number | undefined | null): string {
   return `${fmtNum(km, km < 100 ? 2 : 0)} km`;
 }
 
-export function fmtDuration(sec: number | undefined): string {
+function fmtDuration(sec: number | undefined): string {
   if (sec == null || !Number.isFinite(sec)) return DASH;
   const s = Math.round(Math.abs(sec));
   if (s < 90) return `${s}s`;

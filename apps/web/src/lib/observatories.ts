@@ -33,8 +33,6 @@ export const SURVEYS: readonly Survey[] = [
 
 export const surveyOf = (id: string): Survey | undefined => SURVEYS.find((s) => s.id === id);
 
-export const surveyLabel = (id: string): string => SURVEYS.find((s) => s.id === id)?.label ?? id;
-
 /** Default centre for a space telescope (no pointing data): the Galactic centre, Sgr A* (J2000 17h45m40.04s -29d00m28.1s). */
 export const DEFAULT_SPACE_TARGET = { raDeg: 266.41684, decDeg: -29.00781, name: 'the Galactic centre' } as const;
 

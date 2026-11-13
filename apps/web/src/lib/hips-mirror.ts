@@ -29,7 +29,7 @@ export async function firstReachable(bases: readonly string[], probe: HipsProbe)
 }
 
 /** Browser probe: GET the properties file (CORS is open on the CDS, IRSA, ESA and CASDA mirrors) and check it is one. */
-export const browserProbe: HipsProbe = async (base) => {
+const browserProbe: HipsProbe = async (base) => {
   const r = await fetch(`${base}/properties`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), cache: 'force-cache', referrerPolicy: 'no-referrer' });
   if (!r.ok) return false;
   return /hips_/i.test(await r.text());

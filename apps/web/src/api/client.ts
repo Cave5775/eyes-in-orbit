@@ -20,7 +20,7 @@ const qs = (params: Record<string, string | number | undefined>): string => {
   return s ? `?${s}` : '';
 };
 
-export const restApi: Api = {
+const restApi: Api = {
   entities: (since) => getJson(`/api/entities${qs({ since })}`, 60_000),
   search: (q, limit = 20) => getJson(`/api/search${qs({ q, limit })}`, 8_000),
   launches: async () => (await getJson<{ launches: Launch[] }>('/api/launches')).launches,

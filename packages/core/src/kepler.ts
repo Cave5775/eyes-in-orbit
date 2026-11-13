@@ -2,7 +2,7 @@ import { J2000_MS, Vec3, wrap2Pi } from './math';
 import type { KeplerElements } from './types';
 
 /** Solve Kepler's equation M = E - e sin E for E (elliptical orbits). */
-export function solveKepler(m: number, e: number): number {
+function solveKepler(m: number, e: number): number {
   const M = wrap2Pi(m);
   let E = e < 0.8 ? M : Math.PI;
   for (let i = 0; i < 30; i++) {

@@ -330,7 +330,7 @@ export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, invB2 =
 }
 
 /** The 1-D radial opacity/colour texture of a ring system (\`ringTexture\`), linear filtered, edge clamped. */
-export function createRingData(ring: RingStyle): THREE.DataTexture {
+function createRingData(ring: RingStyle): THREE.DataTexture {
   const w = 512;
   const tex = new THREE.DataTexture(ringTexture(ring, w), w, 1, THREE.RGBAFormat);
   tex.minFilter = tex.magFilter = THREE.LinearFilter;

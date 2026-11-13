@@ -132,7 +132,6 @@ export function filterRecords<T extends QueryTarget>(records: Iterable<T>, q: Qu
 export const termIs = (t: Term, key: TermKey, value: string, neg = false): boolean => t.key === key && t.value === value && !!t.neg === neg;
 export const findTerm = (q: Query, key: TermKey, value: string, neg = false): Term | undefined => q.terms.find((t) => termIs(t, key, value, neg));
 export const tagTerms = (q: Query): Term[] => q.terms.filter((t) => t.key !== 'text');
-export const hideTerms = (q: Query): Term[] => q.terms.filter((t) => t.effect === 'hide');
 /** The typed text of a query ('' when none). */
 export const textOf = (q: Query): string => q.terms.find((t) => t.key === 'text')?.value ?? '';
 
@@ -220,7 +219,7 @@ const isTagKey = (k: unknown): k is TagKey => typeof k === 'string' && (TAG_KEYS
  * meaning: the category it named (`cat:satellite` was the category `satellites`, `cat:moon` all the bodies) as the type of
  * that id; a `kind` value is the kind. null for a key that is neither (nor a current one) and for an empty value.
  */
-export function migrateLegacyTag(key: unknown, value: unknown): { key: TagKey; value: string } | null {
+function migrateLegacyTag(key: unknown, value: unknown): { key: TagKey; value: string } | null {
   if (typeof value !== 'string') return null;
   let v: string;
   if (key === 'cat') {
