@@ -14,7 +14,7 @@ export const FP_FOV_MAX = 120;
 export const FP_FOV_START = 60;
 /** Eye height above a ground site, km (2 m). */
 export const FP_EYE_KM = 0.002;
-/** The look-at point is this far in front of the eye, km. The camera does not orbit it: it only gives the scope policy (lib/scope.ts) a focus and a scale that reach the whole sky. */
+/** The look-at point is this far in front of the eye, km. The camera does not orbit it: it only gives the scope policy (lib/scope.ts) a focus and a scale (80,000 km): the sky satellites stay in scope, but distant objects (JWST, Moon orbiters, deep-space probes) are drawn only when selected, related or hovered. */
 export const FP_LOOK_KM = 1000;
 /** Highest and lowest elevation: never straight up or down, where the vertical would be parallel to the view (about 86 deg). */
 export const FP_MAX_EL = 1.5;

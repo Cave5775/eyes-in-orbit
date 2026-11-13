@@ -734,7 +734,7 @@ export class SceneController {
   }
 
   /** End the first-person view (no-op when off): the field of view and the previous distance, azimuth and elevation come back, in the globe view. */
-  private leaveFirstPerson(): void {
+  leaveFirstPerson(): void {
     const fp = this.fp;
     if (!fp) return;
     this.fp = null;
@@ -1419,6 +1419,8 @@ export class SceneController {
       if (Math.hypot(p.x - d.x, p.y - d.y) > 4 || performance.now() - d.t > 600) return;
       // one candidate selects it (a body too: objects over a small far body are hidden, so that click lands on the body); several open the choice popup
       const { ids, total } = this.pickAll(p.x, p.y, POPUP_MAX, true);
+      // first-person: the ground under the cursor is the Earth, and a click on it must not end the view (only an object or empty sky is picked)
+      if (this.fp && ids.length > 0 && ids.every((id) => this.bodyIds.has(id))) return;
       // the trajectory is the lowest priority: below every object and the popup. Over a body alone (zoomed in, the Earth's
       // disc covers the view) it still wins, or a path over the globe could not be clicked
       if (ids.every((id) => this.bodyIds.has(id))) {
@@ -1538,7 +1540,12 @@ export class SceneController {
     let anchored: boolean;
     let focusBody: string | undefined;
     // first-person: the camera stands at the observatory, which must have a position (else the view ends, like the surface view)
-    if (this.fp && !this.worldPos(this.fp.id, t, this.anchor)) this.leaveFirstPerson();
+    if (this.fp && !this.worldPos(this.fp.id, t, this.anchor)) {
+      // the observatory lost its position (an ephemeris window ended): a free globe view where we stood, and Follow is off to match
+      this.leaveFirstPerson();
+      this.setFollow(false);
+      this.cb.onFollowChange?.(false);
+    }
     if (this.fp) {
       anchored = true;
     } else if (this.surfaceOn) {

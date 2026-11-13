@@ -29,8 +29,8 @@ const HELP: [string, string][] = [
   ['F', 'Fit the selection and its related objects'],
   ['Shift+F', 'Fit everything visible (respects the search and the hidden groups)'],
   ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or Surface switches to the globe view, and that choice is remembered until you press S again'],
-  ['Look from here', 'Observatories panel: the camera stands at the selected observatory (a ground site at eye height, a space telescope where it is now) and looks outward with a level horizon. Left drag turns the view, the wheel changes the field of view (1 to 120 degrees), pan is off. Esc or Leave returns to the camera you had'],
-  ['Esc', 'Deselect and return to the Earth view (also leaves the first-person view)'],
+  ['Look from here', 'Observatories panel: the camera stands at the selected observatory (a ground site at eye height, a space telescope where it is now) and looks outward with a level horizon. Left drag turns the view, the wheel changes the field of view (1 to 120 degrees), pan is off. Esc or Leave returns to the Earth view you had (the observatory stays selected)'],
+  ['Esc', 'Deselect and return to the Earth view (while in the first-person view it only leaves that view, a second Esc deselects)'],
   ['Follow, Fit, Model', 'Camera actions for the selection, in the selection panel on the right. Follow keeps the camera on the object; Fit is the same as F'],
   ['Model', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or Model on such a selection flies to it'],
   ['View: Labels', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
@@ -150,6 +150,7 @@ export function SceneView() {
       toggleSurface: () => ctl.toggleSurface(),
       viewModel: (id) => { ctl.viewModel(id); },
       lookFrom: (id) => { ctl.lookFrom(id); },
+      leaveFirstPerson: () => ctl.leaveFirstPerson(),
     };
     runtime.camera = camera;
     if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime, clock };
@@ -245,8 +246,8 @@ export function SceneView() {
       </div>
       <div className="scene-tools" role="toolbar" aria-label="Camera">
         {firstPerson && (
-          <button className="key on" onClick={() => useStore.getState().resetView()}
-            title="Leave the first-person view: back to the camera you had, in the Earth view (Esc)">
+          <button className="key on" onClick={() => runtime.camera?.leaveFirstPerson()}
+            title="Leave the first-person view: back to the Earth view you had, the observatory stays selected (Esc)">
             Leave<kbd>Esc</kbd>
           </button>
         )}

@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { usePanels } from './state/panels';
+import { runtime } from './state/runtime';
 import { useStore } from './state/store';
+import { useView } from './state/view';
 import { DetailPanel } from './ui/DetailPanel';
 import { EntityBrowser } from './ui/EntityBrowser';
 import { FloatingLayer } from './ui/FloatingLayer';
@@ -19,7 +21,11 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (e.key === 'Escape' && !(t instanceof HTMLInputElement && t.type === 'search' && t.value)) useStore.getState().resetView();
+      if (e.key === 'Escape' && !(t instanceof HTMLInputElement && t.type === 'search' && t.value)) {
+        // first-person: the first Esc only steps back out of it (the selection stays); the next one is the usual reset
+        if (runtime.camera && useView.getState().firstPerson) runtime.camera.leaveFirstPerson();
+        else useStore.getState().resetView();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
