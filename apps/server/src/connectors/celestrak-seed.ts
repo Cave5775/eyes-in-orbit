@@ -1,6 +1,8 @@
 import { mkdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HttpError, TIMEOUT_MS, diagnosticHeaders, requestHeaders, withCauseCode } from '../http-util';
+import { guardedFetch } from '../net/guarded-fetch';
+import type { Limiter } from '../net/limiter';
 import { FETCH_ORDER, parseOmmJson, type SatGroup } from './celestrak';
 
 /** A saved file younger than this is not downloaded again (CelesTrak refreshes about every 2 h and asks clients not to repeat). */
@@ -13,11 +15,10 @@ export interface SeedOptions {
   maxAgeMs?: number;
   /** download even when the saved file is recent */
   force?: boolean;
+  /** every download passes this limiter (source `celestrak`: 2 s spacing, 15 requests per hour, blocks persist across runs) */
+  limiter: Limiter;
   fetchImpl?: typeof fetch;
   now?: () => number;
-  /** pause before a download that follows another one (default 1 to 2 s) */
-  spacingMs?: () => number;
-  sleep?: (ms: number) => Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -42,13 +43,9 @@ export async function seedGroups(opts: SeedOptions): Promise<SeedResult> {
   const groups = opts.groups ?? FETCH_ORDER;
   const maxAge = opts.maxAgeMs ?? SEED_MAX_AGE_MS;
   const now = opts.now ?? Date.now;
-  const doFetch = opts.fetchImpl ?? fetch;
-  const spacing = opts.spacingMs ?? (() => 1000 + Math.random() * 1000);
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const log = opts.log ?? (() => {});
   const result: SeedResult = { saved: [], fresh: [], skipped: [] };
   mkdirSync(opts.dir, { recursive: true });
-  let downloaded = false;
   for (const group of groups) {
     if (result.failed) {
       result.skipped.push(group);
@@ -61,13 +58,13 @@ export async function seedGroups(opts: SeedOptions): Promise<SeedResult> {
       log(`${group}: saved ${Math.round(age / 60_000)} min ago, kept`);
       continue;
     }
-    if (downloaded) await sleep(spacing());
-    downloaded = true;
     try {
-      const res = await doFetch(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=json`, {
+      const r = await guardedFetch(opts.limiter, 'celestrak', `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=json`, {
         headers: requestHeaders(),
         signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
+      }, { mode: 'poll', fetch: opts.fetchImpl });
+      if ('limited' in r) throw new Error(`rate limited until ${new Date(r.retryAt).toISOString().slice(11, 16)}Z (${r.reason})`);
+      const res = r.response;
       const body = await res.text();
       if (!res.ok) throw new HttpError(res.status, res.url || group, body, diagnosticHeaders(res.headers));
       const omms = parseOmmJson(body);

@@ -35,11 +35,20 @@ export function newsUrl(opts: { search?: string; limit?: number } = {}): string 
   return `${BASE}?${p}`;
 }
 
-/** Search articles (cached 10 min per query). Offline with no cache yields an empty list. */
+/** Longest search text sent to SNAPI (characters). */
+export const MAX_QUERY_CHARS = 80;
+
+/** Lower case, single spaces, at most `MAX_QUERY_CHARS`: the same text for the cache key and the request. */
+export const normalizeQuery = (search: string): string => search.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, MAX_QUERY_CHARS).trim();
+
+/**
+ * Search articles (cached 10 min per query). A user-triggered `demand` request: when the limiter refuses it (20 per hour,
+ * 2 s spacing) it answers from the cache, else throws `LimitedError` at once. Offline with no cache yields an empty list.
+ */
 export async function searchNews(http: Http, search: string, limit = 20): Promise<Article[]> {
-  const q = search.trim().toLowerCase();
+  const q = normalizeQuery(search);
   try {
-    return (await http.cachedFetch(`snapi:search:${limit}:${q}`, newsUrl({ search, limit }), SEARCH_TTL_MS, parseArticles)).value;
+    return (await http.cachedFetch(`snapi:search:${limit}:${q}`, newsUrl({ search: q, limit }), SEARCH_TTL_MS, parseArticles, undefined, { source: 'snapi', mode: 'demand' })).value;
   } catch (err) {
     if (http.offline) return [];
     throw err;
@@ -51,7 +60,7 @@ export const snapi: Connector = {
   intervalMs: GLOBAL_TTL_MS,
   startDelayMs: 1500,
   async run(ctx) {
-    const { value } = await ctx.cachedFetch('snapi:global', newsUrl({ limit: 30 }), GLOBAL_TTL_MS - 10_000, parseArticles);
+    const { value } = await ctx.cachedFetch('snapi:global', newsUrl({ limit: 30 }), GLOBAL_TTL_MS - 10_000, parseArticles, undefined, { source: 'snapi', mode: 'poll', staleRetryMs: GLOBAL_TTL_MS });
     ctx.hub.setArticles(value);
   },
 };

@@ -504,6 +504,7 @@ body.floating-resize, body.floating-resize * { cursor: nwse-resize !important; }
 .ds-kv dt { color: var(--ink-3); }
 .ds-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .ds-err { color: var(--bad); }
+.ds-limited { color: var(--orange); }
 .ds-sub { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 12.5px; font-weight: 600; font-stretch: var(--narrow); color: var(--ink); }
 .ds-sub .mono { font-size: 11px; font-weight: 400; }
 @media (max-width: 640px) {

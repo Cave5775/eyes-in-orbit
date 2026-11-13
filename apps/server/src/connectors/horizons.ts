@@ -1,11 +1,12 @@
 import type { Sample } from '@eio/core';
 import type { Connector } from '../connector';
+import { LimitedError } from '../net/limiter';
 import { DEFAULT_HORIZONS, DSN_TARGETS, horizonsSpecOf, probeEntity, probeId, type HorizonsSpec } from './dsn-targets';
 
 const API = 'https://ssd.jpl.nasa.gov/api/horizons.api';
 const TTL_MS = 23 * 3600_000;
 const REFRESH_MS = 12 * 3600_000;
-const DELAY_MS = 1500;
+
 const HOUR_MS = 3600_000;
 const DAY_MS = 86_400_000;
 const JD_UNIX_EPOCH = 2440587.5;
@@ -71,8 +72,7 @@ export function parseHorizonsVectors(text: string): Sample[] {
   return samples;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
+/** One request at a time, 1.5 s apart, at most 60 per hour and a 15 min stop after HTTP 503: the limiter (`net/limits.ts`, source `horizons`). */
 export const horizons: Connector = {
   id: 'horizons',
   intervalMs: REFRESH_MS,
@@ -80,21 +80,25 @@ export const horizons: Connector = {
   async run(ctx) {
     const failed: string[] = [];
     let cached = 0, n = 0;
+    let limited: LimitedError | undefined;
     for (const [code, target] of Object.entries(DSN_TARGETS)) {
       try {
         const spec = horizonsSpecOf(target);
-        const res = await ctx.cachedFetch(horizonsCacheKey(target.horizons, spec), horizonsUrl(target.horizons, Date.now(), spec), TTL_MS, parseHorizonsVectors);
+        const res = await ctx.cachedFetch(horizonsCacheKey(target.horizons, spec), horizonsUrl(target.horizons, Date.now(), spec), TTL_MS, parseHorizonsVectors, undefined, { source: 'horizons', mode: 'poll' });
         const prev = ctx.hub.graph.get(probeId(code)) ?? probeEntity(code);
         ctx.hub.upsert({ ...prev, bodyId: spec.bodyId, provider: { type: 'sampled', frame: spec.frame, samples: res.value } });
         n++;
         if (res.fromCache) cached++;
-        else await sleep(DELAY_MS);
       } catch (err) {
         failed.push(`${code}: ${(err as Error).message.slice(0, 100)}`);
-        if (ctx.http.offline) continue;
-        await sleep(DELAY_MS);
+        if (err instanceof LimitedError) {
+          // the limiter refused (cap, block): the other targets would be refused too
+          limited = err;
+          break;
+        }
       }
     }
+    if (!n && limited) throw limited;
     if (!n) throw new Error(`no ephemerides: ${failed[0]}`);
     ctx.log(`${n} ephemerides (${cached} cached)${failed.length ? `, failed: ${failed.join('; ')}` : ''}`);
     if (failed.length) {

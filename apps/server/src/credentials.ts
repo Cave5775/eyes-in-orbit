@@ -1,5 +1,6 @@
 import type { CredentialInfo, CredentialKey } from '@eio/core';
 import { clearBackoff } from './backoff';
+import { limiterFor } from './net/limiter';
 import type { Config } from './config';
 import type { Store } from './store';
 
@@ -11,27 +12,33 @@ interface CredentialField {
   secret: boolean;
   /** environment variable used when nothing was entered in the UI */
   env: string;
-  /** cache and backoff entries to drop when the value changes, so the new value is tried at once */
-  reset?: { cache?: string[]; backoff?: string[] };
+  /**
+   * cache, backoff and limiter-block entries to drop when the value changes, so the new value can be tried. Only the failure
+   * block of a limiter source is lifted (`limiter`): its spacing and caps stay, so a saved credential never causes a request
+   * the limits do not allow.
+   */
+  reset?: { cache?: string[]; backoff?: string[]; limiter?: string[] };
 }
 
 /** Every key the UI may set. Only values some connector actually reads belong here (the stub connectors are left out). */
 export const CREDENTIAL_FIELDS: readonly CredentialField[] = [
   {
     key: 'spacetrackUser', label: 'Space-Track username (e-mail)', connector: 'spacetrack', secret: false, env: 'SPACETRACK_USER',
-    reset: { cache: ['spacetrack:starlink'], backoff: ['spacetrack'] },
+    reset: { backoff: ['spacetrack'], limiter: ['spacetrack:login', 'spacetrack:query'] },
   },
   {
     key: 'spacetrackPassword', label: 'Space-Track password', connector: 'spacetrack', secret: true, env: 'SPACETRACK_PASSWORD',
-    reset: { cache: ['spacetrack:starlink'], backoff: ['spacetrack'] },
+    reset: { backoff: ['spacetrack'], limiter: ['spacetrack:login', 'spacetrack:query'] },
   },
   { key: 'll2Token', label: 'Launch Library 2 token', connector: 'launchlibrary', secret: true, env: 'LL2_TOKEN' },
-  { key: 'discosToken', label: 'ESA DISCOS API token', connector: 'discos', secret: true, env: 'DISCOS_TOKEN', reset: { backoff: ['describe:discos'] } },
+  { key: 'discosToken', label: 'ESA DISCOS API token', connector: 'discos', secret: true, env: 'DISCOS_TOKEN', reset: { backoff: ['describe:discos'], limiter: ['discos'] } },
 ];
 
 const storeKey = (key: CredentialKey): string => `credential:${key}`;
 const TTL_MS = 10 * 365 * 86_400_000; // effectively forever; Store.prune only drops rows long past their TTL
 const MAX_LENGTH = 256;
+/** A credential save lifts a failure block at most this often: repeated saves must not fire logins at a bad account. */
+export const CLEAR_BLOCK_EVERY_MS = 3600_000;
 
 export class CredentialError extends Error {}
 
@@ -102,6 +109,7 @@ export class Credentials {
       connectors.add(field.connector);
       for (const k of field.reset?.cache ?? []) this.store.delete(k);
       for (const s of field.reset?.backoff ?? []) clearBackoff(this.store, s);
+      for (const s of field.reset?.limiter ?? []) limiterFor(this.store).clearBlock(s, CLEAR_BLOCK_EVERY_MS);
     }
     return { changed, connectors: [...connectors] };
   }

@@ -1,11 +1,15 @@
 import { isTrustedDescribeUrl, type Description, type EntityRecord } from '@eio/core';
 import { useEffect, useState } from 'react';
 import { api } from '../../api/client';
+import { createDescribeCache, limitedNotice } from '../../lib/describe-cache';
 import { fmtAgo } from '../../lib/format';
 import { useWallNow } from '../hooks';
 
 /** The text-description part of the About tab, split out so it can be rendered from a fixed `Description`. */
 export function AboutBody({ d, now }: { d: Description; now: number }) {
+  // a thumbnail that fails to load is hidden for good: no retry, no second request to the image host
+  const [badThumb, setBadThumb] = useState<string | null>(null);
+  const limited = limitedNotice(d);
   const links: [string, string][] = [];
   // defence in depth: the server already filters, but only trusted hosts are ever rendered as a link or image
   if (d.summary && isTrustedDescribeUrl(d.summary.url)) links.push(['Wikipedia', d.summary.url]);
@@ -16,10 +20,10 @@ export function AboutBody({ d, now }: { d: Description; now: number }) {
     <div className="about">
       {d.summary && (
         <div className="about-sum">
-          {d.summary.thumbnail && isTrustedDescribeUrl(d.summary.thumbnail.url) && (
+          {d.summary.thumbnail && isTrustedDescribeUrl(d.summary.thumbnail.url) && badThumb !== d.summary.thumbnail.url && (
             <img
               className="about-thumb" src={d.summary.thumbnail.url} alt="" loading="lazy" referrerPolicy="no-referrer"
-              width={Math.min(d.summary.thumbnail.width, 96)} />
+              width={Math.min(d.summary.thumbnail.width, 96)} onError={() => setBadThumb(d.summary!.thumbnail!.url)} />
           )}
           <div>
             <div className="about-title">{d.summary.title}</div>
@@ -35,7 +39,8 @@ export function AboutBody({ d, now }: { d: Description; now: number }) {
           ))}
         </dl>
       )}
-      {nothing && (
+      {limited && <p className="about-text orange" role="status">{limited}</p>}
+      {nothing && !limited && (
         <p className="about-text">
           No article found for this object. <a href={isTrustedDescribeUrl(d.searchUrl) ? d.searchUrl : 'https://en.wikipedia.org/'} target="_blank" rel="noopener noreferrer">Search Wikipedia</a>
         </p>
@@ -55,6 +60,10 @@ export function AboutBody({ d, now }: { d: Description; now: number }) {
   );
 }
 
+/** One lookup per object per minute, however often the tab is opened (`lib/describe-cache.ts`). */
+const describeCache = createDescribeCache((id) => api.describe(id));
+export const clearDescribeCache = (): void => describeCache.clear();
+
 /** About: a description of the selected object, looked up by the server only now (Wikipedia via Wikidata, ESA DISCOS with a token). */
 export function AboutTab({ rec }: { rec: EntityRecord }) {
   const [d, setD] = useState<Description | null>(null);
@@ -65,7 +74,7 @@ export function AboutTab({ rec }: { rec: EntityRecord }) {
     let stale = false;
     setD(null);
     setError(null);
-    api.describe(rec.id).then((x) => !stale && setD(x)).catch((e: Error) => !stale && setError(e.message));
+    describeCache.get(rec.id).then((x) => !stale && setD(x)).catch((e: Error) => !stale && setError(e.message));
     return () => { stale = true; };
   }, [rec.id]);
 

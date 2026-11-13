@@ -29,6 +29,19 @@ describe('launchlibrary normalize', () => {
     expect(l.pad).toMatchObject({ name: 'Space Launch Complex 4E', latitude: 34.632, longitude: -120.611, countryCode: 'USA' });
   });
 
+  it('maps a real LL2 2.3.0 detailed launch (vid_urls, landing_location, pad.country)', () => {
+    const j = JSON.parse(readFileSync(new URL('./fixtures/ll2-2.3.0-launch.json', import.meta.url), 'utf8'));
+    const l = normalizeLaunch(j.results[0], Date.parse('2026-11-12T05:00:00Z'));
+    expect(l).toMatchObject({
+      name: 'Falcon 9 Block 5 | USSF-627', status: { abbrev: 'Success' }, provider: 'SpaceX', vehicle: 'Falcon 9 Block 5',
+      mission: { orbit: 'LEO' }, pad: { name: 'Space Launch Complex 4E', latitude: 34.632, countryCode: 'USA' },
+      landing: { attempt: true, location: 'OCISLY', type: 'ASDS' },
+      image: expect.stringMatching(/^https:\/\//),
+    });
+    expect(l.streams.length).toBeGreaterThan(0);
+    expect(l.streams[0].url).toMatch(/^https:\/\//);
+  });
+
   it('classifies stream hosts and puts official webcasts first', () => {
     expect(streamKind('https://www.youtube.com/watch?v=x')).toBe('youtube');
     expect(streamKind('https://youtu.be/x')).toBe('youtube');

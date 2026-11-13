@@ -1,6 +1,7 @@
-import { WebSocket } from 'ws';
 import { ISS_CHANNELS, type IssArrays, type IssChannel, type TelemetryPoint } from '@eio/core';
 import type { Connector } from '../connector';
+import { guardedWebSocket } from '../net/guarded-fetch';
+import { LimitedError } from '../net/limiter';
 
 const URL = 'wss://push.lightstreamer.com/lightstreamer';
 const PROTOCOL = 'TLCP-2.5.0.lightstreamer.com';
@@ -143,9 +144,12 @@ export const issLive: Connector = {
   id: 'iss-live',
   intervalMs: 5000,
   topic: 'iss',
-  run(ctx) {
+  async run(ctx) {
+    // one connection at a time, at least 30 s between connect attempts, at most 12 per hour (`net/limits.ts`, source `iss-live`)
+    const socket = await guardedWebSocket(ctx.http.limiter, 'iss-live', URL, PROTOCOL);
+    if ('limited' in socket) throw new LimitedError('iss-live', socket.retryAt, socket.reason, socket.kind, socket.blockKind);
+    const ws = socket.ws;
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(URL, PROTOCOL);
       const state = ISS_ITEMS.map(() => [null, null] as (string | null)[]);
       const pending = new Map<string, TelemetryPoint>();
       const values = new Map<string, IssSample>();

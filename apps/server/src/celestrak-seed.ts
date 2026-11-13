@@ -8,6 +8,8 @@
  */
 import { join } from 'node:path';
 import { loadConfig, loadDotEnv } from './config';
+import { limiterFor } from './net/limiter';
+import { Store } from './store';
 import { FETCH_ORDER, type SatGroup } from './connectors/celestrak';
 import { seedGroups } from './connectors/celestrak-seed';
 
@@ -25,7 +27,10 @@ if (unknown.length) {
 
 const dir = join(config.dataDir, 'celestrak');
 console.log(`saving CelesTrak groups to ${dir}${force ? ' (forced)' : ''}`);
-const result = await seedGroups({ dir, groups, force, log: (line) => console.log(`  ${line}`) });
+// the same limiter state as the server (data/cache.sqlite): the spacing, hourly cap and any block carry over
+const store = new Store(join(config.dataDir, 'cache.sqlite'));
+const result = await seedGroups({ dir, groups, force, limiter: limiterFor(store), log: (line) => console.log(`  ${line}`) });
+store.close();
 console.log(`saved ${result.saved.length}, kept ${result.fresh.length} recent${result.skipped.length ? `, not tried ${result.skipped.length}` : ''}`);
 if (result.failed) {
   console.log(`stopped at ${result.failed.group}: ${result.failed.error}`);

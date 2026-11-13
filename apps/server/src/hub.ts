@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import {
-  classifyFeed, EntityGraph, type Article, type ConnectorHealth, type DsnSnapshot, type EntityRecord, type IssArrays, type IssFix, type Launch,
+  classifyFeed, EntityGraph, type Article, type ConnectorHealth, type DsnSnapshot, type FeedLimit, type EntityRecord, type IssArrays, type IssFix, type Launch,
   type LiveAscent, type TelemetryPoint,
 } from '@eio/core';
 import type { Trajectory } from './trajectory';
@@ -21,6 +21,8 @@ export class Hub extends EventEmitter {
   /** latest structured SARJ / BGA / attitude values from the ISSLIVE feed */
   issArrays?: IssArrays;
   readonly telemetry = new Map<string, TelemetryPoint>();
+  /** request budget of a feed from the limiter (set by the Scheduler); shown as `health.limit` */
+  limitOf?: (feedId: string) => FeedLimit | undefined;
   /** ascent trajectories loaded from data/trajectories */
   trajectories: Trajectory[] = [];
   /** measured ascent rows posted to POST /api/telemetry/:launchId, by LL2 launch id */
@@ -102,7 +104,11 @@ export class Hub extends EventEmitter {
 
   /** The health records as sent to clients (REST and WebSocket): each carries its `feed` colour level and reason. */
   healthList(): ConnectorHealth[] {
-    return [...this.health.values()].map((h) => ({ ...h, feed: classifyFeed(h) }));
+    return [...this.health.values()].map((h) => {
+      const limit = this.limitOf?.(h.id);
+      const withLimit = limit ? { ...h, limit } : { ...h, limit: undefined };
+      return { ...withLimit, feed: classifyFeed(withLimit) };
+    });
   }
 
   subscribe(topic: string): void {

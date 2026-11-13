@@ -117,6 +117,12 @@ function FeedDetail({ id, now }: { id: string; now: number }) {
         <dd className="mono">{h.lastOkAt ? `${fmtAgo(h.lastOkAt, now)} (${hhmmZ(h.lastOkAt)})` : 'never'}</dd>
         <dt>Next run</dt>
         <dd className="mono">{h.nextRunAt ? hhmmZ(h.nextRunAt) : '—'}</dd>
+        {v.budget && (
+          <>
+            <dt>Requests</dt>
+            <dd className="mono" data-testid="feed-budget">{v.budget}{v.limited ? <> · <span className="ds-limited">{v.limited}</span></> : null}</dd>
+          </>
+        )}
         {(h.lastError || v.note) && (
           <>
             <dt>{h.lastError ? 'Error' : 'Note'}</dt>

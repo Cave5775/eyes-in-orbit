@@ -19,12 +19,15 @@ export function normalizeIssFix(raw: Record<string, any>): IssFix {
   return fix;
 }
 
-/** 1 Hz ISS fix, polled only while at least one client has subscribed to topic `iss`. */
+/** The poll interval: wheretheiss.at asks for about one request per second; every 2 s leaves room (cap 1800 per hour in `net/limits.ts`). */
+export const ISS_POLL_MS = 2000;
+
+/** ISS fix every 2 s, polled only while at least one client has subscribed to topic `iss`. */
 export const issRest: Connector = {
   id: 'iss-rest',
-  intervalMs: 1000,
+  intervalMs: ISS_POLL_MS,
   topic: 'iss',
   async run(ctx) {
-    ctx.hub.setIssFix(normalizeIssFix(JSON.parse(await ctx.http.text(URL))));
+    ctx.hub.setIssFix(normalizeIssFix(JSON.parse(await ctx.http.text(URL, {}, { source: 'wheretheiss', mode: 'poll' }))));
   },
 };

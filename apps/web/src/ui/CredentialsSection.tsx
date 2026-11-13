@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { fmtAgo } from '../lib/format';
 import { useWallNow } from './hooks';
+import { clearDescribeCache } from './detail/AboutTab';
 
 /**
  * Login and key fields of one connector, inside that feed's pane of the Data streams popup. Values go to the local
@@ -31,6 +32,7 @@ export function CredentialsSection({ connector }: { connector: string }) {
     setError(null);
     try {
       setCreds(await api.saveCredentials(values));
+      clearDescribeCache(); // an About answer cached before a DISCOS token was saved says "off"
       setDraft((d) => {
         const next = { ...d };
         for (const k of Object.keys(values) as CredentialKey[]) delete next[k];

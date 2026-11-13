@@ -2,6 +2,8 @@ import type { Omm } from '@eio/core';
 import { clearBackoff, isBackedOff, readBackoff, recordFailure } from '../backoff';
 import type { Connector } from '../connector';
 import { USER_AGENT } from '../http';
+import { guardedFetch } from '../net/guarded-fetch';
+import { LimitedError, hhmmz, type Limiter } from '../net/limiter';
 import { isFresh } from '../store';
 import { parseOmmJson, satelliteEntity } from './celestrak';
 
@@ -13,6 +15,9 @@ export const STARLINK_QUERY =
 const TTL_MS = 3 * 3600_000;
 const CACHE_KEY = 'spacetrack:starlink';
 
+/** A failed login is not tried again for this long (the account may lock out); saving new credentials lifts it. */
+export const FAILED_LOGIN_WAIT_MS = 6 * 3600_000;
+
 /** `name=value` pairs of the Set-Cookie headers, joined into one Cookie header. */
 const cookieHeader = (res: Response): string =>
   res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
@@ -22,10 +27,19 @@ const cookieHeader = (res: Response): string =>
  * is checked as well as the status. Never logs or throws the password.
  */
 export async function fetchSpaceTrackGp(
-  fetchImpl: typeof fetch, user: string, password: string, query = STARLINK_QUERY,
+  limiter: Limiter, user: string, password: string, opts: { fetch?: typeof fetch; query?: string } = {},
 ): Promise<Omm[]> {
   const headers = { 'user-agent': USER_AGENT };
-  const login = await fetchImpl(`${BASE}/ajaxauth/login`, {
+  const query = opts.query ?? STARLINK_QUERY;
+  const send = async (source: string, path: string, init: RequestInit) => {
+    const r = await guardedFetch(limiter, source, `${BASE}${path}`, init, { mode: 'poll', fetch: opts.fetch });
+    if ('limited' in r) throw new LimitedError(source, r.retryAt, r.reason, r.kind, r.blockKind);
+    return r.response;
+  };
+  // the query's own limit (one per 2 h) is checked before logging in, so a refused query never costs a login
+  const gate = limiter.peek('spacetrack:query', 'poll');
+  if ('limited' in gate) throw new LimitedError('spacetrack:query', gate.retryAt, gate.reason, gate.kind, gate.blockKind);
+  const login = await send('spacetrack:login', '/ajaxauth/login', {
     method: 'POST',
     headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ identity: user, password }),
@@ -33,16 +47,21 @@ export async function fetchSpaceTrackGp(
   });
   const loginBody = await login.text();
   if (!login.ok) throw new Error(`HTTP ${login.status} from Space-Track login`);
-  if (/"Login"\s*:\s*"Failed"/i.test(loginBody)) throw new Error('Space-Track login failed (check SPACETRACK_USER / SPACETRACK_PASSWORD)');
+  if (/"Login"\s*:\s*"Failed"/i.test(loginBody)) {
+    // a rejected login is retried only after 6 h, whatever the poll interval; new credentials lift it (credentials.ts)
+    limiter.block('spacetrack:login', FAILED_LOGIN_WAIT_MS, 'failed login', 'failure');
+    limiter.block('spacetrack:query', FAILED_LOGIN_WAIT_MS, 'failed login', 'failure');
+    throw new Error('Space-Track login failed (check SPACETRACK_USER / SPACETRACK_PASSWORD)');
+  }
   const cookie = cookieHeader(login);
   if (!cookie) throw new Error('Space-Track login returned no session cookie');
   try {
-    const res = await fetchImpl(`${BASE}${query}`, { headers: { ...headers, cookie }, signal: AbortSignal.timeout(60_000) });
+    const res = await send('spacetrack:query', query, { headers: { ...headers, cookie }, signal: AbortSignal.timeout(60_000) });
     const text = await res.text();
     if (!res.ok) throw new Error(`HTTP ${res.status} for Space-Track query: ${text.slice(0, 120).replace(/\s+/g, ' ')}`);
     return parseOmmJson(text);
   } finally {
-    await fetchImpl(`${BASE}/ajaxauth/logout`, { headers: { ...headers, cookie }, signal: AbortSignal.timeout(10_000) }).catch(() => {});
+    await send('spacetrack:logout', '/ajaxauth/logout', { headers: { ...headers, cookie }, signal: AbortSignal.timeout(10_000) }).catch(() => {});
   }
 }
 
@@ -77,14 +96,25 @@ export const spacetrack: Connector = {
         ctx.softFail(msg, gate.notBefore - Date.now());
       } else {
         try {
-          omms = await fetchSpaceTrackGp(fetch, user, password);
+          omms = await fetchSpaceTrackGp(ctx.http.limiter, user, password);
           ctx.store.set(CACHE_KEY, omms, TTL_MS);
           clearBackoff(ctx.store, 'spacetrack');
         } catch (err) {
-          const next = recordFailure(ctx.store, 'spacetrack', err);
-          if (!row) throw err;
-          omms = row.value;
-          ctx.softFail((err as Error).message, next.notBefore - Date.now());
+          // refused by the limiter (spacing, cap, block): nothing was sent, so no failure is counted; it is retried when allowed
+          if (err instanceof LimitedError) {
+            // a failed login keeps its red "login rejected" reading until the 6 h wait is over or new credentials arrive
+            const msg = err.reason === 'failed login'
+              ? `Space-Track login failed (check SPACETRACK_USER / SPACETRACK_PASSWORD); next attempt ${hhmmz(err.retryAt)}`
+              : err.message;
+            if (!row) throw err.reason === 'failed login' ? new Error(msg) : err;
+            omms = row.value;
+            ctx.softFail(msg, Math.max(err.retryAt - Date.now(), 1000));
+          } else {
+            const next = recordFailure(ctx.store, 'spacetrack', err);
+            if (!row) throw err;
+            omms = row.value;
+            ctx.softFail((err as Error).message, next.notBefore - Date.now());
+          }
         }
       }
     }

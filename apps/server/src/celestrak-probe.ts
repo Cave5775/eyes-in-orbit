@@ -5,7 +5,12 @@
  * (UND_ERR_CONNECT_TIMEOUT = the TCP connect never completed, i.e. an IP-level block or an egress problem; an HTTP 403
  * would be a rate limit). Exactly one request per run, same headers as the server, 20 s timeout.
  */
+import { join } from 'node:path';
+import { loadConfig, loadDotEnv } from './config';
 import { BODY_KEEP, TIMEOUT_MS, errorCauseCode, requestHeaders } from './http-util';
+import { guardedFetch } from './net/guarded-fetch';
+import { limiterFor } from './net/limiter';
+import { Store } from './store';
 
 const group = process.argv[2] ?? 'stations';
 if (!/^[a-z0-9-]+$/i.test(group)) {
@@ -19,7 +24,16 @@ console.log(`request headers: ${JSON.stringify(headers)}`);
 
 const started = Date.now();
 try {
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  // one request, through the same persistent limiter as the server (a probe inside the spacing, hourly cap or a block is refused)
+  loadDotEnv();
+  const store = new Store(join(loadConfig().dataDir, 'cache.sqlite'));
+  const r = await guardedFetch(limiterFor(store), 'celestrak', url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) }, { mode: 'poll' });
+  store.close();
+  if ('limited' in r) {
+    console.log(`not sent: rate limited until ${new Date(r.retryAt).toISOString().slice(11, 16)}Z (${r.reason})`);
+    process.exit(3);
+  }
+  const res = r.response;
   const body = await res.text();
   console.log(`status: ${res.status} ${res.statusText} (${Date.now() - started} ms)`);
   console.log('response headers:');

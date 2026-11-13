@@ -1,5 +1,6 @@
 import { bodyEntityRecords, bodyPeriodSec, defaultBodies, type BodyRegistry, type FrameId } from '@eio/core';
 import { clearBackoff, isBackedOff, isBlockError, readBackoff, recordFailure } from '../backoff';
+import { LimitedError } from '../net/limiter';
 import type { Connector } from '../connector';
 import { parseHorizonsVectors } from './horizons';
 
@@ -7,7 +8,7 @@ const API = 'https://ssd.jpl.nasa.gov/api/horizons.api';
 /** planets move slowly: a day-old table is as good as a new one */
 const TTL_MS = 24 * 3600_000;
 const REFRESH_MS = 12 * 3600_000;
-const DELAY_MS = 1500;
+
 const HOUR_MS = 3600_000;
 const DAY_MS = 86_400_000;
 /** Part of the cache key: bump on any change of what is requested or how it is read. */
@@ -145,7 +146,7 @@ export function bodyUrl(t: BodyTarget, nowMs: number): string {
   return `${API}?${q}`;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 
 /**
  * The body registry's real data stream: JPL Horizons vector tables for the planets, dwarf planets and major moons (32
@@ -182,12 +183,17 @@ export const horizonsBodies: Connector = {
         continue;
       }
       try {
-        const res = await ctx.cachedFetch(bodyCacheKey(target), bodyUrl(target, Date.now()), TTL_MS, parseHorizonsVectors);
+        const res = await ctx.cachedFetch(bodyCacheKey(target), bodyUrl(target, Date.now()), TTL_MS, parseHorizonsVectors, undefined, { source: 'horizons', mode: 'poll' });
         const prev = ctx.hub.graph.get(id) ?? records.get(id);
         if (!prev) throw new Error('no body entity');
         ctx.hub.upsert({ ...prev, provider: { type: 'body', bodyId: target.bodyId, ephemeris: { frame: target.frame, samples: res.value } } });
         n++;
-        if (res.stale) {
+        if (res.limitedUntil !== undefined) {
+          // the limiter refused the download: not a failure of the source (no backoff gate); the rest of the run stays off the network
+          retryAt = Math.min(retryAt, res.limitedUntil);
+          failed.push(`${target.bodyId}: ${(res.error ?? 'rate limited').slice(0, 80)}`);
+          halted = 'rate limited';
+        } else if (res.stale) {
           // an old table is still good (planets move slowly): used, but the failure is counted and a block ends the run
           failed.push(`${target.bodyId}: stale cache (${(res.error ?? 'download failed').slice(0, 80)})`);
           if (!ctx.http.offline) {
@@ -196,14 +202,17 @@ export const horizonsBodies: Connector = {
           }
         } else clearBackoff(ctx.store, source);
         if (res.fromCache) cached++;
-        else await sleep(DELAY_MS);
       } catch (err) {
         const message = (err as Error).message ?? String(err);
         failed.push(`${target.bodyId}: ${message.slice(0, 100)}`);
         if (ctx.http.offline) continue;
+        if (err instanceof LimitedError) {
+          retryAt = Math.min(retryAt, err.retryAt);
+          halted = 'rate limited';
+          continue;
+        }
         retryAt = Math.min(retryAt, recordFailure(ctx.store, source, err).notBefore);
         if (isBlockError(message)) halted = `${target.bodyId} failed with a block or connect error`;
-        else await sleep(DELAY_MS);
       }
     }
     if (!n && ctx.http.offline) {

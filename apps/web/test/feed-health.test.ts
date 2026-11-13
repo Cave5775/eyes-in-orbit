@@ -1,6 +1,6 @@
 import type { ConnectorHealth } from '@eio/core';
 import { describe, expect, it } from 'vitest';
-import { CONN_LABEL, FEED_BADGE, FEED_TONE, REASON_WORDS, feedCounts, feedOf, feedView, sortFeeds } from '../src/lib/feed-health';
+import { CONN_LABEL, FEED_BADGE, FEED_TONE, REASON_WORDS, feedCounts, feedOf, feedView, limitedText, sortFeeds } from '../src/lib/feed-health';
 import { mockHealth } from '../src/mock/generators';
 
 const h = (over: Partial<ConnectorHealth>): ConnectorHealth => ({ id: 'c', status: 'ok', runs: 1, lastOkAt: 1, ...over });
@@ -46,6 +46,28 @@ describe('feed level to colour and label', () => {
   it('the mock health shows every level', () => {
     const levels = new Set(mockHealth(Date.now()).map((x) => feedOf(x).level));
     expect([...levels].sort()).toEqual(['off', 'ok', 'orange', 'red']);
+  });
+});
+
+describe('request limit in the Data streams detail', () => {
+  const T = Date.UTC(2026, 10, 1, 12, 0);
+  const base: ConnectorHealth = { id: 'launchlibrary', status: 'ok', runs: 3, lastOkAt: T - 60_000 };
+
+  it('shows used of cap per window', () => {
+    const v = feedView({ ...base, limit: { used: 5, cap: 7, window: 'hour' } });
+    expect(v.budget).toBe('5 of 7 requests this hour');
+    expect(v.limited).toBeUndefined();
+    expect(feedView(base).budget).toBeUndefined();
+  });
+
+  it('shows "rate limited until HH:MM" only while the block is in force, and colours it orange', () => {
+    const h: ConnectorHealth = { ...base, limit: { used: 7, cap: 7, window: 'hour', blockedUntil: T + 90 * 60_000 } };
+    expect(limitedText(h, T)).toBe('rate limited until 13:30Z');
+    expect(limitedText(h, T + 2 * 3600_000)).toBeUndefined();
+    const v = feedView({ ...h, limit: { ...h.limit!, blockedUntil: Date.now() + 3600_000 } });
+    expect(v).toMatchObject({ level: 'orange', reason: 'rate-limited' });
+    expect(v.limited).toMatch(/^rate limited until \d\d:\d\dZ$/);
+    expect(v.title).toMatch(/rate limited until/);
   });
 });
 

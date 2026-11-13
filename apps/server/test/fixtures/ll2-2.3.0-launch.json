@@ -1,0 +1,149 @@
+{
+ "count": 7671,
+ "next": null,
+ "previous": null,
+ "results": [
+  {
+   "id": "6aa7b90b-e5ed-45d8-a52e-04fbf399d178",
+   "url": "https://ll.thespacedevs.com/2.3.0/launches/6aa7b90b-e5ed-45d8-a52e-04fbf399d178/",
+   "name": "Falcon 9 Block 5 | USSF-627",
+   "response_mode": "detailed",
+   "slug": "falcon-9-block-5-ussf-627",
+   "status": {
+    "id": 3,
+    "name": "Launch Successful",
+    "abbrev": "Success"
+   },
+   "net": "2026-11-12T04:36:30Z",
+   "net_precision": {
+    "id": 0,
+    "name": "Second",
+    "abbrev": "SEC"
+   },
+   "window_start": "2026-11-12T02:35:00Z",
+   "window_end": "2026-11-12T06:35:00Z",
+   "image": {
+    "id": 2797,
+    "name": "Falcon 9 liftoff from SLC-4E (USSF-366)",
+    "image_url": "https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/falcon_9_liftof_image_20260816171423.jpg",
+    "credit": "SpaceX"
+   },
+   "launch_service_provider": {
+    "id": 121,
+    "name": "SpaceX",
+    "abbrev": "SpX"
+   },
+   "rocket": {
+    "id": 9288,
+    "configuration": {
+     "id": 164,
+     "name": "Falcon 9",
+     "full_name": "Falcon 9 Block 5",
+     "variant": "Block 5"
+    },
+    "launcher_stage": [
+     {
+      "id": 1043,
+      "type": "Core",
+      "reused": true,
+      "launcher_flight_number": 7,
+      "landing": {
+       "id": 1975,
+       "attempt": true,
+       "success": true,
+       "downrange_distance": 574,
+       "landing_location": {
+        "id": 1,
+        "name": "Of Course I Still Love You",
+        "abbrev": "OCISLY"
+       },
+       "type": {
+        "id": 1,
+        "name": "Autonomous Spaceport Drone Ship",
+        "abbrev": "ASDS"
+       }
+      }
+     }
+    ]
+   },
+   "mission": {
+    "id": 7887,
+    "name": "USSF-627",
+    "type": "Government/Top Secret",
+    "description": "A classified mission for the United States Space Force. It is possibly a batch of classified LEO satellites based on SpaceX’s Starshield satellite bus, based on locations of rocket stage drop zones be",
+    "orbit": {
+     "id": 8,
+     "name": "Low Earth Orbit",
+     "abbrev": "LEO"
+    }
+   },
+   "pad": {
+    "id": 16,
+    "name": "Space Launch Complex 4E",
+    "latitude": 34.632,
+    "longitude": -120.611,
+    "country": {
+     "id": 2,
+     "name": "United States of America",
+     "alpha_2_code": "US",
+     "alpha_3_code": "USA"
+    },
+    "location": {
+     "id": 11,
+     "name": "Vandenberg SFB, CA, USA",
+     "country": {
+      "id": 2,
+      "name": "United States of America",
+      "alpha_2_code": "US",
+      "alpha_3_code": "USA"
+     }
+    }
+   },
+   "webcast_live": false,
+   "vid_urls": [
+    {
+     "priority": 8,
+     "source": "youtube.com",
+     "publisher": "The Space Devs",
+     "title": "SpaceX USSF-627",
+     "url": "https://www.youtube.com/watch?v=rq7SLpK5vlY",
+     "type": {
+      "id": 4,
+      "name": "Unofficial Re-stream"
+     },
+     "start_time": "2026-11-12T04:58:12Z",
+     "end_time": "2026-11-12T05:20:55Z",
+     "live": false
+    },
+    {
+     "priority": 9,
+     "source": "youtube.com",
+     "publisher": "Spaceflight Now",
+     "title": "SpaceX Falcon 9 rocket launches classified U.S. Space Force mission from California",
+     "url": "https://www.youtube.com/watch?v=tM6K9RMvx0Y",
+     "type": {
+      "id": 3,
+      "name": "Unofficial Webcast"
+     },
+     "start_time": "2026-11-12T04:07:10Z",
+     "end_time": "2026-11-12T04:55:48Z",
+     "live": false
+    },
+    {
+     "priority": 10,
+     "source": "x.com",
+     "publisher": "X",
+     "title": "USSF-627 Mission",
+     "url": "https://x.com/i/broadcasts/2brkWyolnlBbLM",
+     "type": {
+      "id": 1,
+      "name": "Official Webcast"
+     },
+     "start_time": "2026-11-12T04:23:56Z",
+     "end_time": "2026-11-12T04:46:38Z",
+     "live": false
+    }
+   ]
+  }
+ ]
+}

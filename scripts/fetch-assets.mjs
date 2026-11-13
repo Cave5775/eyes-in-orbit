@@ -67,9 +67,13 @@ function jpegSize(buf) {
   return null;
 }
 
+/** Same agent as the server (`apps/server/src/http-util.ts`); no personal contact detail. */
+const USER_AGENT = 'EyesInOrbit/0.1 (+https://github.com/Cave5775/eyes-in-orbit)';
+
 /** One download attempt: the validated JPEG bytes and size, or an Error saying what was wrong. */
 async function download(a, url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  // a manual, run-once download of three static images (not a data feed): the one script allowed to call fetch outside apps/server/src/net
+  const res = await fetch(url, { headers: { 'user-agent': USER_AGENT }, signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf[0] !== 0xff || buf[1] !== 0xd8) throw new Error(`response is not a JPEG (${res.headers.get('content-type') ?? 'unknown type'}, ${buf.length} bytes)`);
