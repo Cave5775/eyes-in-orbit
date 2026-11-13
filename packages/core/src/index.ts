@@ -15,3 +15,4 @@ export * from './ascent';
 export * from './ascent-model';
 export * from './booster';
 export * from './launch-group';
+export * from './parent';

@@ -39,3 +39,10 @@ describe('focusTarget', () => {
     expect(focusTarget(cyc.a, (i) => cyc[i], () => false)).toEqual({ id: 'body-earth', untracked: true });
   });
 });
+
+describe('focusTarget follows the listed parent', () => {
+  it('an untracked deep-space probe falls back to the Sun, not the Earth', () => {
+    const vgr = { id: 'vgr', bodyId: 'EARTH', provider: { type: 'sampled' as const, frame: 'EARTH:inertial' as const, samples: [[Date.UTC(2026, 9, 22), 2.5e10, 0, 0]] } };
+    expect(focusTarget(vgr, lookup, has())).toEqual({ id: 'body-sun', untracked: true });
+  });
+});

@@ -1,4 +1,5 @@
-import { bodyEntityId, bodyOf, defaultBodies } from '@eio/core';
+import { bodyEntityId, bodyOf, defaultBodies, type EntityRecord } from '@eio/core';
+import { listedParent } from '../lib/listed-parent';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { BODY_CATEGORY_KINDS, CATEGORIES, categoryCounts, categoryLabel } from '../lib/browser-ui';
 import { buildTreeRows, revealKeys, revealRowIndex, stickyAncestors, type TreeBody } from '../lib/entity-tree';
@@ -157,7 +158,7 @@ export function EntityBrowser() {
     const frameRec = entities.get(frame);
     return buildTreeRows(rows, {
       bodies, frameId: frame, frameBodyId: frameRec ? bodyOf(frameRec) ?? frameRec.bodyId : undefined,
-      openAll: filtering, skeleton: !filtering, overrides, kindName: kindLabel, bodyOf: (r) => recOf(r)?.bodyId,
+      openAll: filtering, skeleton: !filtering, overrides, kindName: kindLabel, bodyOf: (r) => { const e = recOf(r); return e && listedParent(e); },
       standsForBody: (r) => { const p = recOf(r)?.provider; return p?.type === 'body' ? p.bodyId : undefined; },
     });
   }, [mode, rows, entities, frame, filtering, overrides]);
@@ -182,7 +183,7 @@ export function EntityBrowser() {
       return;
     }
     if (mode === 'tree') {
-      const keys = revealKeys(rec, { bodies: TREE_BODIES });
+      const keys = revealKeys(rec, { bodies: TREE_BODIES, bodyOf: (r) => listedParent(r as EntityRecord) });
       setOverrides((o) => (keys.every((k) => o.get(k) === true) ? o : new Map([...o, ...keys.map((k): [string, boolean] => [k, true])])));
     }
     setRevealId(rec.id);

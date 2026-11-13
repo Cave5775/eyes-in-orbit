@@ -8,6 +8,7 @@ import { orbitPeriodSec } from '../src/lib/orbit';
 import { liftNearSurface } from '../src/lib/paths';
 import { refDisplay } from '../src/lib/ref-body';
 import { buildTreeRows } from '../src/lib/entity-tree';
+import { listedParent } from '../src/lib/listed-parent';
 
 const NOW = Date.parse('2026-10-22T12:00:00Z');
 
@@ -177,6 +178,25 @@ describe('mock non-SGP4 entities', () => {
     expect(ids.indexOf('E:dsn-MRO')).toBeGreaterThan(ids.indexOf('B:MARS'));
     expect(ids.indexOf('E:dsn-MRO')).toBeGreaterThan(-1);
     expect(items.find((i) => i.id === 'dsn-MRO')!.bodyId).toBe('MARS');
+  });
+
+  it('the entity tree lists mock Voyager 1 and JWST under the Sun (listed parent), MRO under Mars', () => {
+    const recs = entities.filter((e) => e.kind === 'probe');
+    const byId = new Map(recs.map((e) => [e.id, e]));
+    const bodies = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId }));
+    const rows = buildTreeRows(recs, { bodies, frameId: 'dsn-VGR1', openAll: true, bodyOf: (r) => listedParent(byId.get(r.id)!) });
+    const ids = rows.map((r) => (r.type === 'body' ? `B:${r.bodyId}` : r.type === 'entity' ? `E:${r.id}` : `G:${r.kind}`));
+    const at = (id: string) => ids.indexOf(`E:${id}`);
+    const sunAt = ids.indexOf('B:SUN');
+    expect(byId.get('dsn-VGR1')!.bodyId).toBe('EARTH'); // the connector's query centre is untouched
+    expect(at('dsn-VGR1')).toBeGreaterThan(sunAt);
+    expect(at('dsn-JWST')).toBeGreaterThan(sunAt);
+    // listed straight under the Sun: one level below it, like the Earth node, not inside the Earth node
+    const depth = (id: string) => rows.find((r) => r.type === 'entity' && r.id === id)!.depth;
+    const sunDepth = (rows.find((r) => r.type === 'body' && r.bodyId === 'SUN') as { depth: number }).depth;
+    expect(depth('dsn-VGR1')).toBe(sunDepth + 1);
+    expect(depth('dsn-JWST')).toBe(sunDepth + 1);
+    expect(at('dsn-MRO')).toBeGreaterThan(ids.indexOf('B:MARS'));
   });
 
   it('launches are NET-ordered with consistent entities and phases', () => {
