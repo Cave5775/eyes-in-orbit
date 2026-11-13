@@ -2,7 +2,8 @@
  * HTTP pieces that need no SQLite store, so the diagnostic scripts can use them without loading `node:sqlite`.
  * `http.ts` re-exports everything here.
  */
-export const USER_AGENT = 'EyesInOrbit/0.1 (local mission control)';
+/** Wikimedia's policy asks for a descriptive agent with a contact URL; no personal contact detail is sent. */
+export const USER_AGENT = 'EyesInOrbit/0.1 (+https://github.com/Cave5775/eyes-in-orbit)';
 export const DEFAULT_ACCEPT = 'application/json, text/xml, */*';
 export const TIMEOUT_MS = 20_000;
 /** Longest body excerpt kept on an `HttpError`. */

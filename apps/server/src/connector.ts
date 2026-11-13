@@ -1,6 +1,8 @@
 import type { ConnectorHealth } from '@eio/core';
 import type { Config } from './config';
-import type { Cached, Http } from './http';
+import type { Cached, Http, RequestOptions } from './http';
+import { LimitedError } from './net/limiter';
+import { FEED_SOURCE } from './net/limits';
 import type { Hub } from './hub';
 import type { Store } from './store';
 
@@ -15,7 +17,12 @@ export interface ConnectorContext {
   /** report a partial failure: the run still counts as ok but is retried sooner than the normal interval */
   softFail(msg: string, retryInMs?: number): void;
   /** `http.cachedFetch` that also records cache usage in the health record */
-  cachedFetch<T>(key: string, url: string, ttlMs: number, parse: (text: string) => T, headers?: Record<string, string>): Promise<Cached<T>>;
+  cachedFetch<T>(key: string, url: string, ttlMs: number, parse: (text: string) => T, headers?: Record<string, string>, ro?: CachedFetchOptions): Promise<Cached<T>>;
+}
+
+/** Request options plus `staleRetryMs`: how soon a run that fell back to a stale copy is retried (default 5 min; at least the limiter's retry time when a limit applies). */
+export interface CachedFetchOptions extends RequestOptions {
+  staleRetryMs?: number;
 }
 
 export interface Connector {
@@ -55,6 +62,8 @@ interface Slot {
   retryInMs?: number;
   /** cachedFetch calls so far in the current run */
   fetches: number;
+  /** the run was refused by the request limiter: do not run again before this time */
+  limitedUntil?: number;
 }
 
 /** Runs connectors on their own timers with jittered starts, exponential backoff and health records. */
@@ -81,17 +90,20 @@ export class Scheduler {
             health.lastError = msg;
             health.lastErrorAt = Date.now();
           },
-          cachedFetch: async (key, url, ttl, parse, headers) => {
-            const res = await deps.http.cachedFetch(key, url, ttl, parse, headers);
+          cachedFetch: async (key, url, ttl, parse, headers, ro) => {
+            const res = await deps.http.cachedFetch(key, url, ttl, parse, headers, ro);
             // true only when every response of this run came from the cache
             health.fromCache = slot.fetches++ === 0 ? res.fromCache : !!health.fromCache && res.fromCache;
-            if (res.stale) slot.ctx.softFail(res.error ?? 'serving stale cache');
+            // a stale copy is served; a limited request is retried when the limiter allows it, a failed one after `staleRetryMs`
+            if (res.stale) slot.ctx.softFail(res.error ?? 'serving stale cache', res.limitedUntil !== undefined ? Math.max(res.limitedUntil - Date.now(), 1000) : ro?.staleRetryMs);
             return res;
           },
         },
       };
       this.slots.set(connector.id, slot);
     }
+    // the health records show each feed's request budget and block time from the limiter
+    deps.hub.limitOf = (id) => (FEED_SOURCE[id] ? deps.http.limiter.status(FEED_SOURCE[id]) : undefined);
     deps.hub.on('topic', ({ topic, count }: { topic: string; count: number }) => {
       if (count !== 1) return;
       for (const s of this.slots.values()) if (s.gated && s.connector.topic === topic) this.kick(s.connector.id);
@@ -178,6 +190,7 @@ export class Scheduler {
     slot.stale = false;
     slot.retryInMs = undefined;
     slot.fetches = 0;
+    slot.limitedUntil = undefined;
     ctx.health.fromCache = false;
     ctx.health.note = undefined;
     ctx.health.runs++;
@@ -187,10 +200,11 @@ export class Scheduler {
       Object.assign(ctx.health, { status: 'ok', lastOkAt: Date.now(), failures: 0 });
       if (!slot.stale) ctx.health.lastError = undefined;
     } catch (err) {
-      this.fail(slot, err);
+      if (err instanceof LimitedError) this.limited(slot, err);
+      else this.fail(slot, err);
     }
     slot.running = false;
-    // fast pollers (iss-rest at 1 Hz) only announce health when it changes
+    // fast pollers (iss-rest every 2 s) only announce health when it changes
     if ((connector.intervalMs ?? Infinity) >= 30_000 || before !== `${ctx.health.status}|${ctx.health.lastError}`) {
       hub.emit('health', hub.healthList());
     }
@@ -211,7 +225,25 @@ export class Scheduler {
     slot.ctx.log(`error: ${msg}`);
   }
 
+  /**
+   * The request limiter refused this run: nothing was sent. A spacing gap only waits (no error); a cap or block shows as an
+   * orange "rate limited until" (the feed keeps `ok` when it has delivered data before). Not a failure for the backoff.
+   */
+  private limited(slot: Slot, err: LimitedError): void {
+    const { health } = slot.ctx;
+    slot.limitedUntil = err.retryAt;
+    if (err.kind === 'spacing') {
+      health.note = `waiting for the request spacing (${err.reason})`;
+      return;
+    }
+    Object.assign(health, {
+      status: health.lastOkAt !== undefined ? 'ok' : 'error', lastError: err.message, lastErrorAt: Date.now(), failures: health.failures ?? 0,
+    });
+    slot.ctx.log(err.message);
+  }
+
   private nextDelay(slot: Slot): number {
+    if (slot.limitedUntil !== undefined) return Math.max(slot.limitedUntil - Date.now(), 1000);
     const interval = slot.connector.intervalMs!;
     if (!slot.failures) return slot.stale ? Math.min(interval, slot.retryInMs ?? STALE_RETRY_MS) : interval;
     const base = Math.min(Math.max(interval, 1000), 30_000);

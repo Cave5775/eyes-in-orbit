@@ -24,6 +24,7 @@ describe('classifyCause (message shapes written by http.ts and the connectors)',
     ['http 403 on websocket upgrade', 'HTTP 403 during WebSocket upgrade', 'blocked'],
     ['http 429 with retry-after', HTTP429, 'rate-limited'],
     ['http 429 plain', 'HTTP 429 for https://x.test/', 'rate-limited'],
+    ['the limiter refused a request', 'rate limited until 14:30Z (hourly cap of 7 reached)', 'rate-limited'],
     ['403 that carries retry-after', 'HTTP 403 for https://x.test/ [retry-after=120]', 'rate-limited'],
     ['http 401', 'HTTP 401 for https://x.test/', 'auth'],
     ['space-track login rejected', 'Space-Track login failed (check SPACETRACK_USER / SPACETRACK_PASSWORD)', 'auth'],
@@ -52,6 +53,32 @@ describe('retryTimeOf', () => {
     expect(retryTimeOf('stations: waiting until 14:30Z (HTTP 403)')).toBe('14:30Z');
     expect(retryTimeOf('earlier failure (next attempt 09:05Z)')).toBe('09:05Z');
     expect(retryTimeOf('HTTP 403')).toBeUndefined();
+    expect(retryTimeOf('rate limited until 14:30Z (hourly cap of 7 reached)')).toBe('14:30Z');
+  });
+});
+
+describe('classifyFeed with the limiter block (health.limit)', () => {
+  const NOW = Date.UTC(2026, 10, 1, 12, 0);
+  const limit = (blockedUntil?: number) => ({ used: 7, cap: 7, window: 'hour' as const, ...(blockedUntil ? { blockedUntil } : {}) });
+
+  it('a block in force is orange rate-limited with the retry time, for an ok, a failing and a never-ok feed', () => {
+    const until = NOW + 90 * 60_000;
+    expect(classifyFeed(h({ limit: limit(until) }), NOW)).toMatchObject({ level: 'orange', reason: 'rate-limited', retryUtc: '13:30Z', hasData: true });
+    expect(classifyFeed(h({ status: 'error', lastError: 'boom', failures: 5, limit: limit(until) }), NOW)).toMatchObject({ level: 'orange', reason: 'rate-limited', retryUtc: '13:30Z' });
+    expect(classifyFeed(h({ status: 'error', lastOkAt: undefined, failures: 9, lastError: 'rate limited until 13:30Z (hourly cap of 7 reached)' }), NOW))
+      .toMatchObject({ level: 'orange', reason: 'rate-limited' }); // never red "repeated" for a limit
+  });
+
+  it('an ended block, or no block, changes nothing; a rejected login stays red', () => {
+    expect(classifyFeed(h({ limit: limit(NOW - 1) }), NOW)).toMatchObject({ level: 'ok', reason: 'ok' });
+    expect(classifyFeed(h({ limit: limit() }), NOW)).toMatchObject({ level: 'ok' });
+    expect(classifyFeed(h({ status: 'error', lastError: 'Space-Track login failed (check SPACETRACK_USER / SPACETRACK_PASSWORD); next attempt 18:00Z', limit: limit(NOW + 6 * 3600_000) }), NOW))
+      .toMatchObject({ level: 'red', reason: 'auth' });
+  });
+
+  it('keeps off states off', () => {
+    expect(classifyFeed(h({ status: 'stub', note: 'Needs credentials', limit: limit(NOW + 1000) }), NOW).level).toBe('off');
+    expect(classifyFeed(h({ status: 'disabled', limit: limit(NOW + 1000) }), NOW).level).toBe('off');
   });
 });
 

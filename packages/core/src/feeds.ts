@@ -109,6 +109,18 @@ export interface CredentialInfo {
   value?: string;
 }
 
+/** Request budget of one feed as the server's limiter sees it (`apps/server/src/net/limiter.ts`). */
+export interface FeedLimit {
+  /** requests counted in the busiest window (per attempt, including refused-by-source ones) */
+  used: number;
+  cap: number;
+  window: 'minute' | 'hour' | 'day';
+  /** earliest time the next request may go out (spacing); absent when it may go now */
+  nextAllowedAt?: number;
+  /** no request before this time (403/429, Retry-After, failed login, repeated failures) */
+  blockedUntil?: number;
+}
+
 export interface ConnectorHealth {
   id: string;
   status: 'idle' | 'ok' | 'error' | 'disabled' | 'stub';
@@ -124,6 +136,8 @@ export interface ConnectorHealth {
   failures?: number;
   /** OFFLINE=1 and this connector would need the network */
   offline?: boolean;
+  /** request budget and block time from the server's limiter; absent for feeds without caps */
+  limit?: FeedLimit;
   /** colour level and reason, computed by the server (`classifyFeed`); absent on records that did not come from it */
   feed?: FeedState;
 }

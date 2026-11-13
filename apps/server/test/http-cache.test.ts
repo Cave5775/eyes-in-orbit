@@ -41,7 +41,7 @@ describe('Http.cachedFetch', () => {
     const res = await http.cachedFetch('k', 'https://x.test/a', 60_000, (t) => JSON.parse(t));
     expect(res).toMatchObject({ value: { n: 1 }, fromCache: false, stale: false });
     const init = fetchMock.mock.calls[0][1] as RequestInit;
-    expect((init.headers as Record<string, string>)['user-agent']).toBe('EyesInOrbit/0.1 (local mission control)');
+    expect((init.headers as Record<string, string>)['user-agent']).toBe('EyesInOrbit/0.1 (+https://github.com/Cave5775/eyes-in-orbit)');
   });
 
   it('serves a fresh hit without touching the network', async () => {
