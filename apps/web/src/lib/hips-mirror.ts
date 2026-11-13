@@ -40,6 +40,7 @@ interface Entry { at: number; result: Promise<string | null> }
 /** Remembers the answer per survey id: a found mirror for the session, a failure for FAILED_RETRY_MS. */
 export class MirrorPicker {
   private readonly cache = new Map<string, Entry>();
+  private readonly found = new Map<string, string>();
   constructor(private readonly probe: HipsProbe = browserProbe, private readonly now: () => number = Date.now) {}
 
   pick(id: string, bases: readonly string[]): Promise<string | null> {
@@ -56,7 +57,15 @@ export class MirrorPicker {
   private ask(id: string, bases: readonly string[]): Promise<string | null> {
     const result = firstReachable(bases, this.probe);
     this.cache.set(id, { at: this.now(), result });
+    void result.then((url) => {
+      if (url) this.found.set(id, url);
+    });
     return result;
+  }
+
+  /** The server last found for a survey, for display; undefined until one answered. */
+  current(id: string): string | undefined {
+    return this.found.get(id);
   }
 }
 

@@ -733,5 +733,5 @@ video.stream-frame { background: #000; object-fit: contain; }
 .sky-select { max-width: 60%; font-size: 10.5px; background: var(--hull-2); color: var(--ink); border: 1px solid var(--rule-2); }
 .sky-follow { display: inline-flex; align-items: center; gap: 3px; }
 .sky-credit { margin-left: auto; }
-.sky-aladin { overflow: hidden; contain: paint; }
+.sky > .sky-aladin.sky-aladin { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; contain: paint; } /* Aladin adds .aladin-container (position: relative, no height) to its host; the doubled selector outranks it, else the host is 0 px high and the canvas 1 px */
 .float-head { position: relative; z-index: 5; }

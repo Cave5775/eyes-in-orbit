@@ -63,6 +63,18 @@ describe('MirrorPicker', () => {
   });
 });
 
+describe('current mirror', () => {
+  it('reports the found server for display, undefined before and when none answers', async () => {
+    const { probe } = probeOf(new Set([A]));
+    const p = new MirrorPicker(probe);
+    expect(p.current('dss')).toBeUndefined();
+    await p.pick('dss', [A]);
+    expect(p.current('dss')).toBe(A);
+    await p.pick('none', ['https://down.example/x']);
+    expect(p.current('none')).toBeUndefined();
+  });
+});
+
 describe('survey list', () => {
   it('every survey has https servers, CDS first', () => {
     for (const s of SURVEYS) {
