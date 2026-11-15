@@ -61,19 +61,23 @@ function tick(): void {
 
   const n = recs.length;
   const t0 = performance.now();
-  const buf = pool.pop() ?? new Float64Array(n * 3);
+  const buf = pool.pop() ?? new Float64Array(n * 6);
   for (let i = 0; i < n; i++) {
     const s = recs[i];
     const out = sgp4(s.satrec, (simMs - s.epochMs) / 60_000);
     const p = out && out.position;
     const v = out && out.velocity;
+    const o = i * 6;
     // a decayed set can give finite positions at 186,000 km/s with no error flag: zero = no position, the point is not drawn
     if (p && v && typeof p !== 'boolean' && typeof v !== 'boolean' && plausibleSgp4State(p.x, p.y, p.z, v.x, v.y, v.z)) {
-      buf[i * 3] = p.x;
-      buf[i * 3 + 1] = p.y;
-      buf[i * 3 + 2] = p.z;
+      buf[o] = p.x;
+      buf[o + 1] = p.y;
+      buf[o + 2] = p.z;
+      buf[o + 3] = v.x;
+      buf[o + 4] = v.y;
+      buf[o + 5] = v.z;
     } else {
-      buf[i * 3] = buf[i * 3 + 1] = buf[i * 3 + 2] = 0;
+      buf.fill(0, o, o + 6);
     }
   }
   ctx.postMessage({ type: 'positions', version, simMs, buffer: buf, ms: performance.now() - t0 } satisfies FromWorker, [buf.buffer]);
@@ -97,7 +101,7 @@ ctx.onmessage = (ev: MessageEvent<ToWorker>) => {
       forcePost = true;
       break;
     case 'recycle':
-      if (m.buffer.length === recs.length * 3 && pool.length < 4) pool.push(m.buffer);
+      if (m.buffer.length === recs.length * 6 && pool.length < 4) pool.push(m.buffer);
       break;
   }
 };
