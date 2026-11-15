@@ -1,5 +1,6 @@
 import type { FeedLimit } from '@eio/core';
 import type { Store } from '../store';
+import { recordBackoff } from '../backoff-log';
 import { LIMITS, type SourceLimit } from './limits';
 
 /**
@@ -90,6 +91,8 @@ export interface ReportInput {
   headers?: { get(name: string): string | null };
   /** the request failed before an answer (timeout, reset, DNS) */
   networkError?: boolean;
+  /** upstream host, for the backoff record */
+  host?: string;
 }
 
 export interface LimiterOptions {
@@ -238,6 +241,14 @@ export class Limiter {
       s.consecutiveFailures = 0;
     }
     if (until > (s.blockedUntil ?? 0)) {
+      recordBackoff({
+        source, host: input.host, origin: 'limiter', blockKind: kind, reason, waitMs: until - now, until,
+        trigger: {
+          status, retryAfter: headers?.get('retry-after') ?? undefined, rateLimitExhausted: rl !== undefined || undefined,
+          networkError: input.networkError, failures: s.consecutiveFailures,
+        },
+        previous: s.blockedUntil !== undefined ? { until: s.blockedUntil } : undefined,
+      }, now);
       s.blockedUntil = until;
       s.blockReason = reason;
       s.blockKind = kind;
@@ -250,6 +261,10 @@ export class Limiter {
     const now = this.now();
     const s = this.rolled(this.state(source), now);
     if (now + ms > (s.blockedUntil ?? 0)) {
+      recordBackoff({
+        source, origin: 'limiter', blockKind: kind, reason, waitMs: ms, until: now + ms, trigger: { note: reason, failures: s.consecutiveFailures },
+        previous: s.blockedUntil !== undefined ? { until: s.blockedUntil } : undefined,
+      }, now);
       s.blockedUntil = now + ms;
       s.blockReason = reason;
       s.blockKind = kind;

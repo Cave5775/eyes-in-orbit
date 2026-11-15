@@ -1,3 +1,4 @@
+import { recordBackoff } from './backoff-log';
 import type { Store } from './store';
 
 /**
@@ -64,12 +65,20 @@ export const isBackedOff = (b: Backoff | undefined, now = Date.now()): b is Back
 /** Count another failure and close the gate for `backoffMs`; returns the new state. */
 export function recordFailure(store: Store, source: string, err: unknown, now = Date.now()): Backoff {
   const message = err instanceof Error ? err.message : String(err);
-  const failures = (readBackoff(store, source)?.failures ?? 0) + 1;
+  const before = readBackoff(store, source);
+  const failures = (before?.failures ?? 0) + 1;
   // never retry sooner than the source asked for (`Retry-After`), nor sooner than our own schedule
   // a dead host (connect error) may be an outage that ends within the hour, so it keeps the short schedule; only 403/429 wait hours
   const wait = Math.max(backoffMs(failures, isBlockError(message) && !isConnectError(message)), Math.min(retryAfterMs(message, now) ?? 0, MAX_RETRY_AFTER_MS));
   const next: Backoff = { failures, notBefore: now + wait, message };
   store.set(backoffKey(source), next, MAX_BACKOFF_MS * 2, now);
+  const status = /\bHTTP (\d{3})\b/.exec(message)?.[1];
+  recordBackoff({
+    source, host: /https?:\/\/([^/\s:\]]+(?::\d+)?)/.exec(message)?.[1], origin: 'gate', waitMs: wait, until: next.notBefore,
+    reason: `${isBlockError(message) && !isConnectError(message) ? 'blocked' : 'transient'}, failure ${failures}`,
+    trigger: { status: status ? Number(status) : undefined, retryAfter: /retry-after=([^;\]]+)/i.exec(message)?.[1]?.trim(), networkError: isConnectError(message) || undefined, failures, note: message.slice(0, 300) },
+    previous: before ? { until: before.notBefore, failures: before.failures } : undefined,
+  }, now);
   return next;
 }
 

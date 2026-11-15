@@ -6,6 +6,7 @@
  * would be a rate limit). Exactly one request per run, same headers as the server, 20 s timeout.
  */
 import { join } from 'node:path';
+import { backoffLogIn, setBackoffLog } from './backoff-log';
 import { loadConfig, loadDotEnv } from './config';
 import { BODY_KEEP, TIMEOUT_MS, errorCauseCode, requestHeaders } from './http-util';
 import { guardedFetch } from './net/guarded-fetch';
@@ -26,7 +27,9 @@ const started = Date.now();
 try {
   // one request, through the same persistent limiter as the server (a probe inside the spacing, hourly cap or a block is refused)
   loadDotEnv();
-  const store = new Store(join(loadConfig().dataDir, 'cache.sqlite'));
+  const { dataDir } = loadConfig();
+  setBackoffLog(backoffLogIn(dataDir));
+  const store = new Store(join(dataDir, 'cache.sqlite'));
   const r = await guardedFetch(limiterFor(store), 'celestrak', url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) }, { mode: 'poll' });
   store.close();
   if ('limited' in r) {

@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import Fastify from 'fastify';
 import { loadLiveTelemetry, registerApi } from './api';
 import { ImageryCache } from './imagery';
+import { backoffLogIn, setBackoffLog } from './backoff-log';
 import { rateLimitsOffWarning } from './net/limiter';
 import { loadConfig, loadDotEnv } from './config';
 import { Scheduler, type Connector } from './connector';
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
   const limitsWarning = rateLimitsOffWarning();
   if (limitsWarning) console.warn(limitsWarning);
   const config = loadConfig();
+  setBackoffLog(backoffLogIn(config.dataDir));
   const store = new Store(join(config.dataDir, 'cache.sqlite'));
   store.prune(30 * 86_400_000);
   const http = new Http(store, { offline: config.offline });

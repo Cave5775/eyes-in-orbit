@@ -29,13 +29,17 @@ export async function guardedFetch(
   if ('limited' in gate) return gate;
   try {
     const response = await (opts.fetch ?? fetch)(url, init);
-    limiter.report(source, { status: response.status, headers: response.headers });
+    limiter.report(source, { status: response.status, headers: response.headers, host: hostOf(url) });
     return { ok: true, response };
   } catch (err) {
-    limiter.report(source, { networkError: true });
+    limiter.report(source, { networkError: true, host: hostOf(url) });
     throw err;
   }
 }
+
+const hostOf = (url: string): string | undefined => {
+  try { return new URL(url).host; } catch { return undefined; }
+};
 
 export type GuardedSocket = { ok: true; ws: WebSocket } | Limited;
 
@@ -46,6 +50,6 @@ export async function guardedWebSocket(
   const gate = await limiter.acquire(source, mode);
   if ('limited' in gate) return gate;
   const ws = new WebSocket(url, protocol);
-  ws.on('unexpected-response', (_req, res) => limiter.report(source, { status: res.statusCode, headers: { get: (n) => { const v = res.headers[n.toLowerCase()]; return Array.isArray(v) ? v[0] : v ?? null; } } }));
+  ws.on('unexpected-response', (_req, res) => limiter.report(source, { status: res.statusCode, host: hostOf(url), headers: { get: (n) => { const v = res.headers[n.toLowerCase()]; return Array.isArray(v) ? v[0] : v ?? null; } } }));
   return { ok: true, ws };
 }

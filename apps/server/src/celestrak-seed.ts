@@ -7,6 +7,7 @@
  * 1 to 2 s apart and the first failure ends the run. `--force` downloads anyway; use it sparingly.
  */
 import { join } from 'node:path';
+import { backoffLogIn, setBackoffLog } from './backoff-log';
 import { loadConfig, loadDotEnv } from './config';
 import { limiterFor } from './net/limiter';
 import { Store } from './store';
@@ -28,6 +29,7 @@ if (unknown.length) {
 const dir = join(config.dataDir, 'celestrak');
 console.log(`saving CelesTrak groups to ${dir}${force ? ' (forced)' : ''}`);
 // the same limiter state as the server (data/cache.sqlite): the spacing, hourly cap and any block carry over
+setBackoffLog(backoffLogIn(config.dataDir));
 const store = new Store(join(config.dataDir, 'cache.sqlite'));
 const result = await seedGroups({ dir, groups, force, limiter: limiterFor(store), log: (line) => console.log(`  ${line}`) });
 store.close();
