@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { categoryOf, matchesType, normaliseType } from '../src/lib/browser-ui';
 import { DEFAULT_SPACE_TARGET, SURVEYS, fmtLatLon, observatoryRows, skyTarget } from '../src/lib/observatories';
 import { classify, termFromWord, type Query } from '../src/lib/query';
-import { lstRad } from '../src/lib/sky-frame';
+import { lstRad, precessFromJ2000 } from '../src/lib/sky-frame';
 import { mockGroundAndProbes, mockObservatories } from '../src/mock/generators';
 
 const NOW = Date.parse('2026-10-22T12:00:00Z');
@@ -46,15 +46,22 @@ describe('sky target', () => {
   const rows = observatoryRows(all());
   const row = (id: string) => rows.find((r) => r.id === id)!;
 
-  it('a ground site is centred on its zenith (RA = LST, Dec = latitude) and follows the clock', () => {
+  it('a ground site is centred on its zenith (J2000 RA/Dec of the of-date zenith: RA = LST, Dec = latitude) and follows the clock', () => {
     const r = row('obs-paranal');
     const t = skyTarget(r, NOW);
     expect(t.tracksZenith).toBe(true);
-    expect(t.decDeg).toBeCloseTo(r.latDeg!, 9);
-    expect(t.raDeg).toBeCloseTo((lstRad(NOW, r.lonDeg!) * 180) / Math.PI, 9);
+    // precessed back to the date, the target is the zenith of date
+    const ofDate = precessFromJ2000(t.raDeg, t.decDeg, NOW);
+    expect(ofDate.decDeg).toBeCloseTo(r.latDeg!, 9);
+    expect(ofDate.raDeg).toBeCloseTo((lstRad(NOW, r.lonDeg!) * 180) / Math.PI, 9);
+    // and it is the J2000 place: 26.8 years of precession move it by about 0.37 deg (m = 46.1 arcsec/yr in RA at this declination), not zero
+    const sep = Math.hypot((t.raDeg - ofDate.raDeg + 540) % 360 - 180, t.decDeg - ofDate.decDeg);
+    expect(sep).toBeGreaterThan(0.2);
+    expect(sep).toBeLessThan(0.5);
     // 6 h later the zenith RA moved by about 6 sidereal-rate hours (15.041 deg/h)
     const later = skyTarget(r, NOW + 6 * 3_600_000);
-    expect((later.raDeg - t.raDeg + 360) % 360).toBeCloseTo(6 * 15.041, 1);
+    // (not exact in J2000: precession shifts a point by up to n tan(dec) = 9 arcsec/yr x 27 yr differently 90 deg of RA apart, about 0.1 deg)
+    expect(Math.abs(((later.raDeg - t.raDeg + 360) % 360) - 6 * 15.041)).toBeLessThan(0.2);
   });
 
   it('a space telescope starts at the default target and says so', () => {

@@ -141,6 +141,16 @@ One universal rule decides which orbit lines are drawn, from one pure function (
 - **Uses**: the fly-to distance of an orbiter is `settleDistance` of its radius from its primary (`settleView`, `lib/camera.ts`), as an Earth satellite uses its geocentric radius, so MRO is framed at 3,200 km round Mars, not at the 1e8 km of Mars from the Earth; `categoryOf` puts an orbiter in `satellites` (the kind stays `probe`, so `kind:probe` still lists it and `type:probes` does not); the surface view stays Earth-only.
 - **Untracked selection** (`focusTarget`, `lib/focus-target.ts`): an entity with no state at the sim time keeps the selection and the detail panel, but the camera frames the nearest ancestor with a position: its `parentId` entity, else its listed parent body entity (Voyager: the Sun), upward, the Earth last. The telemetry tab says "Untracked: showing <name>". When the clock reaches the entity's data, `SceneController` re-focuses it and follows it.
 
+## Sky pointing (first-person view to a sky viewer)
+
+Pure maths in `apps/web/src/lib/sky-frame.ts` and `sky-pose.ts`; the Sky view UI and the camera do not use the pose yet.
+
+- **Which axes.** The scene's Earth-inertial axes are not one epoch. The Sun, the Moon and SGP4 (TEME) are in the equator and equinox OF DATE; planets, dwarf planets and moons are J2000 Kepler orbits rotated by the J2000 obliquity (`OBLIQUITY_J2000`). The first-person basis (east/north/up) and `azElToRaDec` use the mean sidereal angle, so a look direction taken from them is of date. Sky viewers (Aladin Lite, HiPS) and star catalogues are J2000. The difference is about 22 arcmin in 2026 (46.1 arcsec/yr in RA).
+- **Converting.** `precessToJ2000` / `precessFromJ2000` (and `precessDir` on vectors) are the IAU 1976 rigorous precession, Meeus, Astronomical Algorithms 2nd ed., ch. 21 (zeta, z, theta from J2000), no nutation, no proper motion, UTC treated as TT. A direction of date goes through `precessDir(d, t, true)` before it is shown on a sky map; an object in the J2000 group (planets, moons) needs no precession, one in the of-date group (Sun, Moon, satellites) does. `observatories.skyTarget` already returns the J2000 RA/Dec of the of-date zenith.
+- **Look to pose.** `dirToAzEl` is the exact inverse of `firstPersonLookDir`. `poseFromLook(dirOfDate, tMs, vFovDeg, aspect, upDir?)` returns `{raDeg, decDeg}` (J2000 centre), `hFovDeg` and `rotationDeg`.
+- **FOV convention.** Rectilinear (pinhole, like Aladin's TAN projection). The scene FOV is the vertical one; `aspect` = width / height; `h = 2 atan(aspect tan(v/2))` (`vFovToHFov`, inverse `hFovToVFov`).
+- **Rotation convention.** `rotationDeg` in (-180, 180] is the position angle of the camera's up vector on the sky: from celestial north toward east at the view centre. On a chart seen by the viewer (north up, east left) that is counter-clockwise. 0 = north up, 90 = east up, 180 = south up. With up = the local vertical it equals the parallactic angle (`parallacticAngleDeg`, Meeus ch. 14, eq. 14.1). How it maps to the sign of Aladin's `setRotation` is not decided here: check it against the widget by eye.
+
 ## Work split and file ownership (phase 1, parallel)
 
 | Agent | Scope | Owns |
