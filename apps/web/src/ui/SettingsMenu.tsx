@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { SKINS } from '../lib/skin';
+import { SKY_TRANSITIONS } from '../lib/sky-transition';
 import { useLayout } from '../state/layout';
 import { usePlayerPrefs } from '../state/player';
 import { atDefaults, restoreDefaults } from '../state/settings';
@@ -42,6 +43,7 @@ function Panel() {
   const native = usePlayerPrefs((s) => s.nativeControls);
   const sized = useLayout((s) => Object.keys(s.stored).length > 0);
   const skin = useSkin((s) => s.skin);
+  const skyTransition = useView((s) => s.skyTransition);
   // the subscriptions above cover every store atDefaults reads
   const defaults = atDefaults();
 
@@ -81,6 +83,17 @@ function Panel() {
           on: surfaceAuto, set: (on) => useView.getState().setSurfaceAuto(on),
         },
       ])}
+      <fieldset className="menu-group">
+        <legend>Sky view</legend>
+        {SKY_TRANSITIONS.map((t) => (
+          <label key={t.id} className="menu-row">
+            <input type="radio" className="radio" name="sky-transition" value={t.id} checked={skyTransition === t.id} onChange={() => useView.getState().setSkyTransition(t.id)} />
+            <span className="menu-name">{t.label}</span>
+            <span className="menu-hint">{t.hint}</span>
+          </label>
+        ))}
+        <div className="menu-note">How the scene changes into the sky view and back. Reduced-motion settings always use Cut.</div>
+      </fieldset>
       {group('Video', [
         {
           key: 'native', label: "YouTube's own controls",

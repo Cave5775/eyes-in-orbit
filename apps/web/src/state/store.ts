@@ -13,13 +13,10 @@ import {
 } from '../lib/query';
 import type { TagKey } from '../lib/search-tags';
 import {
-  closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, toggleMinimized, toggleMinimizedOne, viewportNow,
+  closeFloatWindow, focusFloatWindow, loadFloats, openFloatWindow, saveFloats, setFloatRect, toggleMinimized, viewportNow,
   type FloatWindow,
 } from '../lib/floating';
 import { addRecent, loadRecent, removeRecent, saveRecent, type RecentLink } from '../lib/recent-links';
-import {
-  focusSkyWindow, openSkyWindow, setSkyRect, type SkyWindow,
-} from '../lib/sky-window';
 import { useMemo } from 'react';
 import { EARTH_CENTRE, frameChainLabel, centreLabel, frameCrumbs, isEarthCentre, type Centre, type Crumb } from '../lib/frame';
 import { frameOnSelect, loadFrame, resolveFrame, saveFrame } from '../lib/frame-store';
@@ -82,8 +79,6 @@ interface State {
   clock: ClockSnapshot;
   /** pop-out stream windows, in stacking order; they live here so tab and selection changes do not touch them */
   floats: FloatWindow[];
-  /** the Sky view window (one at most; shares the stream windows' cap, not persisted) */
-  sky: SkyWindow | null;
 
   /**
    * Merge records into the catalogue, or replace it (`replace`). `partial` = more pages of the same full load follow (lib/paging.ts):
@@ -102,7 +97,7 @@ interface State {
   catalogShape: number;
   /** The full catalogue has arrived (every page): restore the remembered frame, once. */
   catalogLoaded(): void;
-  /** Pop a stream out into a floating window (no-op at the cap, counting the Sky view; focuses it when already open). False when refused. */
+  /** Pop a stream out into a floating window (no-op at the cap; focuses it when already open). False when refused. */
   openFloat(url: string, title: string): boolean;
   /** "Watch a livestream" history (localStorage 'eio.recent-links.v1'), most recent first. */
   recentLinks: RecentLink[];
@@ -115,12 +110,6 @@ interface State {
   focusFloat(url: string): void;
   /** Minimize a window to its title-bar tab or restore it (the player stays mounted and keeps playing). Still counts toward the cap. */
   toggleFloatMinimized(url: string): void;
-  toggleSkyMinimized(): void;
-  /** Open the Sky view for an observatory entity, or retarget the open one; false when the window cap is reached. */
-  openSky(obsId: string, title: string): boolean;
-  closeSky(): void;
-  focusSky(): void;
-  setSkyRect(rect: { x: number; y: number; w: number }): void;
   /** Move or resize a floating window; the store clamps it to the viewport and keeps 16:9. */
   setFloatRect(url: string, rect: { x: number; y: number; w: number }): void;
   /**
@@ -320,7 +309,6 @@ export const useStore = create<State>((set, get) => ({
   clock: clock.snapshot(),
   floats: loadFloats(),
   recentLinks: loadRecent(),
-  sky: null,
   entityChange: null,
   catalogShape: 0,
 
@@ -363,28 +351,17 @@ export const useStore = create<State>((set, get) => ({
   },
   openFloat(url, title) {
     const s = get();
-    const floats = openFloatWindow(s.floats, url, title, viewportNow(), s.sky ? 1 : 0, s.sky?.z ?? 0);
-    if (!floats.some((f) => f.url === url)) return false; // refused: the cap (Sky view counted) or not a floatable URL
+    const floats = openFloatWindow(s.floats, url, title, viewportNow());
+    if (!floats.some((f) => f.url === url)) return false; // refused: the cap or not a floatable URL
     if (floats !== s.floats) set({ floats });
     return true;
   },
   rememberLink: (text, title) => set((s) => ({ recentLinks: addRecent(s.recentLinks, text, title, Date.now()) })),
   forgetLink: (url) => set((s) => ({ recentLinks: removeRecent(s.recentLinks, url) })),
   clearRecentLinks: () => set({ recentLinks: [] }),
-  openSky(obsId, title) {
-    const s = get();
-    const sky = openSkyWindow(s.sky, s.floats, obsId, title, viewportNow());
-    if (sky === s.sky) return false;
-    set({ sky });
-    return true;
-  },
-  closeSky: () => set({ sky: null }),
   toggleFloatMinimized: (url) => set((s) => ({ floats: toggleMinimized(s.floats, url) })),
-  toggleSkyMinimized: () => set((s) => ({ sky: toggleMinimizedOne(s.sky) })),
-  focusSky: () => set((s) => (s.sky ? { sky: focusSkyWindow(s.sky, s.floats) } : {})),
-  setSkyRect: (rect) => set((s) => ({ sky: setSkyRect(s.sky, rect, viewportNow()) })),
   closeFloat: (url) => set((s) => ({ floats: closeFloatWindow(s.floats, url) })),
-  focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url, s.sky?.z ?? 0) })),
+  focusFloat: (url) => set((s) => ({ floats: focusFloatWindow(s.floats, url) })),
   setFloatRect: (url, rect) => set((s) => ({ floats: setFloatRect(s.floats, url, rect, viewportNow()) })),
   selectObject(id, opts = {}) {
     const s = get();

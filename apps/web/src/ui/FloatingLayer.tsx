@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { FLOAT_HEAD_PX, totalHeight, dragMiniRect, dragRect, resizeRect, shownRect, viewportNow, type FloatRect, type FloatWindow, type Viewport } from '../lib/floating';
 import { useStore } from '../state/store';
-import { SkyView } from './SkyView';
 import { StreamFrame } from './StreamFrame';
 
 /**
@@ -18,17 +17,12 @@ export function FloatingLayer() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const sky = useStore((s) => s.sky);
-  const focusSky = useStore((s) => s.focusSky);
-  const setSkyRect = useStore((s) => s.setSkyRect);
-  const closeSky = useStore((s) => s.closeSky);
   const focusFloat = useStore((s) => s.focusFloat);
   const setFloatRect = useStore((s) => s.setFloatRect);
   const closeFloat = useStore((s) => s.closeFloat);
   const minFloat = useStore((s) => s.toggleFloatMinimized);
-  const minSky = useStore((s) => s.toggleSkyMinimized);
 
-  if (floats.length === 0 && !sky) return null;
+  if (floats.length === 0) return null;
   return (
     <div className="float-layer">
       {floats.map((f) => (
@@ -36,12 +30,6 @@ export function FloatingLayer() {
           <StreamFrame url={f.url} className="float-frame" />
         </FloatingWindow>
       ))}
-      {/* the Sky view shares the window cap and the chrome; it is not a stream and is not remembered across reloads */}
-      {sky && (
-        <FloatingWindow key={sky.url} win={sky} vp={vp} focus={focusSky} setRect={(_id, r) => setSkyRect(r)} close={closeSky} toggleMin={minSky}>
-          <SkyView obsId={sky.obsId} />
-        </FloatingWindow>
-      )}
     </div>
   );
 }
@@ -78,8 +66,8 @@ function FloatingWindow({ win, vp, focus, setRect, close, toggleMin, children }:
     return () => document.body.classList.remove('floating-busy', cls);
   }, [mode]);
 
-  // the gesture is followed by listeners on the window, not by pointer capture alone: whatever is under the pointer (the Sky view's
-  // canvas and bar, an iframe) cannot swallow the moves, and a browser that does not retarget to the captured element still works
+  // the gesture is followed by listeners on the window, not by pointer capture alone: whatever is under the pointer (an
+  // iframe) cannot swallow the moves, and a browser that does not retarget to the captured element still works
   const live = useRef({ vp, setRect });
   live.current = { vp, setRect };
   const miniDrag = useRef(mini);

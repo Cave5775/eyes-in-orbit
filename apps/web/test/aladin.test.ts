@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ALADIN_URL, ALADIN_VERSION, MAX_FOV_DEG, createSkyView, loadAladin, resetAladinLoader, type AladinGlobal } from '../src/lib/aladin';
+import { ALADIN_URL, ALADIN_VERSION, MAX_FOV_DEG, aladinRotationDeg, createSkyView, liveSkyView, loadAladin, resetAladinLoader, resetLiveSkyView, type AladinGlobal } from '../src/lib/aladin';
 
 function fakeAladin() {
   const calls: unknown[][] = [];
@@ -9,13 +9,18 @@ function fakeAladin() {
     setFoV: (...a: number[]) => calls.push(['fov', ...a]),
     setImageSurvey: (...a: string[]) => calls.push(['survey', ...a]),
     getFoV: () => [12, 8],
+    getRaDec: () => [33, -44],
+    setRotation: (...a: number[]) => calls.push(['rot', ...a]),
+    getRotation: () => -30,
+    world2pix: (ra: number, dec: number) => [ra * 2, dec * 3],
+    pix2world: (x: number, y: number) => (x < 0 ? null : [x / 2, y / 3]),
     on: (...a: unknown[]) => { calls.push(['on', a[0]]); handlers[String(a[0])] = a[1] as (n: number) => void; },
   };
   const A: AladinGlobal = { init: Promise.resolve(), aladin: (_el, o) => { calls.push(['create', o]); return inst; } };
   return { A, calls, handlers };
 }
 
-afterEach(() => { resetAladinLoader(); vi.useRealTimers(); });
+afterEach(() => { resetAladinLoader(); resetLiveSkyView(); vi.useRealTimers(); });
 
 describe('aladin adapter', () => {
   it('pins an exact released version on the jsDelivr CDN', () => {
@@ -80,5 +85,49 @@ describe('aladin adapter', () => {
     expect(calls).toEqual([]);
     handlers.zoomChanged(170);
     expect(calls).toEqual([['fov', MAX_FOV_DEG]]);
+  });
+
+  it('setPose aims, sets the horizontal field (clamped) and rotates by minus the position angle', () => {
+    const { A, calls } = fakeAladin();
+    const v = createSkyView(A, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    calls.length = 0;
+    v.setPose({ raDeg: 120, decDeg: -10, hFovDeg: 80, rotationDeg: 25 });
+    expect(calls).toEqual([['goto', 120, -10], ['fov', 80], ['rot', -25]]);
+    calls.length = 0;
+    v.setPose({ raDeg: 1, decDeg: 2, hFovDeg: 400, rotationDeg: 0 });
+    expect(calls).toEqual([['goto', 1, 2], ['fov', MAX_FOV_DEG], ['rot', 1e-6]]);
+  });
+
+  it('aladinRotationDeg flips the sign, never sends zero and survives junk', () => {
+    expect(aladinRotationDeg(30)).toBe(-30);
+    expect(aladinRotationDeg(-170)).toBe(170);
+    expect(aladinRotationDeg(0)).toBe(1e-6);
+    expect(aladinRotationDeg(Number.NaN)).toBe(1e-6);
+  });
+
+  it('reads the centre, the rotation and the projection back, and has no rotation when the build lacks it', () => {
+    const { A } = fakeAladin();
+    const v = createSkyView(A, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    expect(v.center()).toEqual({ raDeg: 33, decDeg: -44 });
+    expect(v.rotation()).toBe(-30);
+    expect(v.world2pix(10, 20)).toEqual([20, 60]);
+    expect(v.pix2world(20, 60)).toEqual([10, 20]);
+    expect(v.pix2world(-1, 0)).toBeNull();
+    const bare: AladinGlobal = { aladin: () => ({ gotoRaDec() {}, setFoV() {}, getFoV: () => 7, setImageSurvey() {}, on() {} }) };
+    const b = createSkyView(bare, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    expect(b.rotation()).toBeNull();
+    expect(b.world2pix(1, 2)).toBeNull();
+    expect(b.center()).toBeNull();
+    expect(b.fov()).toBe(7);
+    expect(() => b.setPose({ raDeg: 1, decDeg: 2, hFovDeg: 3, rotationDeg: 4 })).not.toThrow();
+  });
+
+  it('keeps the created view reachable for an overlay that projects sky positions', () => {
+    expect(liveSkyView()).toBeNull();
+    const { A } = fakeAladin();
+    const v = createSkyView(A, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    expect(liveSkyView()).toBe(v);
+    resetLiveSkyView();
+    expect(liveSkyView()).toBeNull();
   });
 });

@@ -18,8 +18,8 @@ import { dirToRaDec, precessDir } from './sky-frame';
  * celestial north to the up vector projected on the view plane, measured from north toward east (the usual position-angle
  * convention). Seen by the viewer on a chart with north up, east is on the LEFT, so north -> east is counter-clockwise: 0 means
  * north is up on screen (an equatorial chart as in a textbook), +90 means east is up, 180 south is up, -90 west is up. It is in
- * (-180, 180]. With up = the local vertical it equals the parallactic angle (sky-frame `parallacticAngleDeg`). How this maps to
- * the sign of Aladin's `setRotation` has to be checked against the real widget by eye; it is not assumed here.
+ * (-180, 180]. With up = the local vertical it equals the parallactic angle (sky-frame `parallacticAngleDeg`). Aladin's `setRotation`
+ * takes the opposite sign (checked against the real 3.8.2 widget, see lib/aladin.ts `aladinRotationDeg`).
  */
 
 /** Horizontal field of view (deg) of a rectilinear camera of vertical field `vDeg` and `aspect` = width / height. */

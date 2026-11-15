@@ -7,17 +7,20 @@ import { colorKeyOf, kindLabel } from '../lib/entity';
 import { launchOfPathEntity, liftoffMsOf, pathTipText } from '../lib/launch-seek';
 import { relatedFor } from '../lib/related';
 import { scopeLabel } from '../lib/scope';
+import { skyCoversScene } from '../lib/sky-mode';
 import { modelDef } from '../scene/models/registry';
 import { LabelLayer, type LabelItem } from '../scene/LabelLayer';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { usePanels } from '../state/panels';
 import { clock, runtime, type CameraCommands } from '../state/runtime';
 import { jumpToSimTime } from '../state/seek';
+import { leaveSkyView } from '../state/sky-flow';
 import { useSkin } from '../state/skin';
 import { useStore } from '../state/store';
 import { useView } from '../state/view';
 import { FrameBar } from './FrameBar';
 import { PickPopup, type PickItem } from './PickPopup';
+import { SkyOverlay } from './SkyOverlay';
 
 /** The colour key: the nine browser categories, each in its own colour (lib/browser-ui.ts, `--c-<category>`), the same as the dots. */
 const LEGEND: readonly [string, string][] = CATEGORIES.map((c) => [c.id, c.label]);
@@ -32,7 +35,8 @@ const HELP: [string, string][] = [
   ['Shift+F', 'Fit everything visible (respects the search and the hidden groups)'],
   ['S', 'Surface view: the camera is centred on the selected object but oriented to the local surface (level horizon, north-up). On by default for objects near the Earth (orbit, launch, booster, ground); S or Surface switches to the globe view, and that choice is remembered until you press S again'],
   ['Look from here', 'Observatories panel: the camera stands at the selected observatory (a ground site at eye height, a space telescope where it is now) and looks outward with a level horizon. Left drag turns the view, the wheel changes the field of view (1 to 120 degrees), pan is off. Esc or Leave returns to the Earth view you had (the observatory stays selected)'],
-  ['Esc', 'Deselect and return to the Earth view (while in the first-person view it only leaves that view, a second Esc deselects)'],
+  ['Sky view', "Observatories panel (or double-click a row): the camera stands at the observatory and the whole scene area changes into an Aladin Lite sky survey pointed exactly where the camera looks, with the same field of view and a matching horizon. Drag and wheel are Aladin's own, the survey list is at the top left. Esc or Back leaves the sky view and the first-person view in one step, to the Earth view you had. Settings > Sky view picks the transition. Observatories with no sky imagery (radio dishes) are disabled"],
+  ['Esc', 'Deselect and return to the Earth view (while in the sky view or the first-person view it only leaves them, a second Esc deselects)'],
   ['Follow, Fit, Model', 'Camera actions for the selection, in the selection panel on the right. Follow keeps the camera on the object; Fit is the same as F'],
   ['Model', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or Model on such a selection flies to it'],
   ['View: Labels', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
@@ -59,6 +63,8 @@ export function SceneView() {
   const surface = useView((s) => s.surface);
   const help = useView((s) => s.help);
   const firstPerson = useView((s) => s.firstPerson);
+  const skyPhase = useView((s) => s.sky.phase);
+  const skyCovered = skyCoversScene(skyPhase);
   /** open choice popup for a click on overlapping objects */
   const [pick, setPick] = useState<{ items: PickItem[]; more: number; x: number; y: number } | null>(null);
   const closePick = useCallback(() => setPick(null), []);
@@ -138,7 +144,10 @@ export function SceneView() {
       onFollowChange: (f) => store.getState().setFollow(f),
       onSurfaceChange: (on) => useView.getState().setSurface(on),
       onSurfacePrefChange: (on) => useView.getState().setSurfaceAuto(on),
-      onFirstPersonChange: (id) => useView.getState().setFirstPerson(id),
+      onFirstPersonChange: (id) => {
+        useView.getState().setFirstPerson(id);
+        if (id === null) useView.getState().skyDispatch({ type: 'fpEnded' }); // however it ended: a sky view over it ends too
+      },
     });
     scene.current = ctl;
     runtime.onFitRequest = (ids) => ctl.fitEntities(ids);
@@ -153,11 +162,14 @@ export function SceneView() {
       fitVisible: () => ctl.fitVisible(),
       toggleSurface: () => ctl.toggleSurface(),
       viewModel: (id) => { ctl.viewModel(id); },
-      lookFrom: (id) => { ctl.lookFrom(id); },
+      lookFrom: (id) => ctl.lookFrom(id),
       leaveFirstPerson: () => ctl.leaveFirstPerson(),
+      firstPersonPose: () => ctl.firstPersonPose(),
+      setFirstPersonLook: (dir, vFov) => ctl.setFirstPersonLook(dir, vFov),
+      setPaused: (on) => ctl.setPaused(on),
     };
     runtime.camera = camera;
-    if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime, clock };
+    if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime, clock, view: useView };
     const s0 = store.getState();
     // display settings (View menu, Settings): apply the remembered ones now, then every change
     const v0 = useView.getState();
@@ -226,6 +238,8 @@ export function SceneView() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.altKey || e.metaKey || isTyping(e)) return;
+      // the sky view covers the scene: its hotkeys (and the help they open) would act on something that cannot be seen
+      if (e.key !== 'Escape' && skyCoversScene(useView.getState().sky.phase)) return;
       const k = e.key.toLowerCase();
       if (k === 'f') {
         e.preventDefault();
@@ -244,9 +258,10 @@ export function SceneView() {
   const path = stats?.path;
   const fromFrame = stats && (!stats.frame.isDefault || stats.frame.locked) ? ` from ${stats.frame.label}` : '';
   return (
-    <div className="scene">
+    <div className="scene" data-sky={skyPhase}>
       <div ref={host} className="scene-host" />
       <div ref={labelHost} className="path-labels" />
+      <SkyOverlay />
       <div ref={tip} className="scene-tip" />
       <div ref={pathTip} className="scene-tip" />
       <div ref={pathDot} className="path-dot" />
@@ -257,19 +272,25 @@ export function SceneView() {
         <FrameBar />
       </div>
       <div className="scene-tools" role="toolbar" aria-label="Camera">
-        {firstPerson && (
+        {skyCovered && (
+          <button className="key on" onClick={leaveSkyView}
+            title="Back to the Earth view: leaves the sky view and the first-person view in one step, the observatory stays selected (Esc)">
+            Back<kbd>Esc</kbd>
+          </button>
+        )}
+        {firstPerson && !skyCovered && (
           <button className="key on" onClick={() => runtime.camera?.leaveFirstPerson()}
             title="Leave the first-person view: back to the Earth view you had, the observatory stays selected (Esc)">
             Leave<kbd>Esc</kbd>
           </button>
         )}
-        <button className={surface ? 'key on' : 'key'} onClick={() => runtime.camera?.toggleSurface()} aria-pressed={surface}
+        {!skyCovered && <button className={surface ? 'key on' : 'key'} onClick={() => runtime.camera?.toggleSurface()} aria-pressed={surface}
           title="Surface-aligned camera: centred on the selected object, level horizon, north-up. On by default near the Earth; turn it off for the globe view, the choice is remembered (S)">
           Surface<kbd>S</kbd>
-        </button>
-        <button className="key" onClick={() => runtime.camera?.fitVisible()} title="Frame everything currently visible, respecting the search and the hidden groups (Shift+F)">
+        </button>}
+        {!skyCovered && <button className="key" onClick={() => runtime.camera?.fitVisible()} title="Frame everything currently visible, respecting the search and the hidden groups (Shift+F)">
           Fit all<kbd>⇧F</kbd>
-        </button>
+        </button>}
         <button className={help ? 'key on' : 'key'} onClick={() => useView.getState().toggleHelp()} aria-pressed={help} aria-label="Scene controls" title="Scene controls (H)">?</button>
       </div>
       {help && (

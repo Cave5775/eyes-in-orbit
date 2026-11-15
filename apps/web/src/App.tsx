@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { usePanels } from './state/panels';
 import { runtime } from './state/runtime';
+import { leaveSkyView } from './state/sky-flow';
 import { useStore } from './state/store';
 import { useView } from './state/view';
 import { DetailPanel } from './ui/DetailPanel';
@@ -22,8 +23,12 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (e.key === 'Escape' && !(t instanceof HTMLInputElement && t.type === 'search' && t.value)) {
+        // the sky view: Esc leaves it and the first-person view under it in one step (the selection stays); further presses
+        // while it is leaving are swallowed so they do not reset the view under the transition
+        const sky = useView.getState().sky.phase;
+        if (sky !== 'off') leaveSkyView();
         // first-person: the first Esc only steps back out of it (the selection stays); the next one is the usual reset
-        if (runtime.camera && useView.getState().firstPerson) runtime.camera.leaveFirstPerson();
+        else if (runtime.camera && useView.getState().firstPerson) runtime.camera.leaveFirstPerson();
         else useStore.getState().resetView();
       }
     };
