@@ -144,6 +144,23 @@ export const wikidataUrl = (id: string): string => `https://www.wikidata.org/wik
 export const wikipediaSummaryUrl = (title: string): string =>
   `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`;
 
+/**
+ * English Wikipedia article titles of the bodies whose plain name is not their article: a disambiguation page (Io, Titan,
+ * Ceres ...: the summary would be refused as saying nothing about one object) or another subject (Iapetus is the Greek
+ * Titan, Charon the ferryman, Oberon the fairy king). Each title was checked against the live REST summary (2026-11-14:
+ * type `standard` and a description naming the moon, planet or dwarf planet). Every other body uses its own name.
+ */
+export const BODY_ARTICLES: Readonly<Record<string, string>> = {
+  Mercury: 'Mercury (planet)', Ceres: 'Ceres (dwarf planet)', Eris: 'Eris (dwarf planet)',
+  Phobos: 'Phobos (moon)', Deimos: 'Deimos (moon)', Io: 'Io (moon)', Europa: 'Europa (moon)', Ganymede: 'Ganymede (moon)',
+  Callisto: 'Callisto (moon)', Tethys: 'Tethys (moon)', Dione: 'Dione (moon)', Rhea: 'Rhea (moon)', Titan: 'Titan (moon)',
+  Iapetus: 'Iapetus (moon)', Miranda: 'Miranda (moon)', Ariel: 'Ariel (moon)', Titania: 'Titania (moon)', Oberon: 'Oberon (moon)',
+  Triton: 'Triton (moon)', Charon: 'Charon (moon)',
+};
+
+/** The Wikipedia article title for a body's name. */
+export const bodyArticleTitle = (name: string): string => BODY_ARTICLES[name] ?? name;
+
 export const wikipediaSearchUrl = (name: string): string =>
   `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(name)}`;
 

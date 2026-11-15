@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { classifyFeed, composeFallback, isTrustedDescribeUrl, type EntityRecord } from '@eio/core';
+import { bodyEntityRecords, classifyFeed, composeFallback, isTrustedDescribeUrl, type EntityRecord } from '@eio/core';
 import { Credentials } from '../src/credentials';
 import Fastify from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +8,7 @@ import { registerApi } from '../src/api';
 import { loadConfig } from '../src/config';
 import { DescribeService, ERROR_TTL_MS, HIT_TTL_MS, MISS_TTL_MS } from '../src/describe/service';
 import {
-  discosUrl, parseDiscos, parseWikidataEntities, parseWikidataNameSearch, parseWikidataSearch, parseWikipediaSummary, pickWikidataItem,
+  BODY_ARTICLES, bodyArticleTitle, discosUrl, parseDiscos, parseWikidataEntities, parseWikidataNameSearch, parseWikidataSearch, parseWikipediaSummary, pickWikidataItem,
   uniqueSpaceCandidate, wikidataEntitiesUrl, wikidataSearchUrl, wikipediaSummaryUrl,
 } from '../src/describe/sources';
 import { Http } from '../src/http';
@@ -326,6 +326,15 @@ describe('DescribeService', () => {
     expect(urls()).toEqual([wikipediaSummaryUrl('Mars')]);
   });
 
+  it('asks for the qualified article of a body whose plain name is a disambiguation page (Io, Ceres)', async () => {
+    const { svc } = make();
+    routes['page/summary/Io_(moon)'] = reply(SUMMARY);
+    routes['page/summary/Ceres_(dwarf_planet)'] = reply(SUMMARY);
+    await svc.describe({ id: 'body-io', name: 'Io', kind: 'moon', bodyId: 'JUPITER', aliases: {}, updatedAt: 0 });
+    await svc.describe({ id: 'body-ceres', name: 'Ceres', kind: 'planet', bodyId: 'SUN', aliases: {}, updatedAt: 0 });
+    expect(urls()).toEqual([wikipediaSummaryUrl('Io (moon)'), wikipediaSummaryUrl('Ceres (dwarf planet)')]);
+  });
+
   it('does not cache an OFFLINE answer: back online the same object is looked up for real', async () => {
     const config = loadConfig({ OFFLINE: '1' });
     const off = new DescribeService({ store, http: new Http(store, { fetch: fetchMock, offline: true }), config, hub }, { now: () => now });
@@ -387,5 +396,17 @@ describe('GET /api/describe/:entityId', () => {
     const nope = await app.inject({ url: '/api/describe/sat-1' });
     expect(nope.statusCode).toBe(404);
     await app.close();
+  });
+});
+
+describe('body article titles', () => {
+  it('only name real bodies (a typo would silently fall back to the plain name)', () => {
+    const names = new Set(bodyEntityRecords().map((b) => b.name));
+    for (const k of Object.keys(BODY_ARTICLES)) expect(names.has(k), k).toBe(true);
+  });
+  it('qualify with a parenthesis and fall back to the name', () => {
+    expect(bodyArticleTitle('Titan')).toBe('Titan (moon)');
+    expect(bodyArticleTitle('Mars')).toBe('Mars');
+    for (const t of Object.values(BODY_ARTICLES)) expect(t).toMatch(/ [(](moon|planet|dwarf planet)[)]$/);
   });
 });

@@ -7,7 +7,7 @@ import { LimitedError } from '../net/limiter';
 import type { Hub } from '../hub';
 import { isFresh, type Store } from '../store';
 import {
-  discosHeaders, discosUrl, parseDiscos, parseWikidataEntities, parseWikidataNameSearch, parseWikidataSearch, parseWikipediaSummary,
+  bodyArticleTitle, discosHeaders, discosUrl, parseDiscos, parseWikidataEntities, parseWikidataNameSearch, parseWikidataSearch, parseWikipediaSummary,
   pickWikidataItem, uniqueSpaceCandidate, wikidataEntitiesUrl, wikidataNameSearchUrl, wikidataSearchUrl, wikidataUrl, wikipediaSearchUrl,
   wikipediaSummaryUrl, type DiscosObject, type WikipediaSummary,
 } from './sources';
@@ -131,7 +131,7 @@ export class DescribeService {
     // Wikidata item, then its English Wikipedia article (bodies skip Wikidata: their name is the article title)
     let title: string | undefined;
     if (rec.id.startsWith('body-')) {
-      title = rec.name;
+      title = bodyArticleTitle(rec.name);
       d.sources.wikidata = 'off';
     } else if (norad === undefined && rec.kind !== 'probe') {
       d.sources.wikidata = 'off'; // no catalogue number and not a probe: a name search would only guess
