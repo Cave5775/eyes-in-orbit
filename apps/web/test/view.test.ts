@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DETAIL_KEY, LABELS_KEY, createViewStore, loadFlag, saveFlag, type StorageLike } from '../src/state/view';
+import { DETAIL_KEY, LABELS_KEY, SURFACE_PREF_KEY, createViewStore, loadFlag, saveFlag, type StorageLike } from '../src/state/view';
 
 const mem = (init: Record<string, string> = {}): StorageLike & { data: Record<string, string> } => {
   const data = { ...init };
@@ -35,6 +35,22 @@ describe('view store', () => {
     store.getState().toggleLabels();
     expect(storage.data[LABELS_KEY]).toBe('on');
     expect(store.getState().labels).toBe(true);
+  });
+  it('remembers the surface-view default in eio.surface, on unless stored off', () => {
+    expect(createViewStore(mem()).getState().surfaceAuto).toBe(true);
+    const storage = mem({ [SURFACE_PREF_KEY]: 'off' });
+    const store = createViewStore(storage);
+    expect(store.getState().surfaceAuto).toBe(false);
+    store.getState().setSurfaceAuto(true);
+    expect(store.getState().surfaceAuto).toBe(true);
+    expect(storage.data[SURFACE_PREF_KEY]).toBe('on');
+  });
+  it('sets detail directly (Settings) and remembers it', () => {
+    const storage = mem();
+    const store = createViewStore(storage);
+    store.getState().setDetail(false);
+    expect(store.getState().detail).toBe(false);
+    expect(storage.data[DETAIL_KEY]).toBe('off');
   });
   it('does not remember scope, and toggles help', () => {
     const storage = mem();

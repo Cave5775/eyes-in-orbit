@@ -14,7 +14,7 @@ import { viewClass } from '../lib/view-class';
 import { EARTH_CENTRE, centreLabel, distanceFromCentre, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
-import { loadSurfacePref, saveSurfacePref, shouldAutoSurface } from '../lib/surface';
+import { loadSurfacePref, shouldAutoSurface } from '../lib/surface';
 import { FP_FOV_START, firstPersonStart, focusEndsFirstPerson, selectionEndsFirstPerson, type FirstPersonSaved } from '../lib/first-person';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_CTX, NO_QUERY, classify, isDrawn, queryActive, type Class, type Ctx, type Query } from '../lib/query';
@@ -92,6 +92,8 @@ export interface SceneCallbacks {
   /** The scene changed follow mode by itself (FIT leaves the followed object). */
   onFollowChange?(follow: boolean): void;
   onSurfaceChange?(on: boolean): void;
+  /** S / Surface changed the surface-view default; the page remembers it. */
+  onSurfacePrefChange?(on: boolean): void;
   /** The first-person view started (the observatory's id) or ended (null), see `SceneController.lookFrom`. */
   onFirstPersonChange?(id: string | null): void;
 }
@@ -834,14 +836,19 @@ export class SceneController {
     return this.surfaceOn;
   }
 
-  /** The user's S / SURFACE: switch the view, and remember the choice so the surface view neither comes back nor stays away by itself. */
+  /** The user's S / SURFACE: switch the view, and make it the default so the surface view neither comes back nor stays away by itself. */
   toggleSurface(): void {
     const on = !this.surfaceOn;
     this.setSurfaceMode(on);
-    if (this.surfaceOn === on) {
+    if (this.surfaceOn === on && this.surfaceAuto !== on) {
       this.surfaceAuto = on;
-      saveSurfacePref(on);
+      this.cb.onSurfacePrefChange?.(on);
     }
+  }
+
+  /** Whether focusing an object near the Earth switches to the surface view. Applies from the next focus. */
+  setSurfaceAuto(on: boolean): void {
+    this.surfaceAuto = on;
   }
 
   /**

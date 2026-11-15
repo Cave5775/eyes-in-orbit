@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { PANELS, clampSize, loadSizes, maxSize, resolveSizes, saveSizes, type PanelKey, type PanelSizes } from '../lib/layout';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { PANELS, maxSize, resolveSizes, type PanelKey } from '../lib/layout';
+import { useLayout } from '../state/layout';
 import { usePanels } from '../state/panels';
 import { Splitter } from './Splitter';
 
@@ -10,10 +11,10 @@ function viewport() {
 /**
  * The app grid root. Panel sizes are CSS variables on this element (`--left-w`, `--right-w`,
  * `--bottom-h`) so the grid template and the splitter positions both follow them.
- * `children` is passed through unchanged, so resizing re-renders only this component.
+ * `children` is passed through unchanged, so resizing re-renders only this component. Sizes come from state/layout.ts.
  */
 export function ResizableLayout({ children }: { children: ReactNode }) {
-  const [stored, setStored] = useState<PanelSizes>(() => loadSizes());
+  const stored = useLayout((s) => s.stored);
   const [vp, setVp] = useState(viewport);
 
   useEffect(() => {
@@ -22,26 +23,10 @@ export function ResizableLayout({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  useEffect(() => {
-    saveSizes(stored);
-  }, [stored]);
-
   const sizes = useMemo(() => resolveSizes(stored, vp), [stored, vp]);
 
-  const set = useCallback((key: PanelKey, px: number) => {
-    setStored((prev) => {
-      const effective = resolveSizes(prev, viewport());
-      const next = clampSize(key, px, effective, viewport());
-      return prev[key] === next ? prev : { ...prev, [key]: next };
-    });
-  }, []);
-  const reset = useCallback((key: PanelKey) => {
-    setStored((prev) => {
-      if (prev[key] === undefined) return prev;
-      const { [key]: _drop, ...rest } = prev;
-      return rest;
-    });
-  }, []);
+  const set = (key: PanelKey, px: number) => useLayout.getState().setSize(key, px, viewport());
+  const reset = (key: PanelKey) => useLayout.getState().resetSize(key);
 
   // hidden panels (PANELS menu) give their space back; the stored sizes are untouched, so showing one restores it
   const shown = usePanels((s) => s.visible);

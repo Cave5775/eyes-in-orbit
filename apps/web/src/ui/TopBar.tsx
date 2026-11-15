@@ -8,6 +8,7 @@ import { clock } from '../state/runtime';
 import { useStore } from '../state/store';
 import { DataStreams } from './DataStreams';
 import { useSimNow } from './hooks';
+import { SettingsMenu } from './SettingsMenu';
 import { ViewMenu } from './ViewMenu';
 
 type FieldKey = 'days' | 'hours' | 'minutes' | 'seconds';
@@ -164,6 +165,7 @@ export function TopBar() {
       <div className="topbar-end">
         <ViewMenu />
         <DataStreams />
+        <SettingsMenu />
       </div>
     </header>
   );

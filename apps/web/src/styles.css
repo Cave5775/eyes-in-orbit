@@ -265,6 +265,13 @@ button.chip:hover { border-color: var(--ink-3); color: var(--ink); }
 .switch:checked { background: var(--ink); border-color: var(--ink); }
 .switch:checked::after { transform: translateX(12px); background: var(--void); }
 .menu-row:hover .menu-name { text-decoration: underline; text-decoration-color: var(--rule-2); text-underline-offset: 2px; }
+/* Settings: menu rows, plus action rows (a button in place of the switch) and a footer */
+.icon-key { display: inline-flex; align-items: center; justify-content: center; padding-left: 7px; padding-right: 7px; }
+.settings-action { cursor: default; }
+.settings-action > .key { grid-area: switch; }
+.settings-action:hover .menu-name { text-decoration: none; }
+.settings-foot { display: flex; justify-content: flex-end; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.key:disabled { opacity: 0.45; cursor: default; }
 
 /* ---- top bar at narrower widths: drop whole pieces, never squeeze them ---- */
 @media (max-width: 1440px) { .utc-date { display: none; } }

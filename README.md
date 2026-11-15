@@ -37,6 +37,7 @@ Open <http://localhost:5173>. Run the tests with `npm test`.
 | `S` | Toggle the surface-aligned view |
 | `Esc` | Deselect and return to Earth view |
 | View menu (top bar) | Labels, highlight, scope, legend and which panels are shown |
+| Settings (top bar gear) | Close-up imagery, surface view default, YouTube controls, panel sizes, restore defaults |
 | `H` or `?` | Show all controls in the app |
 
 ## Where the data comes from
