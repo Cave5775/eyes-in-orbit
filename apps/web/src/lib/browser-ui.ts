@@ -1,6 +1,6 @@
 import { defaultBodies, observatoryOf, type EntityRecord } from '@eio/core';
 import { fmtDays, fmtKm, fmtNum } from './format';
-import { viewClass } from './view-class';
+import { typeOf, viewClass } from './view-class';
 
 /** Pure parts of the detail panel's body facts and the EntityBrowser's category chips. */
 
@@ -169,17 +169,23 @@ function typeMatcher(value: string): TypeMatcher {
  *
  * - a general category id (`satellites`, `launch-vehicles`, `debris`, `ground`, `bodies`...): the entities `categoryOf` puts
  *   there (`type:satellites` is the plain satellites, not the navigation ones; the category chips count exactly these), or
- * - an entity kind (`satellite`, `probe`, `ground_station`, `moon`, `stage`...): the entities of that kind, so `type:satellite`
- *   is every satellite and `type:probe` only the probes, not the rovers (use `type:probes` for the whole family).
+ * - an entity kind (`satellite`, `probe`, `ground_station`, `moon`, `stage`...): the entities of that kind as shown (`typeOf`), so
+ *   `type:satellite` is every satellite, orbiters of other bodies included, and `type:probe` only the probes, not the rovers (use
+ *   `type:probes` for the whole family).
  *
  * A word that is both an old category alias and a kind (`moon`, `planets`, `pad`) is the kind.
  */
-export function matchesType(rec: { kind: string; group?: string; render?: { colorKey?: string }; attrs?: EntityRecord['attrs'] }, value: string): boolean {
+export function matchesType(rec: { kind: string; group?: string; bodyId?: string; provider?: { type: string }; render?: { colorKey?: string }; attrs?: EntityRecord['attrs'] }, value: string): boolean {
   const m = typeMatcher(value);
   if (m.observatory) return observatoryOf(rec) !== null;
   if (m.category) return categoryOf(rec) === m.category;
-  return !!m.kinds && m.kinds.includes(rec.kind.toLowerCase());
+  // the kind as shown (`typeOf`): an orbiter of another body is a satellite, not a probe
+  return !!m.kinds && m.kinds.includes(kindOf(rec).toLowerCase());
 }
+
+/** The displayed kind of a record or a search hit (a hit without position data keeps its stored kind). */
+const kindOf = (rec: { kind: string; bodyId?: string; provider?: { type: string } }): string =>
+  rec.bodyId === undefined ? rec.kind : typeOf({ kind: rec.kind, bodyId: rec.bodyId, provider: rec.provider as EntityRecord['provider'] });
 
 /** Entities per category (all categories present, in chip order; `other` only when it has members). */
 export function categoryCounts(records: Iterable<{ kind: string; group?: string; render?: { colorKey?: string } }>): [CategoryId, number][] {

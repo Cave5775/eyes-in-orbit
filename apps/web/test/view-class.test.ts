@@ -71,7 +71,8 @@ describe('viewClass', () => {
     expect(categoryOf(rec('rover', 'MARS'))).toBe('probes');
     expect(matchesType(all['dsn-MRO'], 'probes')).toBe(false);
     expect(matchesType(all['dsn-MRO'], 'satellites')).toBe(true);
-    expect(matchesType(all['dsn-MRO'], 'probe')).toBe(true); // `probe` is still its kind
+    expect(matchesType(all['dsn-MRO'], 'probe')).toBe(false); // its stored kind is probe, but it is shown and queried as a satellite (typeOf)
+    expect(matchesType(all['dsn-MRO'], 'satellite')).toBe(true);
   });
 });
 

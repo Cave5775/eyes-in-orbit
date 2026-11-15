@@ -1,5 +1,5 @@
 import type { EntityRecord } from '@eio/core';
-import type { SearchHit } from './filters';
+import { searchHitOf, type SearchHit } from './filters';
 
 /** The server's answer to `GET /api/match`: what the store needs of it. */
 export interface MatchAnswer {
@@ -22,7 +22,7 @@ export function textHitsOf(ids: readonly string[], entities: ReadonlyMap<string,
   const out: SearchHit[] = [];
   for (const id of ids) {
     const r = entities.get(id);
-    if (r) out.push({ id: r.id, name: r.name, kind: r.kind, group: r.group, aliases: r.aliases });
+    if (r) out.push(searchHitOf(r));
   }
   return out;
 }

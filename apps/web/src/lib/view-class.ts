@@ -42,3 +42,15 @@ export function viewClass(rec: Rec, geocentricKm?: number): ViewClass {
 
 /** The primary body an orbiter is measured from (registry id), or undefined for any other class. */
 export const primaryOf = (rec: Rec): string | undefined => (viewClass(rec) === 'orbiter' ? listedParent(rec) : undefined);
+
+/**
+ * The type of an entity as it is shown and queried (detail panel, hover tip, pick popup, list rows, tree groups, `type:<kind>`,
+ * the `type` suggestions): its stored `kind`, except that a `probe` which is an `orbiter` (bound to a body other than the Earth
+ * and the Sun, e.g. MRO round Mars, LRO round the Moon) is a `satellite`, as `categoryOf` already files it. A feed cannot say it:
+ * the DSN list only knows "spacecraft" (kind `probe`) and the primary body is known from the position data (`listedParent`), so
+ * the server keeps the kind and this is derived from the data, by the same `viewClass` rule as the category and the colour.
+ * Every other kind (and an Earth-bound probe, whose class needs the live geocentric radius) is returned as stored.
+ */
+export function typeOf(rec: Rec): string {
+  return rec.kind === 'probe' && viewClass(rec) === 'orbiter' ? 'satellite' : rec.kind;
+}

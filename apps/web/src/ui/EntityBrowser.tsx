@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { BODY_CATEGORY_KINDS, CATEGORIES, categoryCounts, categoryLabel } from '../lib/browser-ui';
 import { buildTreeRows, revealKeys, revealRowIndex, stickyAncestors, type TreeBody } from '../lib/entity-tree';
 import { colorKeyOf, kindLabel } from '../lib/entity';
-import { browseOrder, facetCounts, jumpTarget, type SearchHit } from '../lib/filters';
+import { browseOrder, facetCounts, jumpTarget, searchHitOf, type SearchHit } from '../lib/filters';
+import { typeOf } from '../lib/view-class';
 import { isEarthCentre } from '../lib/frame';
 import { buildLaunchGroups, launchMembers } from '../lib/launch-group';
 import {
@@ -144,7 +145,7 @@ export function EntityBrowser() {
 
   // the rows: what the query lets through (the same predicate the scene draws by, so the counts match what is drawn). Hidden
   // groups are not listed. The text ranks them; without text the notable kinds come first.
-  const ordered = useMemo(() => [...entities.values()].sort(browseOrder), [shape]);
+  const ordered = useMemo(() => [...entities.values()].sort(browseOrder).map(searchHitOf), [shape]);
   const rows: SearchHit[] = useMemo(() => {
     const t0 = perf.on ? performance.now() : 0;
     const out = (textOf(query) && textHits ? textHits : ordered).filter(listedBy(entities, query, textIds));
@@ -197,7 +198,7 @@ export function EntityBrowser() {
       return;
     }
     if (mode === 'tree') {
-      const keys = revealKeys(rec, { bodies: TREE_BODIES, bodyOf: (r) => listedParent(r as EntityRecord) });
+      const keys = revealKeys({ ...rec, kind: typeOf(rec) }, { bodies: TREE_BODIES, bodyOf: (r) => listedParent(r as EntityRecord) });
       setOverrides((o) => (keys.every((k) => o.get(k) === true) ? o : new Map([...o, ...keys.map((k): [string, boolean] => [k, true])])));
     }
     setRevealId(rec.id);
@@ -330,7 +331,7 @@ export function EntityBrowser() {
     const pad = 6 + r.depth * INDENT_PX;
     if (r.type === 'entity') {
       const rec = entities.get(r.id);
-      return entityRow(r.id, rec?.name ?? r.id, rec?.kind ?? '', r.depth, r.key);
+      return entityRow(r.id, rec?.name ?? r.id, rec ? typeOf(rec) : '', r.depth, r.key);
     }
     if (r.type === 'group') {
       return (

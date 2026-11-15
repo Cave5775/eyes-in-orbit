@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { emptyHint } from '../lib/browser-ui';
 import { kindLabel, launchOf } from '../lib/entity';
+import { typeOf } from '../lib/view-class';
 import { modelDef } from '../scene/models/registry';
 import { runtime } from '../state/runtime';
 import { useStore } from '../state/store';
@@ -57,7 +58,7 @@ export function DetailPanel() {
         <button className="btn icon" onClick={() => selectObject(null)} aria-label="Clear selection" title="Clear selection">&times;</button>
       </div>
       <div className="detail-sub">
-        <span>{kindLabel(rec.kind)}</span>
+        <span>{kindLabel(typeOf(rec))}</span>
         {rec.group && <span>{rec.group}</span>}
         <span className="dim">{rec.id}</span>
       </div>

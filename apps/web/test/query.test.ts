@@ -27,7 +27,8 @@ const ids = (query: Query, ctx = { focus: NO_FOCUS } as Parameters<typeof classi
 describe('classify: only terms', () => {
   it('matches group, kind, id, body, launch and category', () => {
     expect(ids(q('group:starlink'))).toEqual(['sat-44713']);
-    expect(ids(q('type:probe'))).toEqual(['dsn-LRO']);
+    expect(ids(q('type:satellite'))).toEqual(['sat-44713', 'sat-24876', 'dsn-LRO']); // the kind as shown: LRO orbits the Moon, so it is a satellite, not a probe
+    expect(ids(q('type:probe'))).toEqual([]);
     expect(ids(q('id:25544'))).toEqual(['sat-25544']);
     expect(ids(q('body:moon'))).toEqual(['dsn-LRO']);
     expect(ids(q('launch:1993'))).toEqual(['sat-33791', 'sat-33792']);
@@ -40,8 +41,8 @@ describe('classify: only terms', () => {
     expect(ids(q('type:station group:gps-ops'))).toEqual([]);
   });
   it('negation removes matches, alone or with an inclusion', () => {
-    expect(ids(q('-type:satellite'))).toEqual(['sat-25544', 'sat-33791', 'sat-33792', 'dsn-LRO', 'body-moon']);
-    expect(ids(q('type:satellite -group:starlink'))).toEqual(['sat-24876']);
+    expect(ids(q('-type:satellite'))).toEqual(['sat-25544', 'sat-33791', 'sat-33792', 'body-moon']);
+    expect(ids(q('type:satellite -group:starlink'))).toEqual(['sat-24876', 'dsn-LRO']);
     expect(ids(q('-group:starlink -group:gps-ops -type:debris'))).toEqual(['sat-25544', 'dsn-LRO', 'body-moon']);
   });
   it('is off without terms, and a negation alone is a restriction', () => {
@@ -94,7 +95,7 @@ describe('classify: hide terms', () => {
     expect(classify(GPS, query)).toBe('show');
     expect(classify(STAR, query)).toBe('hide');
     expect(classify(DEB, query)).toBe('out');
-    expect(ids(query)).toEqual(['sat-24876']);
+    expect(ids(query)).toEqual(['sat-24876', 'dsn-LRO']);
   });
   it('hide terms hide the objects of every category the same way the list counts them', () => {
     const rows = filterRecords(ALL, q('type:debris', 'hide'));
@@ -224,7 +225,7 @@ describe('storage', () => {
 describe('classes are the four documented values', () => {
   it('off, show, out, hide', () => {
     const seen = new Set<Class>();
-    for (const r of ALL) for (const query of [NO_QUERY, q('type:probe'), q('type:probe', 'hide')]) seen.add(classify(r, query));
+    for (const r of ALL) for (const query of [NO_QUERY, q('type:satellite'), q('type:satellite', 'hide')]) seen.add(classify(r, query));
     expect([...seen].sort()).toEqual(['hide', 'off', 'out', 'show']);
   });
 });
