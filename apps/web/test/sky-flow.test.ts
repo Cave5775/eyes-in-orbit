@@ -14,7 +14,7 @@ function fakeCamera(over: Partial<CameraCommands> = {}) {
     fitSelected: () => {}, fitVisible: () => {}, toggleSurface: () => {}, viewModel: () => {},
     lookFrom: (id) => { calls.push(`look ${id}`); return true; },
     leaveFirstPerson: () => { calls.push('leave'); },
-    firstPersonPose: () => null, setFirstPersonLook: () => {}, setPaused: () => {},
+    firstPersonPose: () => null, setFirstPersonLook: () => {}, setPaused: () => {}, setFirstPersonHold: () => {},
     ...over,
   };
   return { cam, calls };

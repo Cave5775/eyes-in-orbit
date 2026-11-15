@@ -791,6 +791,21 @@ video.stream-frame { background: #000; object-fit: contain; }
 .sky-aladin { position: absolute; inset: 0; }
 .sky-curtain > .sky-aladin.sky-aladin { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; contain: paint; } /* Aladin adds .aladin-container (position: relative, no height) to its host; the doubled selector outranks it, else the host is 0 px high and the canvas 1 px */
 .sky-annotations { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; } /* mount point for the annotation layer, over the Aladin canvas */
+/* the body markers (ui/SkyMarkers.tsx): a ring at the exact position, the name to its right (View > Labels), the category colour from --tint */
+.sky-markers { position: absolute; inset: 0; pointer-events: none; }
+.sky-ring {
+  position: absolute; left: 0; top: 0; display: none; width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%;
+  border: 1.5px solid var(--tint, var(--ink)); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75); will-change: transform, opacity;
+}
+.sky-ring.dim { border-style: dashed; }
+.sky-ring.hover { background: rgba(var(--ink-rgb), 0.22); }
+.sky-ring.selected { border-width: 2px; background: rgba(var(--ink-rgb), 0.18); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75), 0 0 0 3px var(--ink); }
+.sky-label { color: var(--ink); background: rgba(0, 0, 0, 0.62); }
+.sky-tip {
+  position: absolute; left: 0; top: 0; display: none; z-index: 3; white-space: pre; line-height: 1.45;
+  background: rgba(var(--hull-rgb), 0.94); border: 1px solid var(--rule-2); border-radius: var(--r-1); padding: 4px 8px; font-size: 11.5px; font-stretch: var(--narrow);
+}
+.sky-curtain.sky-hit .sky-aladin canvas { cursor: pointer !important; } /* the pointer is over a body marker */
 .sky-scan {
   position: absolute; inset: 0; z-index: 2; opacity: 0; pointer-events: none; will-change: transform;
   border-right: 2px solid var(--on-bg, #fff); box-shadow: 8px 0 18px -2px rgba(var(--ink-rgb), 0.55);

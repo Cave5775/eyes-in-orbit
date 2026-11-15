@@ -22,7 +22,13 @@
  * - `world2pix(ra, dec)` returns CSS pixels in the element (x right, y down, origin top left; the centre of an 800x500 view is
  *   (400, 250)), `pix2world(x, y)` the inverse with RA in [0, 360). Both answer at once after `gotoRaDec`, `setFoV` or
  *   `setRotation`, which apply immediately (no animation); `getRaDec()` reads the centre back.
+ * - `animateToRaDec(ra, dec, seconds)` and `stopAnimation()` exist: the centre moves along the sky in steps of Aladin's own render
+ *   loop (0.6 s took about 0.75 s from the call: (100, 20) -> (130, 40) passed (104.9, 24.3), (109, 27.6), (117.3, 33.4), (126.0, 38.2)),
+ *   and the field of view and the rotation are untouched (40 and 30 stayed 40 and 30). `world2pix` follows the moving centre, so
+ *   a layer that projects every frame stays on the sky. `SkyView.animateTo` uses it; a build without it gets an eased `gotoRaDec`.
  */
+
+import { easeInOut, slerpRaDec } from './sky-markers';
 
 export const ALADIN_VERSION = '3.8.2';
 export const ALADIN_URL = `https://cdn.jsdelivr.net/npm/aladin-lite@${ALADIN_VERSION}/dist/aladin.js`;
@@ -37,6 +43,8 @@ interface AladinInstance {
   on(event: string, cb: (...args: number[]) => void): void;
   getRaDec?(): ArrayLike<number> | null | undefined;
   setRotation?(deg: number): void;
+  animateToRaDec?(raDeg: number, decDeg: number, seconds: number): void;
+  stopAnimation?(): void;
   getRotation?(): number;
   world2pix?(raDeg: number, decDeg: number): ArrayLike<number> | null | undefined;
   pix2world?(x: number, y: number): ArrayLike<number> | null | undefined;
@@ -126,6 +134,10 @@ export interface SkyViewPose {
 /** A sky view in one element. */
 export interface SkyView {
   gotoRaDec(raDeg: number, decDeg: number): void;
+  /** move the centre to a J2000 position over `ms`, keeping the field of view and the rotation (Aladin's own animation, else an eased `gotoRaDec`); a new call or `stopAnimation` replaces a running one */
+  animateTo(raDeg: number, decDeg: number, ms: number): void;
+  /** stop a running `animateTo` where it is (the user starts dragging) */
+  stopAnimation(): void;
   setSurvey(id: string): void;
   /** sets the HORIZONTAL (screen width) field of view, degrees */
   setFov(deg: number): void;
@@ -208,8 +220,37 @@ export function createSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewIni
   a.on('zoomChanged', (fov) => {
     if (fov > MAX_FOV_DEG) a.setFoV(MAX_FOV_DEG);
   });
+  let fallback = 0;
+  const stopAnimation = () => {
+    if (fallback) cancelAnimationFrame(fallback);
+    fallback = 0;
+    try {
+      a.stopAnimation?.();
+    } catch { /* nothing was running */ }
+  };
   const view: SkyView = {
     gotoRaDec: (ra, dec) => a.gotoRaDec(ra, dec),
+    stopAnimation,
+    animateTo: (ra, dec, ms) => {
+      stopAnimation();
+      if (typeof a.animateToRaDec === 'function') {
+        a.animateToRaDec(ra, dec, ms / 1000);
+        return;
+      }
+      const from = pairOf(a.getRaDec?.());
+      if (!from || ms <= 0) {
+        a.gotoRaDec(ra, dec);
+        return;
+      }
+      const start = performance.now(), a0 = { raDeg: from[0], decDeg: from[1] }, a1 = { raDeg: ra, decDeg: dec }, tmp = { raDeg: 0, decDeg: 0 };
+      const step = () => {
+        const p = Math.min(1, (performance.now() - start) / ms);
+        const q = slerpRaDec(a0, a1, easeInOut(p), tmp);
+        a.gotoRaDec(q.raDeg, q.decDeg);
+        fallback = p < 1 ? requestAnimationFrame(step) : 0;
+      };
+      step();
+    },
     setSurvey: (id) => a.setImageSurvey(id),
     setFov: (deg) => a.setFoV(Math.min(MAX_FOV_DEG, Math.max(0.001, deg))),
     fov: () => {

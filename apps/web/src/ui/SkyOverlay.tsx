@@ -91,6 +91,16 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waiting, obsId]);
 
+  // the first-person view is HELD while the sky view is entering or on: a body selected on the sky map neither ends it nor flies the
+  // camera. Releasing it (leaving, a failure) ends the view at the current selection when that is not the observatory
+  // (SceneController.setFirstPersonHold). Declared before the phase effects below, so a leave releases it before it leaves.
+  const held = phase === 'entering' || phase === 'on';
+  useLayoutEffect(() => {
+    if (!held) return;
+    runtime.camera?.setFirstPersonHold(true);
+    return () => runtime.camera?.setFirstPersonHold(false);
+  }, [held]);
+
   // entering: aim Aladin at where the camera looks now and run the transition; then stop drawing the scene
   useLayoutEffect(() => {
     if (phase !== 'entering') return;

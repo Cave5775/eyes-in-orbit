@@ -77,6 +77,46 @@ describe('aladin adapter', () => {
     expect(v.fov()).toBe(12);
   });
 
+  it('animateTo uses Aladin own animation (seconds) and stopAnimation stops it', () => {
+    const { A, calls } = fakeAladin();
+    const inst = A.aladin({} as HTMLElement, {});
+    const own = { ...inst, animateToRaDec: (...a: number[]) => calls.push(['anim', ...a]), stopAnimation: () => calls.push(['stop']) };
+    const v = createSkyView({ init: A.init, aladin: () => own }, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    calls.length = 0;
+    v.animateTo(130, 40, 400);
+    expect(calls).toEqual([['stop'], ['anim', 130, 40, 0.4]]);
+    v.stopAnimation();
+    expect(calls[calls.length - 1]).toEqual(['stop']);
+  });
+
+  it('animateTo without Aladin animation steps gotoRaDec along an eased great circle and ends exactly on the target', () => {
+    const { A, calls } = fakeAladin(); // getRaDec says (33, -44)
+    const v = createSkyView(A, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    let now = 0;
+    const frames: (() => void)[] = [];
+    vi.stubGlobal('performance', { now: () => now });
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => frames.push(cb));
+    vi.stubGlobal('cancelAnimationFrame', () => { frames.length = 0; });
+    try {
+      calls.length = 0;
+      v.animateTo(60, 10, 400);
+      expect(calls).toHaveLength(1); // the first step runs at once, at the start
+      expect(calls[0][1]).toBeCloseTo(33, 6);
+      now = 200; frames.shift()!();
+      expect(calls).toHaveLength(2);
+      expect(calls[1][1]).toBeGreaterThan(33); expect(calls[1][1]).toBeLessThan(60);
+      now = 400; frames.shift()!();
+      expect(calls[calls.length - 1]).toEqual(['goto', 60, 10]);
+      expect(frames).toHaveLength(0);
+      // a new call replaces a running one
+      now = 0; v.animateTo(1, 1, 400);
+      v.stopAnimation();
+      expect(frames).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('createSkyView caps the field of view at MAX_FOV_DEG (the TAN projection stretches without bound)', () => {
     const { A, calls, handlers } = fakeAladin();
     createSkyView(A, {} as HTMLElement, { survey: 'CDS/P/DSS2/color', raDeg: 0, decDeg: 0, fovDeg: 30 });

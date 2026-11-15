@@ -40,6 +40,8 @@ export interface CameraCommands {
   setFirstPersonLook(dir: V3, vFovDeg: number): void;
   /** stop / restart drawing the scene while the Sky view covers it; `leaveFirstPerson` always restarts it */
   setPaused(on: boolean): void;
+  /** hold the first-person view while the Sky view is entering or on: a selection neither ends it nor flies the camera; releasing leaves a consistent state (`SceneController.setFirstPersonHold`) */
+  setFirstPersonHold(on: boolean): void;
 }
 
 /** Make sure the record has a live provider on the main thread (the scene does this too; panels must not race it). */
