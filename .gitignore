@@ -10,4 +10,3 @@ apps/web/public/textures/*.jpg
 npmOutput.txt
 *.log
 .claude/
-plans.md
