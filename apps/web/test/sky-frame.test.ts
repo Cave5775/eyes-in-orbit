@@ -176,7 +176,17 @@ describe('precession (IAU 1976, Meeus ch. 21)', () => {
 
   // Meeus's worked example 21.b (theta Persei, J2000 -> 2028 November 13.19 TD) is not transcribed here: its printed digits
   // could not be fetched when this was written, and test values are never taken from memory. Add it from the book.
-  it.todo('matches Meeus example 21.b (theta Persei) once its printed values are at hand');
+  it('matches Meeus example 21.b (theta Persei, J2000 to 2028 Nov 13.19 TD)', () => {
+    // Meeus, Astronomical Algorithms 2nd ed., example 21.b: the J2000 position after proper motion (alpha0, delta0) precessed
+    // to JDE 2462088.69 gives alpha = 41.547214 deg, delta = +49.348483 deg (UTC taken as TT here, as in the code)
+    const t = J2000_MS + (2462088.69 - 2451545.0) * 86_400_000;
+    const p = precessFromJ2000(41.054063, 49.22775, t);
+    expect(p.raDeg).toBeCloseTo(41.547214, 4);
+    expect(p.decDeg).toBeCloseTo(49.348483, 4);
+    const back = precessToJ2000(p.raDeg, p.decDeg, t);
+    expect(back.raDeg).toBeCloseTo(41.054063, 9);
+    expect(back.decDeg).toBeCloseTo(49.22775, 9);
+  });
 });
 
 describe('parallactic angle (Meeus ch. 14, eq. 14.1)', () => {
