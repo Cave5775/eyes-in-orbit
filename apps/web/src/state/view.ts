@@ -1,23 +1,28 @@
 import { create } from 'zustand';
+import { SURFACE_PREF_KEY } from '../lib/surface';
 
 /**
  * Scene display settings that the View menu (top bar), the scene's camera toolbar and the hotkeys share. `SceneView` subscribes
  * and pushes each change to the SceneController; nothing here touches the scene directly.
- * Labels and close-up detail are remembered per browser under the keys the scene used before (`eio.labels`, `eio.detail`, value
- * 'on' / 'off', anything else = on). Scope resets to auto on reload. `surface` mirrors the controller (which owns and saves it).
+ * Labels, close-up detail and the surface-view default are remembered per browser (`eio.labels`, `eio.detail`, `eio.surface`,
+ * value 'on' / 'off', anything else = on). Scope resets to auto on reload. `surface` mirrors the controller's current mode.
  */
 export interface ViewState {
   labels: boolean;
   detail: boolean;
   scopeAll: boolean;
   surface: boolean;
+  /** focusing an object near the Earth switches to the surface view (Settings; the last S / Surface also sets it) */
+  surfaceAuto: boolean;
   /** id of the observatory the camera stands at (first-person view), else null; mirrors the controller */
   firstPerson: string | null;
   help: boolean;
   toggleLabels(): void;
   toggleDetail(): void;
+  setDetail(on: boolean): void;
   toggleScope(): void;
   setSurface(on: boolean): void;
+  setSurfaceAuto(on: boolean): void;
   setFirstPerson(id: string | null): void;
   setHelp(on: boolean): void;
   toggleHelp(): void;
@@ -25,6 +30,7 @@ export interface ViewState {
 
 export const LABELS_KEY = 'eio.labels';
 export const DETAIL_KEY = 'eio.detail';
+export { SURFACE_PREF_KEY };
 
 /** Minimal slice of the Web Storage interface. */
 export interface StorageLike {
@@ -61,6 +67,7 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
     detail: loadFlag(DETAIL_KEY, storage),
     scopeAll: false,
     surface: false,
+    surfaceAuto: loadFlag(SURFACE_PREF_KEY, storage),
     firstPerson: null,
     help: false,
     toggleLabels: () => {
@@ -68,13 +75,17 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
       saveFlag(LABELS_KEY, labels, storage);
       set({ labels });
     },
-    toggleDetail: () => {
-      const detail = !get().detail;
+    toggleDetail: () => get().setDetail(!get().detail),
+    setDetail: (detail) => {
       saveFlag(DETAIL_KEY, detail, storage);
-      set({ detail });
+      if (get().detail !== detail) set({ detail });
     },
     toggleScope: () => set({ scopeAll: !get().scopeAll }),
     setSurface: (surface) => { if (get().surface !== surface) set({ surface }); },
+    setSurfaceAuto: (surfaceAuto) => {
+      saveFlag(SURFACE_PREF_KEY, surfaceAuto, storage);
+      if (get().surfaceAuto !== surfaceAuto) set({ surfaceAuto });
+    },
     setFirstPerson: (firstPerson) => { if (get().firstPerson !== firstPerson) set({ firstPerson }); },
     setHelp: (help) => { if (get().help !== help) set({ help }); },
     toggleHelp: () => set({ help: !get().help }),

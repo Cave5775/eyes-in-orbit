@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
+    <script>
+      // the remembered skin, before the first paint (lib/skin.ts is the parser; test/skin.test.ts keeps this list in step)
+      try { var s = localStorage.getItem('eio.skin'); document.documentElement.setAttribute('data-skin', s === 'terminal' || s === 'mission' ? s : 'classic'); } catch (e) { document.documentElement.setAttribute('data-skin', 'classic'); }
+    </script>
     <title>EyesInOrbit — Mission Control</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='none' stroke='%234fb3d9' stroke-width='1.5'/%3E%3Ccircle cx='8' cy='8' r='2' fill='%234fb3d9'/%3E%3C/svg%3E" />
   </head>

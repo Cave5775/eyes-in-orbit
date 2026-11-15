@@ -10,9 +10,9 @@ const PANEL_ROWS: readonly PanelId[] = ['board', 'observatories', 'ticker'];
 interface Row { key: string; label: string; hint: string; on: boolean; toggle(): void }
 
 /**
- * Top bar "View" menu: everything that changes what is shown, in one place. "Scene" holds the display settings (labels,
- * highlight, close-up imagery, scope, colour legend); "Panels" shows and hides the optional panels. Each choice is remembered
- * where it was before (state/view.ts, state/store.ts highlight, state/panels.ts). Closes on an outside click and on Esc.
+ * Top bar "View" menu: the quick show / hide toggles. "Scene" holds the display toggles (labels, highlight, scope, colour legend);
+ * "Panels" shows and hides the optional panels. Set-and-forget choices live in Settings (SettingsMenu.tsx). Each choice is
+ * remembered where it was before (state/view.ts, state/store.ts highlight, state/panels.ts). Closes on an outside click and on Esc.
  */
 export function ViewMenu() {
   const [open, setOpen] = useState(false);
@@ -33,7 +33,6 @@ export function ViewMenu() {
   const scene: Row[] = [
     { key: 'labels', label: 'Labels', hint: 'Names of bodies, the selection and search matches', on: view.labels, toggle: view.toggleLabels },
     { key: 'highlight', label: 'Highlight', hint: 'Dim what the search leaves out instead of hiding it', on: highlight, toggle: () => setHighlight(!highlight) },
-    { key: 'detail', label: 'Close-up Earth imagery', hint: 'Stream finer maps below about 2,600 km', on: view.detail, toggle: view.toggleDetail },
     { key: 'scope', label: 'Draw everything', hint: 'Off: only what is near the camera focus, the selection and search matches', on: view.scopeAll, toggle: view.toggleScope },
     { key: 'legend', label: PANEL_INFO.legend.label, hint: PANEL_INFO.legend.hint, on: visible.legend, toggle: () => togglePanel('legend') },
   ];

@@ -13,6 +13,7 @@ import { SceneController, type PathLabel, type SceneStats } from '../scene/Scene
 import { usePanels } from '../state/panels';
 import { clock, runtime, type CameraCommands } from '../state/runtime';
 import { jumpToSimTime } from '../state/seek';
+import { useSkin } from '../state/skin';
 import { useStore } from '../state/store';
 import { useView } from '../state/view';
 import { FrameBar } from './FrameBar';
@@ -36,7 +37,8 @@ const HELP: [string, string][] = [
   ['Model', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or Model on such a selection flies to it'],
   ['View: Labels', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
   ['View: Highlight', 'Dims everything but the selection, the objects related to it and what the search matches (smaller, fainter points) instead of hiding what the search leaves out. Hidden groups stay hidden. Off by default, remembered'],
-  ['View menu (top bar)', 'Labels, highlight, close-up Earth imagery, scope (draw everything, or only what is near the camera focus) and the colour legend; and show or hide the launch board, the news ticker and the colour legend (the Data streams button next to it opens the feed list and the DSN table); a hidden panel gives its space back to the globe and the choice is remembered'],
+  ['View menu (top bar)', 'Labels, highlight, scope (draw everything, or only what is near the camera focus) and the colour legend; and show or hide the launch board, the observatories, the news ticker and the colour legend (the Data streams button next to it opens the feed list and the DSN table); a hidden panel gives its space back to the globe and the choice is remembered'],
+  ['Settings (top bar, gear)', 'Set-and-forget choices: close-up Earth imagery, the surface view by default near the Earth, YouTube\'s own player controls, panel sizes back to their defaults, and restore all of these'],
   ['H', 'Show / hide this help'],
 ];
 
@@ -135,6 +137,7 @@ export function SceneView() {
       onLabels: (labels, n) => objectLayer.update(labels, n),
       onFollowChange: (f) => store.getState().setFollow(f),
       onSurfaceChange: (on) => useView.getState().setSurface(on),
+      onSurfacePrefChange: (on) => useView.getState().setSurfaceAuto(on),
       onFirstPersonChange: (id) => useView.getState().setFirstPerson(id),
     });
     scene.current = ctl;
@@ -156,16 +159,19 @@ export function SceneView() {
     runtime.camera = camera;
     if (import.meta.env.DEV) (window as unknown as { __eio?: unknown }).__eio = { ctl, store, runtime, clock };
     const s0 = store.getState();
-    // display settings (View menu): apply the remembered ones now, then every change
+    // display settings (View menu, Settings): apply the remembered ones now, then every change
     const v0 = useView.getState();
     ctl.setDetailEnabled(v0.detail);
     ctl.setLabelsEnabled(v0.labels);
     ctl.setScopeMode(v0.scopeAll ? 'all' : 'auto');
+    ctl.setSurfaceAuto(v0.surfaceAuto);
     const unsubView = useView.subscribe((v, p) => {
       if (v.detail !== p.detail) ctl.setDetailEnabled(v.detail);
       if (v.labels !== p.labels) ctl.setLabelsEnabled(v.labels);
       if (v.scopeAll !== p.scopeAll) ctl.setScopeMode(v.scopeAll ? 'all' : 'auto');
+      if (v.surfaceAuto !== p.surfaceAuto) ctl.setSurfaceAuto(v.surfaceAuto);
     });
+    const unsubSkin = useSkin.subscribe((s, p) => { if (s.skin !== p.skin) ctl.refreshPalette(); });
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
     // the query, the selection with the objects related to it (never hidden, filtered out nor scoped out; same lookup FIT
@@ -205,6 +211,7 @@ export function SceneView() {
       clearInterval(timer);
       unsub();
       unsubView();
+      unsubSkin();
       if (runtime.onFitRequest) runtime.onFitRequest = undefined;
       if (runtime.camera === camera) runtime.camera = undefined; // StrictMode remounts: only clear our own
       ctl.dispose();
