@@ -411,7 +411,7 @@ export class SceneController {
   // ------------------------------------------------------------------ inputs from the app
 
   /** Reconcile with the entity catalog: new/changed SGP4 records go to the worker, the rest to the main-thread graph. */
-  setEntities(map: Map<string, EntityRecord>): void {
+  setEntities(map: ReadonlyMap<string, EntityRecord>): void {
     const t0 = perf.on ? performance.now() : 0;
     this.reconcile(map);
     if (perf.on) {
@@ -421,14 +421,44 @@ export class SceneController {
     }
   }
 
-  private reconcile(map: Map<string, EntityRecord>): void {
+  /** Full reconcile: what differs from the scene's records, found by walking the whole catalogue. */
+  private reconcile(map: ReadonlyMap<string, EntityRecord>): void {
+    const changed: EntityRecord[] = [];
+    for (const rec of map.values()) if (this.recs.get(rec.id) !== rec) changed.push(rec);
+    const removed: string[] = [];
+    for (const id of this.recs.keys()) if (!map.has(id)) removed.push(id);
+    this.applyChanges(changed, removed, true);
+  }
+
+  /**
+   * Apply records that changed since the scene last saw the catalogue (a push, one more page of a load): cost follows the
+   * number of records, not the size of the catalogue. The store says what changed (`entityChange`); when the scene cannot
+   * trust that it saw the previous catalogue it takes `setEntities` instead. No removals here: those go through the full path.
+   */
+  applyEntityDelta(records: readonly EntityRecord[]): void {
+    const t0 = perf.on ? performance.now() : 0;
+    const changed = records.filter((r) => this.recs.get(r.id) !== r);
+    if (changed.length) this.applyChanges(changed, [], false);
+    if (perf.on) {
+      perf.time('sceneEntities', performance.now() - t0);
+      perf.entities = this.recs.size;
+      perf.satellites = this.satSet.size;
+    }
+  }
+
+  /**
+   * The one place records enter or leave the scene. `full`: the caller walked the whole catalogue, so the whole-catalogue passes
+   * (the 3D model entries, the appearance of every point) run too; a delta repaints only the points of the changed records, unless
+   * the point sets themselves change (a record joins or leaves the dynamic set, a body or an SGP4 record appears or goes: the
+   * worker then sends a new layout, which repaints everything).
+   */
+  private applyChanges(changed: readonly EntityRecord[], removed: readonly string[], full: boolean): void {
     const upserts: { id: string; omm: Omm }[] = [];
     const gone: string[] = [];
     let dynChanged = false;
     let bodiesChanged = false;
-    for (const rec of map.values()) {
+    for (const rec of changed) {
       const prev = this.recs.get(rec.id);
-      if (prev === rec) continue;
       this.recs.set(rec.id, rec);
       if (prev && isBodyEntity(prev) && !isBodyEntity(rec)) {
         this.bodyIds.delete(rec.id);
@@ -450,14 +480,17 @@ export class SceneController {
         if (prev && !isSgp4(prev)) dynChanged = true;
         graph.remove(rec.id); // re-added (refreshOrbitLines) only if selected or a child orbit drawn with the selection
       } else {
-        if (prev && isSgp4(prev)) gone.push(rec.id);
+        if (prev && isSgp4(prev)) {
+          gone.push(rec.id);
+          dynChanged = true;
+        }
         this.satSet.delete(rec.id);
         graph.upsert(rec);
-        dynChanged = true;
+        // the dynamic point set is rebuilt only when this record joins it or leaves it; one already in it is just repainted
+        if (!!rec.provider !== this.dynIndex.has(rec.id)) dynChanged = true;
       }
     }
-    for (const id of this.recs.keys()) {
-      if (map.has(id)) continue;
+    for (const id of removed) {
       this.recs.delete(id);
       graph.remove(id);
       if (this.satSet.delete(id)) gone.push(id);
@@ -468,13 +501,21 @@ export class SceneController {
     if (bodiesChanged) this.celestial.setBodies([...this.recs.values()].filter(isBodyEntity));
     this.propagator.remove(gone);
     this.propagator.upsert(upserts);
-    // entities with a registered 3D model need an exact main-thread state even when SGP4 (the worker only fills the cloud)
-    this.models.setEntities(this.recs.values());
-    for (const rec of this.recs.values()) if (this.models.has(rec.id)) graph.upsert(rec);
+    if (full) {
+      // entities with a registered 3D model need an exact main-thread state even when SGP4 (the worker only fills the cloud)
+      this.models.setEntities(this.recs.values());
+      for (const rec of this.recs.values()) if (this.models.has(rec.id)) graph.upsert(rec);
+    } else {
+      for (const rec of changed) {
+        this.models.setEntity(rec);
+        if (this.models.has(rec.id)) graph.upsert(rec);
+      }
+    }
     if (dynChanged) this.rebuildDyn();
     this.ensureCentreInGraph(); // an SGP4 record that was just replaced left the graph above; the frame centre must stay in it
     this.refreshOrbitLines();
-    this.applyAppearance();
+    if (full || dynChanged || bodiesChanged || gone.length || removed.length) this.applyAppearance();
+    else this.repaint(changed);
   }
 
   /**
@@ -1183,48 +1224,77 @@ export class SceneController {
     return 'show';
   }
 
-  /** Colours, sizes and glyphs from entity metadata, the query, HIGHLIGHT and the selection. */
-  private applyAppearance(): void {
-    const { colors } = this.palette;
-    // 'dim' (HIGHLIGHT) keeps the point but darkens and shrinks it; 'boost' enlarges what HIGHLIGHT picks
-    const paint = (set: PointSet, i: number, rec: EntityRecord | undefined, look: Look) => {
-      const key: ColorKey = rec ? colorKeyOf(rec) : 'satellites';
-      const c = colors[key];
-      const k = look === 'dim' ? DIM.colour : 1;
-      set.color.setXYZ(i, c.r * k, c.g * k, c.b * k);
-      set.glyph.setX(i, rec?.render?.glyph ? GLYPH_ID[rec.render.glyph] : 0);
-      // a 3D model drawn for the entity replaces its sprite
-      const replaced = !!rec && this.models.spriteHidden.has(rec.id);
-      set.size.setX(i, look === 'hide' || replaced ? 0 : POINT_SIZE[key] * (look === 'dim' ? DIM.size : look === 'boost' ? 1.8 : 1));
-    };
-    // with an only / text term, the objects it lets through ('show') are exempt from the scope policy
-    const active = queryActive(this.query);
-    const exemptRec = (rec: EntityRecord | undefined) => !!rec && colorKeyOf(rec) === 'launch-vehicles';
-    this.satKeep = new Uint8Array(this.propagator.ids.length);
-    this.satExempt = new Uint8Array(this.propagator.ids.length);
-    this.propagator.ids.forEach((id, i) => {
-      const rec = this.recs.get(id);
-      const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
-      // the selected point is drawn from the highlight set (updateHighlights), not the cloud
-      paint(this.sats, i, rec, !rec || id === this.selectedId || id === this.fp?.id ? 'hide' : this.lookOf(rec, c));
-      if (active && c === 'show') this.satKeep[i] = 1;
-      if (exemptRec(rec)) this.satExempt[i] = 1;
-    });
-    this.sats.color.needsUpdate = this.sats.size.needsUpdate = this.sats.glyph.needsUpdate = true;
-    this.dynKeep = new Uint8Array(this.dynIds.length);
-    this.dynExempt = new Uint8Array(this.dynIds.length);
-    this.dynIds.forEach((id, i) => {
-      const rec = this.recs.get(id);
-      const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
-      paint(this.dyn, i, rec, rec && id !== this.fp?.id ? this.lookOf(rec, c) : 'hide'); // the observatory the camera stands at is not drawn
-      this.dynBaseSize[i] = this.dyn.size.getX(i);
-      if (active && c === 'show') this.dynKeep[i] = 1;
-      if (exemptRec(rec)) this.dynExempt[i] = 1;
-    });
-    this.dyn.color.needsUpdate = this.dyn.size.needsUpdate = this.dyn.glyph.needsUpdate = true;
+  /** Paint point `i` of a set (colour, glyph, size) for an entity and how the query draws it. 'dim' (HIGHLIGHT) keeps the point but darkens and shrinks it; 'boost' enlarges what HIGHLIGHT picks. */
+  private paintPoint(set: PointSet, i: number, rec: EntityRecord | undefined, look: Look): void {
+    const key: ColorKey = rec ? colorKeyOf(rec) : 'satellites';
+    const c = this.palette.colors[key];
+    const k = look === 'dim' ? DIM.colour : 1;
+    set.color.setXYZ(i, c.r * k, c.g * k, c.b * k);
+    set.glyph.setX(i, rec?.render?.glyph ? GLYPH_ID[rec.render.glyph] : 0);
+    // a 3D model drawn for the entity replaces its sprite
+    const replaced = !!rec && this.models.spriteHidden.has(rec.id);
+    set.size.setX(i, look === 'hide' || replaced ? 0 : POINT_SIZE[key] * (look === 'dim' ? DIM.size : look === 'boost' ? 1.8 : 1));
+  }
+
+  /** Appearance of the SGP4 cloud point `i` (entity `id`), with its scope flags. `active`: an only / text term lets its matches through the scope policy. */
+  private paintSat(i: number, id: string, active: boolean): void {
+    const rec = this.recs.get(id);
+    const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
+    // the selected point is drawn from the highlight set (updateHighlights), not the cloud
+    this.paintPoint(this.sats, i, rec, !rec || id === this.selectedId || id === this.fp?.id ? 'hide' : this.lookOf(rec, c));
+    this.satKeep[i] = active && c === 'show' ? 1 : 0;
+    this.satExempt[i] = rec && colorKeyOf(rec) === 'launch-vehicles' ? 1 : 0;
+  }
+
+  private paintDyn(i: number, id: string, active: boolean): void {
+    const rec = this.recs.get(id);
+    const c = rec ? classify(rec, this.query, this.ctx) : 'hide';
+    this.paintPoint(this.dyn, i, rec, rec && id !== this.fp?.id ? this.lookOf(rec, c) : 'hide'); // the observatory the camera stands at is not drawn
+    this.dynBaseSize[i] = this.dyn.size.getX(i);
+    this.dynKeep[i] = active && c === 'show' ? 1 : 0;
+    this.dynExempt[i] = rec && colorKeyOf(rec) === 'launch-vehicles' ? 1 : 0;
+  }
+
+  private pointsPainted(sats: boolean, dyn: boolean): void {
+    if (sats) this.sats.color.needsUpdate = this.sats.size.needsUpdate = this.sats.glyph.needsUpdate = true;
+    if (dyn) this.dyn.color.needsUpdate = this.dyn.size.needsUpdate = this.dyn.glyph.needsUpdate = true;
     this.scopeDirty = true;
     this.labelsDirty = true;
     this.labelFeatured = null;
+  }
+
+  /** Colours, sizes and glyphs of every point, from entity metadata, the query, HIGHLIGHT and the selection. */
+  private applyAppearance(): void {
+    // with an only / text term, the objects it lets through ('show') are exempt from the scope policy
+    const active = queryActive(this.query);
+    this.satKeep = new Uint8Array(this.propagator.ids.length);
+    this.satExempt = new Uint8Array(this.propagator.ids.length);
+    const sats = this.propagator.ids;
+    for (let i = 0; i < sats.length; i++) this.paintSat(i, sats[i], active);
+    this.dynKeep = new Uint8Array(this.dynIds.length);
+    this.dynExempt = new Uint8Array(this.dynIds.length);
+    for (let i = 0; i < this.dynIds.length; i++) this.paintDyn(i, this.dynIds[i], active);
+    this.pointsPainted(true, true);
+  }
+
+  /** The appearance of the points of just these records (a delta that leaves the point sets as they are). */
+  private repaint(changed: readonly EntityRecord[]): void {
+    const active = queryActive(this.query);
+    let sats = false, dyn = false;
+    for (const rec of changed) {
+      const si = this.satIndex.get(rec.id);
+      if (si !== undefined && this.propagator.ids[si] === rec.id && si < this.satKeep.length) {
+        this.paintSat(si, rec.id, active);
+        sats = true;
+        continue;
+      }
+      const di = this.dynIndex.get(rec.id);
+      if (di !== undefined && this.dynIds[di] === rec.id) {
+        this.paintDyn(di, rec.id, active);
+        dyn = true;
+      }
+    }
+    if (sats || dyn) this.pointsPainted(sats, dyn);
   }
 
   private updatePadAppearance(): void {

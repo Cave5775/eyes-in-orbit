@@ -183,7 +183,11 @@ export function SceneView() {
     if (s0.focus) ctl.focus(s0.focus);
     ctl.setFollow(s0.follow);
     const unsub = store.subscribe((s, p) => {
-      if (s.entities !== p.entities) ctl.setEntities(s.entities);
+      if (s.entities !== p.entities) {
+        // a merge that started from the catalogue the scene already has costs only its records (SceneController.applyEntityDelta)
+        if (s.entityChange && s.entityChange.base === p.entities) ctl.applyEntityDelta(s.entityChange.records);
+        else ctl.setEntities(s.entities);
+      }
       if (s.launches !== p.launches) ctl.setLaunches(s.launches);
       if (
         s.query !== p.query || s.textIds !== p.textIds || s.highlight !== p.highlight || s.selectedId !== p.selectedId

@@ -8,7 +8,8 @@ import type { DescribeService } from './describe/service';
 import type { Http } from './http';
 import { parseTile, type ImageryCache } from './imagery';
 import type { Hub } from './hub';
-import { filterEntities, searchEntities } from './search';
+import { pageEntities, searchEntities } from './search';
+import { SearchIndex } from './search-index';
 import type { Store } from './store';
 import { buildSeries, isLocalRequest, mergeLive, validateTelemetryBody } from './telemetry';
 import { matchTrajectory } from './trajectory';
@@ -40,20 +41,27 @@ export interface CredentialsApi {
 }
 
 export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store, creds?: CredentialsApi, imagery?: ImageryCache, describe?: DescribeService): void {
+  // full-text index of the catalogue (FTS5, in memory), kept in line with the hub; answers /api/match and /api/counts
+  const index = new SearchIndex((id) => hub.graph.get(id));
+  index.rebuild(hub.graph.all());
+  const onChanged = ({ ids }: { ids: string[] }) => index.sync(ids);
+  hub.on('entities.changed', onChanged);
+  app.addHook('onClose', async () => {
+    hub.off('entities.changed', onChanged); // a debounced change must not reach a closed index
+    index.close();
+  });
+
   app.get('/api/health', async () => ({
     serverTime: Date.now(),
     entityCount: hub.graph.size,
     connectors: hub.healthList(),
   }));
 
-  app.get<{ Querystring: { since?: string; kind?: string; body?: string; q?: string; group?: string; limit?: string } }>(
+  app.get<{ Querystring: { since?: string; kind?: string; body?: string; q?: string; group?: string; limit?: string; offset?: string } }>(
     '/api/entities',
     async (req) => {
-      const { since, kind, body, q, group, limit } = req.query;
-      return {
-        serverTime: Date.now(),
-        entities: filterEntities(hub.graph.all(), { since: int(since), kind, body, q, group, limit: int(limit) }),
-      };
+      const { since, kind, body, q, group, limit, offset } = req.query;
+      return { serverTime: Date.now(), ...pageEntities(hub.graph.all(), { since: int(since), kind, body, q, group, limit: int(limit), offset: int(offset) }) };
     },
   );
 
@@ -64,6 +72,20 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
 
   app.get<{ Querystring: { q?: string; limit?: string } }>('/api/search', async (req) =>
     searchEntities(hub.graph.all(), req.query.q ?? '', Math.min(int(req.query.limit, 20)!, 100)));
+
+  // every entity matching the text, best first (the ranking of the browser's own search, found through the FTS5 index): what the
+  // client needs to filter the scene and the lists without ranking the whole catalogue itself. Capped: `truncated` says so.
+  app.get<{ Querystring: { q?: string } }>('/api/match', async (req) => {
+    hub.flush(); // pending changes reach the index first
+    const q = req.query.q ?? '';
+    return { q, ...index.match(q, () => hub.graph.all()) };
+  });
+
+  // entity counts per body, kind and group (a GROUP BY over the index), for lists that do not hold the whole catalogue
+  app.get('/api/counts', async () => {
+    hub.flush();
+    return { total: index.size, rows: index.counts() };
+  });
 
   app.get('/api/launches', async () => ({ launches: hub.launches }));
 

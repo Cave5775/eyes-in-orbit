@@ -299,6 +299,22 @@ describe('frame persistence', () => {
     expect(st().focus).toMatchObject({ id: 'lro' });
   });
 
+  it('a paged full load restores the stored frame only when the last page is in (its entity may be on a later page)', () => {
+    const m = mem({ 'eio.frame': serialiseFrame('lro') });
+    install(m);
+    armFrameRestore();
+    const all = catalog();
+    const lro = all.find((e) => e.id === 'lro')!;
+    const firstPage = all.filter((e) => e !== lro);
+    st().upsertEntities(firstPage, true, true); // page 1 of a paged load: partial
+    expect(focusState()).toMatchObject({ selectedId: null, frame: 'body-earth' });
+    expect(parseFrame(m.data.get('eio.frame'))).toBe('lro'); // the remembered frame was not overwritten as stale
+    st().upsertEntities([lro], false, true); // a later page brings it
+    st().catalogLoaded();
+    expect(focusState()).toEqual({ selectedId: 'lro', frame: 'lro', frameLocked: false, follow: true });
+    st().catalogLoaded(); // once only
+  });
+
   it('restores Mars and Moon frames, including the previous format {kind:"body",id:"MARS"}', () => {
     for (const [stored, expected] of [
       [serialiseFrame('body-mars'), 'body-mars'],

@@ -82,17 +82,28 @@ export class ModelLayer {
   setEntities(recs: Iterable<EntityRecord>): void {
     const seen = new Set<string>();
     for (const rec of recs) {
-      const def = modelDef(rec.render?.model);
-      if (!def) continue;
-      seen.add(rec.id);
-      const have = this.entries.get(rec.id);
-      if (have && have.def === def) continue;
-      if (have) this.drop(have);
-      const holder = new THREE.Group();
-      holder.scale.setScalar(KM_PER_M);
-      this.entries.set(rec.id, { id: rec.id, def, holder, inst: null, active: false, spriteHidden: false, ringHidden: false, screenPx: 0, dim: false, rel: new THREE.Vector3(), light: null });
+      if (this.setEntity(rec)) seen.add(rec.id);
     }
     for (const [id, e] of this.entries) if (!seen.has(id)) this.drop(e), this.entries.delete(id);
+  }
+
+  /** One record: add, replace or drop its entry (cost of one record, for a delta). True when it has a model. */
+  setEntity(rec: EntityRecord): boolean {
+    const def = modelDef(rec.render?.model);
+    const have = this.entries.get(rec.id);
+    if (!def) {
+      if (have) {
+        this.drop(have);
+        this.entries.delete(rec.id);
+      }
+      return false;
+    }
+    if (have && have.def === def) return true;
+    if (have) this.drop(have);
+    const holder = new THREE.Group();
+    holder.scale.setScalar(KM_PER_M);
+    this.entries.set(rec.id, { id: rec.id, def, holder, inst: null, active: false, spriteHidden: false, ringHidden: false, screenPx: 0, dim: false, rel: new THREE.Vector3(), light: null });
+    return true;
   }
 
   has(id: string): boolean {

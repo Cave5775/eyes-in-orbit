@@ -4,7 +4,9 @@ import type {
   Article, ClockSnapshot, ConnectorHealth, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch, TelemetryPoint,
 } from '@eio/core';
 import { perf } from '../lib/perf';
+import { Catalog, sameShape } from '../lib/catalog';
 import { rankEntities, type SearchHit } from '../lib/filters';
+import { REMOTE_TEXT_DELAY_MS, SERVER_SEARCH_MIN, textHitsOf, type MatchFn } from '../lib/text-match';
 import {
   NO_QUERY, addTerms, legacyHiddenTerms, parseStoredQuery, removeTerm, sameQuery, serialiseQuery, setTermEffect, textOf, toggleTerm,
   withText, withoutFilter, withoutHidden, type Effect, type Query, type Term, type TermKey,
@@ -44,7 +46,8 @@ export interface IssState {
 }
 
 interface State {
-  entities: Map<string, EntityRecord>;
+  /** the catalogue: a `Catalog` view (lib/catalog.ts) that changes identity on every merge without copying; a test may set a plain Map */
+  entities: ReadonlyMap<string, EntityRecord>;
   /**
    * The focus is four fields: what is selected (and shown in the detail panel), the frame of reference (an entity id, the
    * Earth's `body-earth` by default), the frame lock and whether the camera follows the selection. `focus` is only the
@@ -82,7 +85,23 @@ interface State {
   /** the Sky view window (one at most; shares the stream windows' cap, not persisted) */
   sky: SkyWindow | null;
 
-  upsertEntities(records: EntityRecord[], replace?: boolean): void;
+  /**
+   * Merge records into the catalogue, or replace it (`replace`). `partial` = more pages of the same full load follow (lib/paging.ts):
+   * the remembered frame is not restored yet, because its entity may be on a later page; `catalogLoaded` does it.
+   */
+  upsertEntities(records: EntityRecord[], replace?: boolean, partial?: boolean): void;
+  /**
+   * What the last merge changed: the records it carried and the catalogue map they were merged into (`base`). A consumer that last
+   * saw `base` can apply just `records` instead of walking the whole catalogue; anyone else takes `entities`. Null after a replace.
+   */
+  entityChange: { records: EntityRecord[]; base: ReadonlyMap<string, EntityRecord> } | null;
+  /**
+   * Bumped when a merge changes what a LIST of the catalogue shows (a record added, renamed, regrouped ...; lib/catalog.ts
+   * `sameShape`), not when SGP4 elements alone change. The Objects tree, list and counts rebuild on this, not on every merge.
+   */
+  catalogShape: number;
+  /** The full catalogue has arrived (every page): restore the remembered frame, once. */
+  catalogLoaded(): void;
   /** Pop a stream out into a floating window (no-op at the cap, counting the Sky view; focuses it when already open). False when refused. */
   openFloat(url: string, title: string): boolean;
   /** "Watch a livestream" history (localStorage 'eio.recent-links.v1'), most recent first. */
@@ -195,14 +214,71 @@ function saveHighlight(on: boolean): void {
 
 type TextState = Pick<State, 'textHits' | 'textIds'>;
 const NO_TEXT: TextState = { textHits: null, textIds: null };
-/** The text term looked up once, here, not per frame: every entity the text matches, best first. */
-function lookUpText(text: string, entities: ReadonlyMap<string, EntityRecord>): TextState {
-  if (!text) return NO_TEXT;
+/** What a typed text matches while the server has not answered yet: nothing (the previous answer is kept when there is one). */
+const EMPTY_TEXT: TextState = { textHits: [], textIds: new Set() };
+
+/**
+ * The server's text search (`GET /api/match`, an FTS5 index), set by the data layer when a server is there; null (the offline
+ * mock) means every search is local. A catalogue of `SERVER_SEARCH_MIN` records or more asks it instead of ranking in the browser
+ * (docs/perf.md: 83 ms a query at 100 k, 1 s at 1 M, on the main thread).
+ */
+let textMatcher: MatchFn | null = null;
+export const setTextMatcher = (fn: MatchFn | null): void => { textMatcher = fn; cancelRemoteText(); };
+let remoteSeq = 0;
+let remoteTimer: ReturnType<typeof setTimeout> | undefined;
+function cancelRemoteText(): void {
+  remoteSeq++;
+  clearTimeout(remoteTimer);
+}
+
+/** Every entity the text matches, best first, ranked here over the whole catalogue (small catalogues, no server, a failed or truncated answer). */
+function localText(text: string, entities: ReadonlyMap<string, EntityRecord>): TextState {
   const t0 = perf.on ? performance.now() : 0;
   const textHits = rankEntities(entities.values(), text, Infinity);
   const textIds = new Set(textHits.map((h) => h.id));
   if (perf.on) perf.time('textSearch', performance.now() - t0);
   return { textHits, textIds };
+}
+
+/** Ask the server for `text` (after a short pause for typing); the answer replaces the text state if it is still the current one. */
+function askServer(text: string, match: MatchFn): void {
+  cancelRemoteText();
+  const mine = remoteSeq;
+  remoteTimer = setTimeout(() => {
+    const done = (build: (entities: ReadonlyMap<string, EntityRecord>) => TextState) => {
+      if (mine !== remoteSeq) return; // a newer query, or the text was cleared
+      const s = useStore.getState();
+      if (textOf(s.query) !== text) return;
+      useStore.setState(build(s.entities));
+    };
+    match(text).then(
+      (a) => done((entities) => {
+        // an answer cut off by the server's cap is incomplete: rank here instead (the records are all here)
+        if (a.truncated) return localText(text, entities);
+        const t0 = perf.on ? performance.now() : 0;
+        const textHits = textHitsOf(a.ids, entities);
+        const textIds = new Set(textHits.map((h) => h.id));
+        if (perf.on) perf.time('textSearch', performance.now() - t0);
+        return { textHits, textIds };
+      }),
+      () => done((entities) => localText(text, entities)), // no answer: the browser can still do it
+    );
+  }, REMOTE_TEXT_DELAY_MS);
+}
+
+/** The text term looked up once, here, not per frame: every entity the text matches, best first. `current` is kept while a server answer is awaited. */
+function lookUpText(text: string, entities: ReadonlyMap<string, EntityRecord>, current: TextState = NO_TEXT): TextState {
+  if (!text) {
+    cancelRemoteText();
+    return NO_TEXT;
+  }
+  if (textMatcher && entities.size >= SERVER_SEARCH_MIN) {
+    askServer(text, textMatcher);
+    // only the two text fields: `current` may be the whole store state, which must not be spread into a patch
+    return current.textIds ? { textHits: current.textHits, textIds: current.textIds } : EMPTY_TEXT;
+  }
+  cancelRemoteText();
+  return localText(text, entities);
 }
 /** the remembered frame is restored once, when the first full catalog arrives */
 let frameRestorePending = true;
@@ -225,7 +301,7 @@ function restoreFrame(): void {
 }
 
 export const useStore = create<State>((set, get) => ({
-  entities: new Map(),
+  entities: Catalog.of(),
   selectedId: null,
   follow: false,
   frame: EARTH_CENTRE,
@@ -245,12 +321,19 @@ export const useStore = create<State>((set, get) => ({
   floats: loadFloats(),
   recentLinks: loadRecent(),
   sky: null,
+  entityChange: null,
+  catalogShape: 0,
 
-  upsertEntities(records, replace = false) {
+  upsertEntities(records, replace = false, partial = false) {
     const t0 = perf.on ? performance.now() : 0;
-    const next = replace ? new Map<string, EntityRecord>() : new Map(get().entities);
-    for (const r of records) next.set(r.id, r);
-    const patch: Partial<State> = { entities: next };
+    // a merge writes into the shared map and hands out a new view (lib/catalog.ts): no copy of the catalogue; `prev` is read
+    // before, since an older view sees the merge too
+    const prev = get().entities;
+    const prevSize = prev.size;
+    const shapeChanged = replace || records.some((r) => !sameShape(prev.get(r.id), r));
+    const next = replace ? Catalog.of(records) : (prev instanceof Catalog ? prev : Catalog.of(prev.values())).merged(records);
+    const patch: Partial<State> = { entities: next, entityChange: replace ? null : { records, base: prev } };
+    if (shapeChanged) patch.catalogShape = get().catalogShape + 1;
     if (replace && next.size > 0) {
       // a full catalog that no longer has the selected entity (or the frame's) leaves nothing to point at
       const { selectedId, frame } = get();
@@ -259,7 +342,7 @@ export const useStore = create<State>((set, get) => ({
     }
     // the text term follows the catalog (the ids it matches), but only when the catalog changed in size or was replaced
     const text = textOf(get().query);
-    if (text && (replace || next.size !== get().entities.size)) Object.assign(patch, lookUpText(text, next));
+    if (text && (replace || next.size !== prevSize)) Object.assign(patch, lookUpText(text, next, get()));
     set(patch);
     if (perf.on) {
       perf.time('ingest', performance.now() - t0);
@@ -267,7 +350,13 @@ export const useStore = create<State>((set, get) => ({
       if (!perf.firstIngestMs) perf.firstIngestMs = performance.now();
     }
     // the first full catalog is the moment to restore the remembered frame (its entity or body must exist)
-    if (replace && frameRestorePending && next.size > 0) {
+    if (replace && !partial && frameRestorePending && next.size > 0) {
+      frameRestorePending = false;
+      restoreFrame();
+    }
+  },
+  catalogLoaded() {
+    if (frameRestorePending && get().entities.size > 0) {
       frameRestorePending = false;
       restoreFrame();
     }
@@ -338,7 +427,7 @@ export const useStore = create<State>((set, get) => ({
   setQuery: (query) => set((s) => {
     if (sameQuery(s.query, query)) return s;
     const text = textOf(query);
-    return { query, ...(text === textOf(s.query) ? {} : lookUpText(text, s.entities)) };
+    return { query, ...(text === textOf(s.query) ? {} : lookUpText(text, s.entities, s)) };
   }),
   toggleTerm: (key, value, effect = 'only') => get().setQuery(toggleTerm(get().query, key, value, effect)),
   setTermEffect: (key, value, effect, neg = false) => get().setQuery(setTermEffect(get().query, key, value, effect, neg)),

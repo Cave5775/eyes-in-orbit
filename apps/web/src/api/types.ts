@@ -6,8 +6,11 @@ import type { SearchHit } from '../lib/filters';
 
 /** REST surface of the server contract (also implemented by the offline mock). */
 export interface Api {
-  entities(since?: number): Promise<{ serverTime: number; entities: EntityRecord[] }>;
+  /** `GET /api/entities`: everything (or what changed after `since`), or one page with `page` (`limit` records after `offset` matches; the answer carries `next` unless it is the last page). */
+  entities(since?: number, page?: { offset?: number; limit?: number }): Promise<{ serverTime: number; entities: EntityRecord[]; next?: number; total?: number }>;
   search(q: string, limit?: number): Promise<SearchHit[]>;
+  /** `GET /api/match`: every entity matching the text, best first, found through the server's FTS5 index (`truncated`: the server's cap cut the list). */
+  match(q: string): Promise<{ q: string; ids: string[]; total: number; truncated: boolean; via?: 'index' | 'scan' }>;
   launches(): Promise<Launch[]>;
   news(opts?: { entity?: string; q?: string; limit?: number }): Promise<Article[]>;
   dsn(): Promise<DsnSnapshot>;

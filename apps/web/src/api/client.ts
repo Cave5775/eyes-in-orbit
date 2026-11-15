@@ -1,9 +1,10 @@
-import type { Article, AscentSeries, CredentialInfo, Description, Launch, ServerMessage } from '@eio/core';
+import type { Article, AscentSeries, CredentialInfo, Description, EntityRecord, Launch, ServerMessage } from '@eio/core';
 import { isIss } from '../lib/entity';
 import { clampMockCount } from '../mock/generators';
 import { createMockApi } from '../mock/mock-api';
-import { useStore } from '../state/store';
-import { withBodyEntities } from './body-entities';
+import { setTextMatcher, useStore } from '../state/store';
+import { bodyEntityRecords } from '@eio/core';
+import { PAGE_SIZE, loadPaged } from '../lib/paging';
 import type { Api } from './types';
 import { StreamClient } from './stream';
 
@@ -21,8 +22,9 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 };
 
 const restApi: Api = {
-  entities: (since) => getJson(`/api/entities${qs({ since })}`, 60_000),
+  entities: (since, page) => getJson(`/api/entities${qs({ since, limit: page?.limit, offset: page?.offset })}`, 60_000),
   search: (q, limit = 20) => getJson(`/api/search${qs({ q, limit })}`, 8_000),
+  match: (q) => getJson(`/api/match${qs({ q })}`, 15_000),
   launches: async () => (await getJson<{ launches: Launch[] }>('/api/launches')).launches,
   news: async (o = {}) => (await getJson<{ articles: Article[] }>(`/api/news${qs({ entity: o.entity, q: o.q, limit: o.limit })}`)).articles,
   dsn: () => getJson('/api/dsn'),
@@ -50,15 +52,49 @@ export let api: Api = restApi;
 const store = useStore.getState;
 let lastEntitiesAt = 0;
 
+/**
+ * Load the catalogue in pages (lib/paging.ts): a full load replaces it, an incremental one (after `lastEntitiesAt`) merges. The
+ * first page is on screen at once and the rest follow on a doubling commit schedule. The cursor for the next incremental load is
+ * the first page's server time, so records changed while paging are fetched then. Loads run one at a time: a push that arrives
+ * during a load waits for it.
+ */
+let entityLoad: Promise<void> = Promise.resolve();
+function loadEntities(full: boolean): Promise<void> {
+  const run = async () => {
+    const since = full ? undefined : lastEntitiesAt;
+    const r = await loadPaged(
+      (offset) => api.entities(since, { offset, limit: PAGE_SIZE }),
+      (records, first, serverTime) => {
+        // a full load replaces the catalog, so bodies the server did not send are added locally; the server's own win when
+        // they arrive in a later page (an incremental load only merges)
+        const batch = full && first ? [...records, ...missingBodies(records, serverTime)] : records;
+        // partial: more pages follow, so the remembered frame is restored by `catalogLoaded` below, not on the first page
+        if (batch.length || full) store().upsertEntities(batch, full && first, full);
+      },
+    );
+    lastEntitiesAt = r.serverTime - 1000;
+    if (full) {
+      // the bodies of the registry the server never sent (its `bodies` connector is off, or it is an older server)
+      const have = store().entities;
+      const missing = bodyEntityRecords(undefined, r.serverTime).filter((b) => !have.has(b.id));
+      if (missing.length) store().upsertEntities(missing);
+      store().catalogLoaded();
+    }
+  };
+  entityLoad = entityLoad.then(run, run);
+  return entityLoad;
+}
+
+const missingBodies = (records: EntityRecord[], serverTime: number): EntityRecord[] => {
+  const have = new Set(records.map((r) => r.id));
+  return bodyEntityRecords(undefined, serverTime).filter((b) => !have.has(b.id));
+};
+
 /** Pull every collection; individual failures are tolerated so a flaky connector does not blank the UI. */
 async function loadAll(full: boolean): Promise<void> {
   const s = store();
   const results = await Promise.allSettled([
-    api.entities(full ? undefined : lastEntitiesAt).then((r) => {
-      // a full load replaces the catalog, so bodies the server did not send are added locally (an incremental one only merges)
-      s.upsertEntities(full ? withBodyEntities(r.entities, r.serverTime) : r.entities, full);
-      lastEntitiesAt = r.serverTime - 1000;
-    }),
+    loadEntities(full),
     api.launches().then(s.setLaunches),
     api.news().then(s.setNews),
     api.dsn().then(s.setDsn),
@@ -83,10 +119,7 @@ function startReal(): void {
   let pending: ReturnType<typeof setTimeout> | undefined;
   const refetchEntities = () => {
     clearTimeout(pending);
-    pending = setTimeout(() => void api.entities(lastEntitiesAt).then((r) => {
-      store().upsertEntities(r.entities);
-      lastEntitiesAt = r.serverTime - 1000;
-    }), 250);
+    pending = setTimeout(() => void loadEntities(false).catch((err) => console.warn('[eio] entity refresh failed:', err)), 250);
   };
 
   const onMessage = (m: ServerMessage, reconnected: boolean) => {
@@ -109,6 +142,7 @@ function startReal(): void {
 
   const stream = new StreamClient(onMessage, (c) => store().setConn(c));
   watchIssSelection((t) => stream.setTopics(t));
+  setTextMatcher((text) => api.match(text)); // large catalogues are searched by the server's index (state/store.ts)
   void loadAll(true).then(() => stream.start());
 }
 

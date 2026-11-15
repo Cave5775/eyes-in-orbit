@@ -59,6 +59,9 @@ const HELP_TAGS: [string, string][] = [
 
 export function EntityBrowser() {
   const entities = useStore((s) => s.entities);
+  // the lists rebuild when the catalogue's shape changes (records added, renamed ...), not on every merge: a push of new SGP4
+  // elements leaves them as they are (state/store.ts `catalogShape`; the records they read are the current ones either way)
+  const shape = useStore((s) => s.catalogShape);
   const query = useStore((s) => s.query);
   const textHits = useStore((s) => s.textHits);
   const textIds = useStore((s) => s.textIds);
@@ -108,9 +111,9 @@ export function EntityBrowser() {
     return () => clearTimeout(h);
   }, [input, setText]);
 
-  const facets = useMemo(() => facetCounts(entities.values()), [entities]);
-  const categories = useMemo(() => categoryCounts(entities.values()), [entities]);
-  const launchGroups = useMemo(() => buildLaunchGroups(entities.values()), [entities]);
+  const facets = useMemo(() => facetCounts(entities.values()), [shape]);
+  const categories = useMemo(() => categoryCounts(entities.values()), [shape]);
+  const launchGroups = useMemo(() => buildLaunchGroups(entities.values()), [shape]);
 
   // autocomplete for `group:` / `#`, `type:`, `launch:`, `body:`
   const sources = useMemo((): Record<TagKey, TagSuggestion[]> => {
@@ -127,7 +130,7 @@ export function EntityBrowser() {
       body: [...bodies].map(([value, count]) => ({ value, count })),
       id: [],
     };
-  }, [entities, facets, categories, launchGroups]);
+  }, [shape, facets, categories, launchGroups]);
   const active = useMemo(() => activeTag(input), [input]);
   const suggestions = useMemo(() => (active ? suggestTags(active, sources[active.key]) : []), [active, sources]);
   const suggestOpen = focused && !dismissed && suggestions.length > 0;
@@ -135,7 +138,7 @@ export function EntityBrowser() {
 
   // the rows: what the query lets through (the same predicate the scene draws by, so the counts match what is drawn). Hidden
   // groups are not listed. The text ranks them; without text the notable kinds come first.
-  const ordered = useMemo(() => [...entities.values()].sort(browseOrder), [entities]);
+  const ordered = useMemo(() => [...entities.values()].sort(browseOrder), [shape]);
   const rows: SearchHit[] = useMemo(() => {
     const ctx: Ctx = { focus: NO_FOCUS, text: textIds };
     const t0 = perf.on ? performance.now() : 0;
@@ -143,7 +146,7 @@ export function EntityBrowser() {
     const out = (textOf(query) && textHits ? textHits : ordered).filter(pass);
     if (perf.on) perf.time('rows', performance.now() - t0);
     return out;
-  }, [entities, ordered, query, textHits, textIds]);
+  }, [shape, ordered, query, textHits, textIds]);
 
   // the tree: the same filtered, ordered rows, nested under their primary body and flattened to the rows that are open
   const pick = (id: string) => {
@@ -168,7 +171,7 @@ export function EntityBrowser() {
     });
     if (perf.on) perf.time('tree', performance.now() - t0);
     return built;
-  }, [mode, rows, entities, frame, filtering, overrides]);
+  }, [mode, rows, shape, frame, filtering, overrides]);
 
   /** the rows pinned at the top of the tree while a row is the first in view: its ancestors (the body chain and the kind group) */
   const stickyOf = useCallback((first: number) => stickyAncestors(treeRows, first), [treeRows]);

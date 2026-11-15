@@ -1,6 +1,7 @@
 import type { CredentialInfo } from '@eio/core';
 import type { Api } from '../api/types';
 import { rankEntities } from '../lib/filters';
+import { pageSlice } from '../lib/paging';
 import { mockDescription } from './describe';
 import {
   mockAscentSeries, mockBodies, mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockObservatories, mockSatellites,
@@ -33,8 +34,16 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
       }
       return creds.map((c) => ({ ...c }));
     },
-    entities: async (since = 0) => ({ serverTime: Date.now(), entities: entities.filter((e) => e.updatedAt > since) }),
+    entities: async (since = 0, page) => {
+      const changed = entities.filter((e) => e.updatedAt > since);
+      const { items, next } = pageSlice(changed, page?.offset, page?.limit);
+      return { serverTime: Date.now(), entities: items, ...(next !== undefined ? { next } : {}), ...(page?.limit && !page.offset ? { total: changed.length } : {}) };
+    },
     search: async (q, limit = 20) => rankEntities(entities, q, limit),
+    match: async (q) => {
+      const ids = rankEntities(entities, q, Infinity).map((h) => h.id);
+      return { q, ids, total: ids.length, truncated: false, via: 'scan' };
+    },
     launches: async () => launches,
     news: async ({ entity, q, limit = 20 } = {}) => {
       const rec = entity ? entities.find((e) => e.id === entity) : undefined;
