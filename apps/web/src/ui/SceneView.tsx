@@ -13,6 +13,7 @@ import { SceneController, type PathLabel, type SceneStats } from '../scene/Scene
 import { usePanels } from '../state/panels';
 import { clock, runtime, type CameraCommands } from '../state/runtime';
 import { jumpToSimTime } from '../state/seek';
+import { useSkin } from '../state/skin';
 import { useStore } from '../state/store';
 import { useView } from '../state/view';
 import { FrameBar } from './FrameBar';
@@ -170,6 +171,7 @@ export function SceneView() {
       if (v.scopeAll !== p.scopeAll) ctl.setScopeMode(v.scopeAll ? 'all' : 'auto');
       if (v.surfaceAuto !== p.surfaceAuto) ctl.setSurfaceAuto(v.surfaceAuto);
     });
+    const unsubSkin = useSkin.subscribe((s, p) => { if (s.skin !== p.skin) ctl.refreshPalette(); });
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
     // the query, the selection with the objects related to it (never hidden, filtered out nor scoped out; same lookup FIT
@@ -209,6 +211,7 @@ export function SceneView() {
       clearInterval(timer);
       unsub();
       unsubView();
+      unsubSkin();
       if (runtime.onFitRequest) runtime.onFitRequest = undefined;
       if (runtime.camera === camera) runtime.camera = undefined; // StrictMode remounts: only clear our own
       ctl.dispose();

@@ -847,6 +847,12 @@ export class SceneController {
   }
 
   /** Whether focusing an object near the Earth switches to the surface view. Applies from the next focus. */
+  /** Re-read the page colours after a skin change: the clear colour and the accent follow the CSS (the category colours are shared by every skin). */
+  refreshPalette(): void {
+    this.palette = readPalette();
+    this.renderer.setClearColor(this.palette.bg, 1);
+  }
+
   setSurfaceAuto(on: boolean): void {
     this.surfaceAuto = on;
   }

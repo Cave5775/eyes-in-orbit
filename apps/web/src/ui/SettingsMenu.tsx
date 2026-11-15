@@ -1,7 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
+import { SKINS } from '../lib/skin';
 import { useLayout } from '../state/layout';
 import { usePlayerPrefs } from '../state/player';
 import { atDefaults, restoreDefaults } from '../state/settings';
+import { useSkin } from '../state/skin';
 import { useView } from '../state/view';
 import { useDismiss } from './hooks';
 
@@ -22,7 +24,7 @@ export function SettingsMenu() {
     <div className="menu-anchor" ref={root}>
       <button
         ref={button} className={open ? 'key icon-key on' : 'key icon-key'} onClick={() => setOpen((o) => !o)}
-        aria-expanded={open} aria-haspopup="dialog" aria-label="Settings" title="Settings: imagery, camera, video and layout preferences">
+        aria-expanded={open} aria-haspopup="dialog" aria-label="Settings" title="Settings: appearance, imagery, camera, video and layout preferences">
         <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor">
           <circle cx="8" cy="8" r="4.6" strokeWidth="1.6" />
           <circle cx="8" cy="8" r="1.7" strokeWidth="1.2" />
@@ -39,6 +41,7 @@ function Panel() {
   const surfaceAuto = useView((s) => s.surfaceAuto);
   const native = usePlayerPrefs((s) => s.nativeControls);
   const sized = useLayout((s) => Object.keys(s.stored).length > 0);
+  const skin = useSkin((s) => s.skin);
   // the subscriptions above cover every store atDefaults reads
   const defaults = atDefaults();
 
@@ -57,6 +60,17 @@ function Panel() {
 
   return (
     <div className="popover menu-pop settings-pop" role="dialog" aria-label="Settings">
+      <fieldset className="menu-group">
+        <legend>Appearance</legend>
+        {SKINS.map((s) => (
+          <label key={s.id} className="menu-row skin-row">
+            <input type="radio" className="radio" name="skin" value={s.id} checked={skin === s.id} onChange={() => useSkin.getState().setSkin(s.id)} />
+            <span className="skin-prev" data-preview={s.id} aria-hidden="true"><i /><i /></span>
+            <span className="menu-name">{s.label}</span>
+            <span className="menu-hint">{s.hint}</span>
+          </label>
+        ))}
+      </fieldset>
       {group('Display', [
         { key: 'detail', label: 'Close-up Earth imagery', hint: 'Stream finer maps below about 2,600 km (uses more data)', on: detail, set: (on) => useView.getState().setDetail(on) },
       ])}
