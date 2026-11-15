@@ -4,6 +4,7 @@ import { fmtDist, fmtPathWindow } from '../lib/format';
 import { firstPersonReadout } from '../lib/first-person';
 import { CATEGORIES } from '../lib/browser-ui';
 import { colorKeyOf, kindLabel } from '../lib/entity';
+import { typeOf } from '../lib/view-class';
 import { launchOfPathEntity, liftoffMsOf, pathTipText } from '../lib/launch-seek';
 import { relatedFor } from '../lib/related';
 import { scopeLabel } from '../lib/scope';
@@ -100,7 +101,7 @@ export function SceneView() {
         const items: PickItem[] = [];
         for (const id of ids) {
           const rec = ents.get(id);
-          if (rec) items.push({ id, name: rec.name, kind: kindLabel(rec.kind), colorKey: colorKeyOf(rec) });
+          if (rec) items.push({ id, name: rec.name, kind: kindLabel(typeOf(rec)), colorKey: colorKeyOf(rec) });
         }
         if (items.length === 1) store.getState().selectObject(items[0].id);
         else if (items.length > 0) setPick({ items, more: total - items.length, x, y });
@@ -115,7 +116,7 @@ export function SceneView() {
         }
         el.style.display = 'block';
         el.style.transform = `translate(${h.x + 14}px, ${h.y + 14}px)`;
-        el.textContent = `${rec.name}  ·  ${rec.kind.replace(/_/g, ' ')}`;
+        el.textContent = `${rec.name}  ·  ${kindLabel(typeOf(rec))}`;
       },
       onPathHover: (h) => {
         const el = pathTip.current, dot = pathDot.current;

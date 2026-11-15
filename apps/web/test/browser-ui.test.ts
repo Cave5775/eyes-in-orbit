@@ -3,6 +3,7 @@ import { bodyEntityRecords, type EntityRecord } from '@eio/core';
 import {
   CATEGORIES, KNOWN_KINDS, bodyFacts, categoryCounts, categoryOf, emptyHint, matchesType, normaliseType,
 } from '../src/lib/browser-ui';
+import { typeOf } from '../src/lib/view-class';
 import { mockBodies, mockGroundAndProbes, mockLaunches, mockSatellites } from '../src/mock/generators';
 import { EARTH_CENTRE } from '../src/lib/frame';
 import { frameOnSelect, loadFrame, parseFrame, resolveFrame, saveFrame, serialiseFrame } from '../src/lib/frame-store';
@@ -185,10 +186,12 @@ describe('matchesType (the type tag: a category id or a kind)', () => {
   it('keeps every old kind: and cat: query: a value that matched under either key matches under type', () => {
     for (const e of [...mock, ...kinds.map((kind) => r(kind))]) {
       // kind:<kind>
-      expect(matchesType(e, e.kind), `kind:${e.kind}`).toBe(true);
-      expect(matchesType(e, e.kind.replace(/_/g, '-')), `type:${e.kind} with -`).toBe(true);
+      // (the kind as shown: an orbiter of another body is a satellite, see typeOf)
+      const kind = 'bodyId' in e ? typeOf(e as EntityRecord) : e.kind;
+      expect(matchesType(e, kind), `kind:${kind}`).toBe(true);
+      expect(matchesType(e, kind.replace(/_/g, '-')), `type:${kind} with -`).toBe(true);
       // the plural of a kind is that kind, except where it is a category id (`satellites`, `stations`: the category, see above)
-      if (!CATEGORIES.some((c) => c.id === `${e.kind}s`)) expect(matchesType(e, `${e.kind}s`), `type:${e.kind}s`).toBe(true);
+      if (!CATEGORIES.some((c) => c.id === `${kind}s`)) expect(matchesType(e, `${kind}s`), `type:${kind}s`).toBe(true);
       // cat:<id> (the chips)
       expect(matchesType(e, categoryOf(e)), `cat:${categoryOf(e)}`).toBe(true);
     }
@@ -205,7 +208,7 @@ describe('matchesType (the type tag: a category id or a kind)', () => {
   it('a kind is exactly the entities of that kind', () => {
     for (const k of kinds) {
       if (CATEGORIES.some((c) => c.id === k)) continue; // `debris` is the category (it holds the debris kind)
-      expect(mock.filter((e) => matchesType(e, k)).map((e) => e.id), k).toEqual(mock.filter((e) => e.kind === k).map((e) => e.id));
+      expect(mock.filter((e) => matchesType(e, k)).map((e) => e.id), k).toEqual(mock.filter((e) => typeOf(e) === k).map((e) => e.id));
     }
   });
 

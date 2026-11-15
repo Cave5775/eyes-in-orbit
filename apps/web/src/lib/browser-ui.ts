@@ -1,6 +1,6 @@
 import { defaultBodies, observatoryOf, type EntityRecord } from '@eio/core';
 import { fmtDays, fmtKm, fmtNum } from './format';
-import { viewClass } from './view-class';
+import { typeOf, viewClass } from './view-class';
 
 /** Pure parts of the detail panel's body facts and the EntityBrowser's category chips. */
 
@@ -87,7 +87,7 @@ export function categoryOf(rec: { kind: string; group?: string; bodyId?: string;
   if (k === 'station' || ck === 'station') return 'stations';
   if (k === 'debris' || ck === 'debris') return 'debris';
   // an orbiter of another body (MRO, LRO) is a satellite of that body, not a deep-space probe (lib/view-class.ts)
-  if (rec.bodyId !== undefined && viewClass({ kind: k, bodyId: rec.bodyId, provider: rec.provider as EntityRecord['provider'] }) === 'orbiter') return 'satellites';
+  if (rec.bodyId !== undefined && viewClass(rec as { kind: string; bodyId: string }) === 'orbiter') return 'satellites';
   if (k === 'probe' || k === 'rover' || k === 'lander' || ck === 'probe' || ck === 'rover') return 'probes';
   if (k === 'launch_vehicle' || k === 'stage' || k === 'capsule' || ck === 'vehicle') return 'launch-vehicles';
   if (k === 'ground_station' || k === 'pad' || ck === 'ground') return 'ground';
@@ -169,16 +169,18 @@ function typeMatcher(value: string): TypeMatcher {
  *
  * - a general category id (`satellites`, `launch-vehicles`, `debris`, `ground`, `bodies`...): the entities `categoryOf` puts
  *   there (`type:satellites` is the plain satellites, not the navigation ones; the category chips count exactly these), or
- * - an entity kind (`satellite`, `probe`, `ground_station`, `moon`, `stage`...): the entities of that kind, so `type:satellite`
- *   is every satellite and `type:probe` only the probes, not the rovers (use `type:probes` for the whole family).
+ * - an entity kind (`satellite`, `probe`, `ground_station`, `moon`, `stage`...): the entities of that kind as shown (`typeOf`), so
+ *   `type:satellite` is every satellite, orbiters of other bodies included, and `type:probe` only the probes, not the rovers (use
+ *   `type:probes` for the whole family).
  *
  * A word that is both an old category alias and a kind (`moon`, `planets`, `pad`) is the kind.
  */
-export function matchesType(rec: { kind: string; group?: string; render?: { colorKey?: string }; attrs?: EntityRecord['attrs'] }, value: string): boolean {
+export function matchesType(rec: { kind: string; group?: string; bodyId?: string; provider?: { type: string }; render?: { colorKey?: string }; attrs?: EntityRecord['attrs'] }, value: string): boolean {
   const m = typeMatcher(value);
   if (m.observatory) return observatoryOf(rec) !== null;
   if (m.category) return categoryOf(rec) === m.category;
-  return !!m.kinds && m.kinds.includes(rec.kind.toLowerCase());
+  // the kind as shown (`typeOf`): an orbiter of another body is a satellite, not a probe
+  return !!m.kinds && m.kinds.includes(typeOf(rec).toLowerCase());
 }
 
 /** Entities per category (all categories present, in chip order; `other` only when it has members). */

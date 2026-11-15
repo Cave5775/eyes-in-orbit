@@ -75,7 +75,8 @@ describe('parseQuery', () => {
 describe('matchesTag', () => {
   it('matches group, type, id, body and launch', () => {
     expect(ids('group:starlink')).toEqual(['sat-44713']);
-    expect(ids('type:probe')).toEqual(['dsn-LRO']);
+    expect(ids('type:probe')).toEqual([]); // LRO is a probe by its stored kind but orbits the Moon: shown and queried as a satellite
+    expect(ids('type:satellite')).toEqual(['sat-44713', 'sat-24876', 'dsn-LRO']);
     expect(ids('id:25544')).toEqual(['sat-25544']);
     expect(ids('id:1998-067a')).toEqual(['sat-25544']);
     expect(ids('body:moon')).toEqual(['dsn-LRO']);
@@ -87,7 +88,6 @@ describe('matchesTag', () => {
     expect(ids('launch:199')).toEqual([]); // a year, not a prefix of digits
     expect(ids('type:navigation')).toEqual(['sat-24876']);
     expect(ids('type:satellites')).toEqual(['sat-44713', 'dsn-LRO']); // the category: the navigation satellite is in its own; LRO is an orbiter of the Moon, a satellite of it (lib/view-class.ts)
-    expect(ids('type:satellite')).toEqual(['sat-44713', 'sat-24876']); // the kind
     expect(ids('type:moon')).toEqual(['body-moon']);
   });
   it('matches a group by its word prefix', () => {
