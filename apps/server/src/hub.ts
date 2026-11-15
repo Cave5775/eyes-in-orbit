@@ -7,6 +7,19 @@ import type { Trajectory } from './trajectory';
 
 export type NewEntity = Omit<EntityRecord, 'updatedAt'>;
 
+const ommEpochMs = (epoch: string): number => Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(epoch) ? epoch : `${epoch}Z`);
+
+/**
+ * Two sources (celestrak, spacetrack) supply SGP4 elements for the same `sat-<NORAD>` id. The incoming record keeps its other
+ * fields, but an element set never replaces a NEWER one: a stale CelesTrak snapshot (epoch 27 Oct, a decaying set) used to
+ * overwrite Space-Track's current set whenever CelesTrak ran last (triage #29). An unparseable epoch does not block the update.
+ */
+export function keepNewerElements<T extends NewEntity>(prev: EntityRecord | undefined, rec: T): T {
+  const a = prev?.provider, b = rec.provider;
+  if (a?.type !== 'sgp4' || b?.type !== 'sgp4') return rec;
+  return ommEpochMs(b.omm.EPOCH) < ommEpochMs(a.omm.EPOCH) ? { ...rec, provider: a } : rec;
+}
+
 /**
  * Central in-memory state shared by connectors, the HTTP API and the WebSocket.
  * Events: `entities.changed` ({ids, at}), `launches`, `news`, `dsn`, `iss.fix`, `iss.telemetry`, `iss.arrays`,
@@ -44,8 +57,9 @@ export class Hub extends EventEmitter {
   upsert(...recs: (NewEntity & { updatedAt?: number })[]): number {
     const now = Date.now();
     let n = 0;
-    for (const { updatedAt: _, ...rec } of recs) {
-      const prev = this.graph.get(rec.id);
+    for (const { updatedAt: _, ...incoming } of recs) {
+      const prev = this.graph.get(incoming.id);
+      const rec = keepNewerElements(prev, incoming);
       if (prev && sameRecord(prev, rec)) continue;
       this.graph.upsert({ ...rec, createdAt: prev?.createdAt ?? rec.createdAt ?? now, updatedAt: now });
       this.changed.add(rec.id);

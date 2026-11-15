@@ -1,3 +1,4 @@
+import { plausibleSgp4State } from '@eio/core';
 import { json2satrec, sgp4, type SatRec } from 'satellite.js';
 import { TICK_MS, type FromWorker, type SatInit, type ToWorker } from './protocol';
 
@@ -65,7 +66,9 @@ function tick(): void {
     const s = recs[i];
     const out = sgp4(s.satrec, (simMs - s.epochMs) / 60_000);
     const p = out && out.position;
-    if (p && typeof p !== 'boolean' && Number.isFinite(p.x)) {
+    const v = out && out.velocity;
+    // a decayed set can give finite positions at 186,000 km/s with no error flag: zero = no position, the point is not drawn
+    if (p && v && typeof p !== 'boolean' && typeof v !== 'boolean' && plausibleSgp4State(p.x, p.y, p.z, v.x, v.y, v.z)) {
       buf[i * 3] = p.x;
       buf[i * 3 + 1] = p.y;
       buf[i * 3 + 2] = p.z;

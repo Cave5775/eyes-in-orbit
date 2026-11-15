@@ -6,6 +6,7 @@ import { KeplerianProvider } from './keplerian';
 import { RelativeProvider } from './relative';
 import { SampledProvider } from './sampled';
 import { Sgp4Provider } from './sgp4';
+export { plausibleSgp4State } from './sgp4';
 
 /** Rebuild a live provider from its serialisable spec (server -> client transport). */
 export function providerFromSpec(spec: ProviderSpec): StateProvider {
