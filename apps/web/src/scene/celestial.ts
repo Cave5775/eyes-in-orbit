@@ -5,6 +5,7 @@ import { MARKER_BELOW_PX, MARKER_SIZE_PX, bodyStyle, hexRgb } from '../lib/body-
 import type { AssetCache } from '../lib/asset-cache';
 import { BODY_SHAPES, MESH_LOAD_PX, baseEllipsoid, ellipsoidScale, meshWanted, type BodyShape, type MeshShape } from '../lib/body-shape';
 import { bodyDiscRadiusPx, SHOW_EXEMPT } from '../lib/pick';
+import { bodyShown } from '../lib/scope';
 import type { DrawnBody } from '../lib/body-scene';
 import type { SceneBody } from '../lib/occlusion';
 import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM } from '../lib/disc-hide';
@@ -73,6 +74,8 @@ interface Drawn extends SceneBody {
   place?: (origin: THREE.Vector3, t: number) => void;
   /** a body with a detailed mesh (lib/body-shape.ts `MeshShape`): loaded while its disc is big enough, the sphere shows otherwise */
   mesh?: BodyMesh;
+  /** glyph, label and pick area shown (lib/scope.ts `bodyShown`, set by `applyScope`); false for another planet's moon */
+  shown: boolean;
 }
 
 /** The mesh tier of one body: held (referenced in the cache) while its disc is big, attached to the scene once the file has loaded. */
@@ -114,6 +117,8 @@ export class CelestialLayer {
   private disposed = false;
   /** the bodies in layer order, rebuilt when the set changes (the objects are the `drawn` values, mutated by `update`) */
   private list: Drawn[] = [];
+  /** `list` without the bodies `applyScope` hid (what picking sees) */
+  private shownList: Drawn[] = [];
   private moonMat: THREE.ShaderMaterial | null = null;
   private markers: Markers | null = null;
   /** 'texture' once /textures/moon.jpg has loaded */
@@ -144,6 +149,7 @@ export class CelestialLayer {
       else this.drawn.set(bodyId, this.create(bodyId, entityId));
     }
     this.list = [...this.drawn.values()];
+    this.shownList = this.list.filter((d) => d.shown);
     this.buildMarkers();
   }
 
@@ -198,7 +204,7 @@ export class CelestialLayer {
       const d = m.bodies[i];
       const dist = Math.hypot(d.rel[0], d.rel[1], d.rel[2]);
       const r = d.radiusKm * d.k;
-      if (!(dist > 0) || !(bodyDiscRadiusPx(d.radiusKm, d.k, dist, fovDeg, viewportPx) < MARKER_BELOW_PX)) {
+      if (!d.shown || !(dist > 0) || !(bodyDiscRadiusPx(d.radiusKm, d.k, dist, fovDeg, viewportPx) < MARKER_BELOW_PX)) {
         s[i] = 0;
         continue;
       }
@@ -214,7 +220,7 @@ export class CelestialLayer {
 
   private create(bodyId: string, entityId: string): Drawn {
     const d: Drawn = {
-      entityId, bodyId, radiusKm: refRadiusKm(bodyId), c: [0, 0, 0], rel: [0, 0, 0], k: 1, objects: [],
+      entityId, bodyId, radiusKm: refRadiusKm(bodyId), c: [0, 0, 0], rel: [0, 0, 0], k: 1, objects: [], shown: true,
     };
     if (bodyId === 'EARTH') {
       // the one ellipsoid; its low orbits (LEO shell) and GEO belt are what the disc cone hides (lib/disc-hide.ts)
@@ -488,9 +494,32 @@ export class CelestialLayer {
     return this.list;
   }
 
-  /** Visit every body, Earth included, without allocating (the label pass runs every frame): entity id, centre, true radius and drawn-radius factor (1). */
+  /**
+   * Decide which bodies show their glyph, label and pick area (lib/scope.ts): `inScope(bodyId, entityId)` is the hierarchy rule
+   * with the keeps, and a body out of scope still shows once its disc is big enough to see. Call after `update`, before
+   * `updateMarkers`; no allocation unless the set changed (then `shownBodies` is rebuilt).
+   */
+  applyScope(inScope: (bodyId: string, entityId: string) => boolean, fovDeg: number, viewportPx: number): void {
+    let changed = false;
+    for (const d of this.list) {
+      const shown = bodyShown(inScope(d.bodyId, d.entityId), bodyDiscRadiusPx(d.radiusKm, d.k, Math.hypot(d.rel[0], d.rel[1], d.rel[2]), fovDeg, viewportPx));
+      if (shown !== d.shown) changed = true;
+      d.shown = shown;
+    }
+    if (changed) this.shownList = this.list.filter((d) => d.shown);
+  }
+
+  /** The bodies that can be picked (`bodies()` minus those scoped out by `applyScope`): the same array until the set changes. */
+  shownBodies(): readonly SceneBody[] {
+    return this.shownList;
+  }
+
+  /**
+   * Visit every SHOWN body (`applyScope`), Earth included, without allocating (the label pass runs every frame): entity id,
+   * centre, true radius and drawn-radius factor (1).
+   */
   eachBody(visit: (entityId: string, c: readonly [number, number, number], radiusKm: number, k: number) => void): void {
-    for (const d of this.drawn.values()) visit(d.entityId, d.c, d.radiusKm, d.k);
+    for (const d of this.drawn.values()) if (d.shown) visit(d.entityId, d.c, d.radiusKm, d.k);
   }
 
   /** The Earth as the layer knows it (centre and radius), or null before the Earth entity has arrived. */

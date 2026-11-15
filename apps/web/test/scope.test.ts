@@ -1,94 +1,100 @@
 import { describe, expect, it } from 'vitest';
-import {
-  SCOPE_FACTOR, SCOPE_MIN_KM, SCOPE_SOLO_CUT, hash01, inScope, inView, isScopeExempt, scopeRadius, scopeWeight, type ScopeObject,
-} from '../src/lib/scope';
-import { NEAR_EARTH_LIMIT_KM } from '../src/lib/ref-body';
+import { bodyInScope, bodyShown, focusBodyOf, inScope, inView, isScopeExempt, scopeBodies, type ScopeObject } from '../src/lib/scope';
+import { MARKER_BELOW_PX } from '../src/lib/body-style';
 
-const obj = (o: Partial<ScopeObject>): ScopeObject => ({ d: 0, key: 0, bulk: false, keep: false, ...o });
-
-describe('scope radius', () => {
-  it('grows with the camera distance and has a floor', () => {
-    expect(scopeRadius(1)).toBe(SCOPE_MIN_KM);
-    expect(scopeRadius(4)).toBe(320);
-    expect(scopeRadius(0)).toBe(SCOPE_MIN_KM);
-    expect(scopeRadius(24_000)).toBe(24_000 * SCOPE_FACTOR);
-    expect(scopeRadius(1e6)).toBeGreaterThan(scopeRadius(1e5));
+describe('bodyInScope by hierarchy', () => {
+  const at = (focus: string, body: string, keep = false) => bodyInScope(body, scopeBodies(focus), keep);
+  it('Solar System view: the Sun and the planets, no moon of any planet', () => {
+    for (const b of ['SUN', 'EARTH', 'MARS', 'JUPITER', 'PLUTO']) expect(at('SUN', b)).toBe(true);
+    for (const b of ['MOON', 'PHOBOS', 'IO', 'TITAN', 'CHARON']) expect(at('SUN', b)).toBe(false);
   });
-
-  it('a low view keeps the neighbourhood and drops the catalogue and the deep-space shell', () => {
-    const r = scopeRadius(4); // 4 km above a pad
-    expect(r).toBeLessThan(1000);
-    expect(inScope(obj({ d: 50 }), r)).toBe(true); // a pad 50 km away
-    expect(inScope(obj({ d: 550 }), r)).toBe(false); // a probe in the sky / a LEO satellite directly overhead
-    expect(inScope(obj({ d: 2.5e6 }), r)).toBe(false);
-    expect(inScope(obj({ d: 600, key: 5, bulk: true }), r)).toBe(false);
+  it('Earth view: the Moon and the planets, not Phobos or Io', () => {
+    for (const b of ['MOON', 'MARS', 'JUPITER', 'SUN']) expect(at('EARTH', b)).toBe(true);
+    for (const b of ['PHOBOS', 'IO']) expect(at('EARTH', b)).toBe(false);
   });
-
-  it('the default Earth view keeps near-Earth space and starts to drop the shell; pulling out keeps everything', () => {
-    const def = scopeRadius(24_000);
-    expect(inScope(obj({ d: 1.5e6 }), def)).toBe(true); // JWST
-    expect(inScope(obj({ d: NEAR_EARTH_LIMIT_KM * 1.6 }), def)).toBe(false);
-    expect(inScope(obj({ d: 4.0e6 }), scopeRadius(60_000))).toBe(true);
+  it("a planet's system holds its moons; a moon's system holds its siblings", () => {
+    expect(at('JUPITER', 'IO')).toBe(true);
+    expect(at('JUPITER', 'MOON')).toBe(false);
+    expect(at('PHOBOS', 'DEIMOS')).toBe(true);
+    expect(at('PHOBOS', 'IO')).toBe(false);
   });
-});
-
-describe('thinning', () => {
-  it('weights are 1 inside, 0 beyond twice the radius, linear between', () => {
-    expect(scopeWeight(50, 100)).toBe(1);
-    expect(scopeWeight(100, 100)).toBe(1);
-    expect(scopeWeight(150, 100)).toBeCloseTo(0.5, 12);
-    expect(scopeWeight(200, 100)).toBe(0);
-    expect(scopeWeight(1e9, 100)).toBe(0);
+  it('a kept body, Draw everything and an unknown body are always in', () => {
+    expect(at('SUN', 'IO', true)).toBe(true);
+    expect(bodyInScope('IO', scopeBodies('SUN'), false, 'all')).toBe(true);
+    expect(at('SUN', 'NOT_A_BODY')).toBe(true);
   });
-
-  it('keeps a stable subset whose size follows the weight', () => {
-    expect(hash01(7)).toBe(hash01(7));
-    const n = 20_000;
-    let kept = 0;
-    for (let i = 0; i < n; i++) if (inScope(obj({ d: 150, key: i, bulk: true }), 100)) kept++;
-    expect(kept / n).toBeGreaterThan(0.47);
-    expect(kept / n).toBeLessThan(0.53);
-    for (let i = 0; i < 1000; i++) {
-      const a = hash01(i);
-      expect(a).toBeGreaterThanOrEqual(0);
-      expect(a).toBeLessThan(1);
-    }
-  });
-
-  it('thinned points do not come back as the radius shrinks (nested subsets)', () => {
-    // the same hash is compared with a weight that only falls as d grows
-    const keptAt = (d: number) => Array.from({ length: 2000 }, (_, i) => i).filter((i) => inScope(obj({ d, key: i, bulk: true }), 100));
-    const near = new Set(keptAt(130)), far = keptAt(170);
-    for (const i of far) expect(near.has(i)).toBe(true);
-  });
-
-  it('single entities are cut at SCOPE_SOLO_CUT radii, not thinned', () => {
-    expect(inScope(obj({ d: 100 * SCOPE_SOLO_CUT - 1 }), 100)).toBe(true);
-    expect(inScope(obj({ d: 100 * SCOPE_SOLO_CUT + 1 }), 100)).toBe(false);
+  it('out of scope is still shown once its disc is visible', () => {
+    expect(bodyShown(true, 0.1)).toBe(true);
+    expect(bodyShown(false, MARKER_BELOW_PX * 0.5)).toBe(false);
+    expect(bodyShown(false, MARKER_BELOW_PX)).toBe(true);
+    expect(bodyShown(false, Infinity)).toBe(true);
   });
 });
 
-describe('exemptions and mode', () => {
-  it('always keeps selected / related / hovered / filtered-in objects', () => {
-    expect(inScope(obj({ d: 1e10, keep: true }), 100)).toBe(true);
-    expect(inScope(obj({ d: 1e10, keep: true, bulk: true, key: 3 }), 100)).toBe(true);
+const obj = (o: Partial<ScopeObject>): ScopeObject => ({ parent: 'EARTH', keep: false, ...o });
+
+describe('scopeBodies', () => {
+  it('is the focus body plus its ancestors', () => {
+    expect([...scopeBodies('EARTH')].sort()).toEqual(['EARTH', 'SUN']);
+    const moon = scopeBodies('MOON');
+    for (const id of ['MOON', 'EARTH', 'SUN']) expect(moon.has(id)).toBe(true);
+    expect([...scopeBodies('MARS')].sort()).toEqual(['MARS', 'SUN']);
   });
 
-  it('never thins or cuts celestial bodies (star, planet, moon), however far or bulk-flagged', () => {
+  it('an unknown body gives only itself', () => {
+    expect([...scopeBodies('NOPE')]).toEqual(['NOPE']);
+  });
+});
+
+describe('inScope by hierarchy', () => {
+  const at = (focus: string) => scopeBodies(focus);
+
+  it('an Earth satellite is in for the Earth and the Moon, out for Mars and the Sun', () => {
+    const sat = obj({ parent: 'EARTH' });
+    expect(inScope(sat, at('EARTH'))).toBe(true);
+    expect(inScope(sat, at('MOON'))).toBe(true);
+    expect(inScope(sat, at('MARS'))).toBe(false);
+    expect(inScope(sat, at('SUN'))).toBe(false);
+  });
+
+  it('an object listed under the Sun (JWST, Voyager) is in for every focus', () => {
+    for (const f of ['EARTH', 'MOON', 'MARS', 'SUN']) expect(inScope(obj({ parent: 'SUN' }), at(f))).toBe(true);
+  });
+
+  it('a Mars orbiter is out at the Earth and in at Mars; a lunar orbiter is out at the Earth and in at the Moon', () => {
+    const mro = obj({ parent: 'MARS' }), lro = obj({ parent: 'MOON' });
+    expect(inScope(mro, at('EARTH'))).toBe(false);
+    expect(inScope(mro, at('MARS'))).toBe(true);
+    expect(inScope(lro, at('EARTH'))).toBe(false);
+    expect(inScope(lro, at('MOON'))).toBe(true);
+  });
+
+  it('keep, exempt kinds, mode "all" and a missing parent are always in', () => {
+    const far = at('MARS');
+    expect(inScope(obj({ parent: 'EARTH', keep: true }), far)).toBe(true);
     for (const kind of ['star', 'planet', 'moon']) {
       expect(isScopeExempt(kind)).toBe(true);
-      expect(inScope(obj({ d: 1e10, kind }), 100)).toBe(true);
-      expect(inScope(obj({ d: 1e10, kind, bulk: true, key: 3 }), 100)).toBe(true);
+      expect(inScope(obj({ parent: 'EARTH', kind }), far)).toBe(true);
     }
     expect(isScopeExempt('satellite')).toBe(false);
     expect(isScopeExempt(undefined)).toBe(false);
-    expect(inScope(obj({ d: 1e10, kind: 'probe' }), 100)).toBe(false);
-    expect(inScope(obj({ d: 1e10 }), 100)).toBe(false);
+    expect(inScope(obj({ parent: 'EARTH', kind: 'probe' }), far)).toBe(false);
+    expect(inScope(obj({ parent: 'EARTH' }), far, 'all')).toBe(true);
+    expect(inScope(obj({ parent: undefined }), far)).toBe(true);
+  });
+});
+
+describe('focusBodyOf', () => {
+  it('the first defined anchor wins; a body anchor gives its body, any other its parent', () => {
+    expect(focusBodyOf([undefined, { parent: 'MARS' }, { parent: 'EARTH' }])).toBe('MARS');
+    expect(focusBodyOf([{ body: 'MOON', parent: 'EARTH' }, { parent: 'MARS' }])).toBe('MOON');
+    expect(focusBodyOf([{ parent: 'SUN' }])).toBe('SUN');
   });
 
-  it('"all" mode keeps everything', () => {
-    expect(inScope(obj({ d: 1e10 }), 100, 'all')).toBe(true);
-    expect(inScope(obj({ d: 1e10, bulk: true, key: 9 }), 100, 'all')).toBe(true);
+  it('falls back to the Earth, or the given fallback, with no anchor', () => {
+    expect(focusBodyOf([undefined, undefined])).toBe('EARTH');
+    expect(focusBodyOf([])).toBe('EARTH');
+    expect(focusBodyOf([undefined], 'SUN')).toBe('SUN');
   });
 });
 

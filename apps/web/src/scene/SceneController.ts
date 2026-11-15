@@ -22,7 +22,8 @@ import { OccluderSet } from '../lib/occlusion';
 import { liftNearSurface } from '../lib/paths';
 import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type PickSource } from '../lib/pick';
 import { discGroups, hiddenByDisc, type DiscGroup, type GroupStats } from '../lib/disc-hide';
-import { inScope, inView, scopeRadius, type ScopeMode } from '../lib/scope';
+import { bodyInScope, focusBodyOf, inScope, inView, scopeBodies, type FocusCandidate, type ScopeMode } from '../lib/scope';
+import { SCOPE_CHUNK, markSpecials, scanScope, type ScopeScanInput } from '../lib/scope-scan';
 import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
@@ -126,7 +127,8 @@ export interface SceneStats {
   /** selected path: window relative to now (ms, negative = past) */
   path: { pastMs: number; futureMs: number } | null;
   /** scope policy: objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all that have a position */
-  scope: { mode: ScopeMode; rendered: number; total: number };
+  /** `focus`: registry id of the body whose system is in scope (lib/scope.ts) */
+  scope: { mode: ScopeMode; rendered: number; total: number; focus: string };
   /** frame of reference (docs/frames.md): its short label (`Moon`, an entity's name), whether it is the Earth, and the lock */
   frame: { label: string; isDefault: boolean; locked: boolean };
   /** ids of entities whose 3D model is drawn this frame (camera within the model's LOD distance) */
@@ -153,6 +155,15 @@ interface PointSet {
   glyph: THREE.BufferAttribute;
   /** 0/1/2 per point: scope policy (0: out of scope, not drawn nor pickable); 2 = in scope and exempt from the small-disc hiding (lib/disc-hide.ts) */
   show: THREE.BufferAttribute;
+}
+
+/** One scope cycle in progress: the sets still to scan (with their captured inputs), the position in them and the tallies so far. */
+interface ScopeCycle {
+  phase: number;
+  at: number;
+  total: number;
+  rendered: number;
+  sets: { set: PointSet; n: number; input: ScopeScanInput }[];
 }
 
 /** `exempt`: the whole set is drawn whatever lies under it (the highlight set): aShow starts at 2 (`SHOW_EXEMPT`). */
@@ -278,6 +289,20 @@ export class SceneController {
   private satExempt = new Uint8Array(0);
   private dynExempt = new Uint8Array(0);
   private scopeDirty = true;
+  /** a scope cycle is running (it is sliced over frames, see `refreshScope`) */
+  private scopeCycle: ScopeCycle | null = null;
+  /** inputs changed while a cycle ran: start another straight after it */
+  private scopePending = false;
+  private scopeMatrix = new THREE.Matrix4();
+  /** the focus body of the last scope cycle (for the HUD) */
+  private scopeFocus = 'EARTH';
+  /** `scopeBodies(scopeFocus)` and the body entities kept whatever the hierarchy, both from the last scope cycle */
+  private scopeBodySet: ReadonlySet<string> = new Set(['EARTH', 'SUN']);
+  private bodyKeep: ReadonlySet<string> = new Set();
+  /** the per-frame body test of `celestial.applyScope` (bound: no closure per frame) */
+  private readonly bodyScoped = (bodyId: string, entityId: string): boolean =>
+    bodyInScope(bodyId, this.scopeBodySet, this.bodyKeep.has(entityId), this.scopeMode);
+  private specialCache = new Map<PointSet, { ids: readonly string[]; n: number; key: string; out: Uint8Array }>();
   private lastScopeAt = -Infinity;
   private scopeCounts = { rendered: 0, total: 0 };
   /** 3D models of entities with `render.model`, drawn camera-relative while the camera is near them (scene/models/) */
@@ -645,6 +670,19 @@ export class SceneController {
   }
 
   /** The entity the camera is following now (the focus), if any. */
+  /**
+   * The body whose system the camera is in (lib/scope.ts `focusBodyOf`): the observatory of a first-person view, the object of
+   * a surface view, the followed entity, the frame centre; a body is its own system, anything else belongs to its listed parent.
+   */
+  private focusBody(): string {
+    const anchor = (id: string | null | undefined): FocusCandidate | undefined => {
+      const rec = id ? this.recs.get(id) : undefined;
+      return rec ? { body: bodyOf(rec), parent: listedParent(rec) } : undefined;
+    };
+    const surface = this.surfaceOn && this.surfaceSrc?.kind === 'entity' ? this.surfaceSrc.id : null;
+    return focusBodyOf([anchor(this.fp?.id), anchor(surface), anchor(this.follow ? this.followId : null), anchor(this.frameCentre)]);
+  }
+
   private followedRec(): EntityRecord | undefined {
     return this.follow && this.followId ? this.recs.get(this.followId) : undefined;
   }
@@ -1105,7 +1143,7 @@ export class SceneController {
       surface: this.surfaceOn,
       firstPerson: this.fp ? { id: this.fp.id, name: this.recs.get(this.fp.id)?.name ?? this.fp.id, az: this.rig.az, el: this.rig.el, fovDeg: this.camera.fov } : null,
       path: this.pathStatus.active && plan ? { pastMs: plan.t0 - now, futureMs: plan.t1 - now } : null,
-      scope: { mode: this.scopeMode, ...this.scopeCounts },
+      scope: { mode: this.scopeMode, ...this.scopeCounts, focus: this.scopeFocus },
       frame: { label: centreLabel(this.frameCentre, (id) => this.recs.get(id)), isDefault: isEarthCentre(this.frameCentre), locked: this.frameLocked },
       models: this.models.activeIds,
       arrays: this.models.activeIds.some((id) => this.models.defOf(id)?.key === 'iss') ? { sources: this.issSources, joints: this.issJointsNow } : null,
@@ -1433,7 +1471,7 @@ export class SceneController {
     // disc must not turn a click on a satellite drawn over it into a choice popup when zoomed in
     // one precedence rule between bodies and objects (lib/pick.ts `pickPrecedence`): the cursor in a body's disc belongs to it; a
     // moon's or an object's wider hit area does not reach into a planet's disc
-    const scan = bodyPickScan(this.celestial.bodies(), { origin: this.frameInfo.originV3, m, w, h, px, py, fovDeg: this.camera.fov });
+    const scan = bodyPickScan(this.celestial.shownBodies(), { origin: this.frameInfo.originV3, m, w, h, px, py, fovDeg: this.camera.fov });
     const bodies = () => scan.extras;
     const cones = this.discCones;
     const r = gatherWithBodies(
@@ -1645,8 +1683,8 @@ export class SceneController {
     this.prepareRender(gmst, t);
     this.updateModels(t);
     const tScope = perf.on ? performance.now() : 0;
-    this.refreshScope(wall);
-    if (perf.on && this.lastScopeAt === wall) perf.time('scope', performance.now() - tScope);
+    const scanned = this.refreshScope(wall);
+    if (perf.on && scanned) perf.time('scope', performance.now() - tScope);
 
     if (this.mouse && wall - this.lastPickAt > 40 && !this.rig.flying) {
       this.lastPickAt = wall;
@@ -1702,6 +1740,7 @@ export class SceneController {
       u.uGroupE.value[i].set(g.shell, g.back);
     });
 
+    this.celestial.applyScope(this.bodyScoped, this.camera.fov, this.container.clientHeight); // another planet's moons: no glyph, label or pick
     this.celestial.updateMarkers(this.camera.fov, this.container.clientHeight); // glyphs of the bodies too small to see
     this.celestial.updateMeshes(this.camera.fov, this.container.clientHeight); // detailed body models, loaded only when approached
     const tUp = perf.on ? performance.now() : 0;
@@ -1785,54 +1824,107 @@ export class SceneController {
    * (in scope, not filtered out, not behind the Earth, inside the view). The Earth's own occlusion stays exact per frame in
    * the point shader; here it is only counted.
    */
-  private refreshScope(wall: number): void {
-    if (!this.scopeDirty && wall - this.lastScopeAt < 125) return;
-    this.scopeDirty = false;
-    this.lastScopeAt = wall;
-    const mode = this.scopeMode;
-    const focus = this.rig.target;
-    const radius = scopeRadius(this.rig.dist);
-    const sel = this.selectedId, hov = this.hoverId, fol = this.followId;
-    const f = this.frameInfo;
-    const occluded = this.occ; // the slots built by prepareRender this frame: every drawn body
-    const m = new THREE.Matrix4().multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements;
-    let total = 0, rendered = 0;
-    const tmp = this.tmp2;
-
-    // `exemptFlags`: 1 = launch vehicle, stage or capsule. The selected, hovered and followed point, the ones a filter lets
-    // through and the flagged ones in flight get aShow = 2, which the point shader and pickAll never hide over a small body's
-    // disc; every other point (related, labelled, pads, ground stations) is scoped in by `keep` but hides over a small disc
-    // like the cloud
-    const scan = (set: PointSet, ids: readonly string[], bulk: boolean, keepFlags: Uint8Array | null, exemptFlags: Uint8Array | null) => {
-      const show = set.show.array as Float32Array, size = set.size.array as Float32Array;
-      const rel = set.pos.attr.array as Float32Array;
-      let changed = false;
-      for (let i = 0; i < ids.length; i++) {
-        const w = set.pos.worldOf(i, f.spin, tmp);
-        if (w.x === 0 && w.y === 0 && w.z === 0) continue; // no position (failed propagation, provider without a state)
-        total++;
-        const id = ids[i];
-        const keep = id === hov || this.ctx.focus.has(id) || (keepFlags !== null && keepFlags[i] === 1);
-        const d = Math.hypot(w.x - focus.x, w.y - focus.y, w.z - focus.z);
-        // an object the user filtered for is never hidden over a small disc, or a zoomed-out filter would show nothing
-        const kept = keepFlags !== null && keepFlags[i] === 1;
-        const exempt = id === sel || id === hov || id === fol || kept || (exemptFlags !== null && exemptFlags[i] === 1 && Math.hypot(w.x, w.y, w.z) > RE + IN_FLIGHT_KM);
-        const v = inScope({ d, key: i, bulk, keep }, radius, mode) ? (exempt ? SHOW_EXEMPT : 1) : 0;
-        if (show[i] !== v) {
-          show[i] = v;
-          changed = true;
-        }
-        if (v === 0 || size[i] <= 0) continue;
-        const x = rel[i * 3], y = rel[i * 3 + 1], z = rel[i * 3 + 2];
-        if (!inView(m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[3] * x + m[7] * y + m[11] * z + m[15])) continue;
-        if (!occluded(x, y, z) && (v === SHOW_EXEMPT || !hiddenByDisc(x, y, z, this.discCones))) rendered++;
+  private refreshScope(wall: number): boolean {
+    let cyc = this.scopeCycle;
+    if (cyc) {
+      // inputs changed mid-cycle: finish this cycle (the flags it has written stay valid), then start the next at once
+      if (this.scopeDirty) this.scopePending = true;
+      this.scopeDirty = false;
+    } else {
+      if (!this.scopeDirty && !this.scopePending && wall - this.lastScopeAt < 125) return false;
+      this.scopeDirty = this.scopePending = false;
+      this.lastScopeAt = wall;
+      cyc = this.beginScopeCycle();
+    }
+    // a time slice per frame (about 5% of the last frame, 2 to 8 ms, checked every SCOPE_CHUNK points; always at least one
+    // chunk), so the cost of the policy does not grow with the catalogue: a catalogue under one chunk is scanned in one frame
+    const t0 = performance.now();
+    const sliceMs = Math.min(8, Math.max(2, 50 / Math.max(1, this.fps)));
+    do {
+      const part = cyc.sets[cyc.phase];
+      const to = Math.min(part.n, cyc.at + SCOPE_CHUNK);
+      const r = scanScope(part.input, cyc.at, to);
+      cyc.total += r.total;
+      cyc.rendered += r.rendered;
+      if (r.changed) part.set.show.needsUpdate = true;
+      cyc.at = to;
+      if (cyc.at >= part.n) {
+        cyc.phase++;
+        cyc.at = 0;
       }
-      if (changed) set.show.needsUpdate = true;
+    } while (cyc.phase < cyc.sets.length && performance.now() - t0 < sliceMs);
+    if (cyc.phase >= cyc.sets.length) {
+      this.scopeCounts = { rendered: cyc.rendered, total: cyc.total };
+      this.scopeCycle = null;
+    } else this.scopeCycle = cyc;
+    return true;
+  }
+
+  /**
+   * Capture what one scope cycle needs (the camera focus, radius and view matrix are fixed for the whole cycle, so a slice
+   * never mixes two policies) and resolve the special ids (hovered, selected, followed, related) of each point set.
+   */
+  private beginScopeCycle(): ScopeCycle {
+    const f = this.frameInfo;
+    // the hierarchy decides (lib/scope.ts): objects listed under the focus body or one of its ancestors
+    this.scopeFocus = this.focusBody();
+    const bodies = scopeBodies(this.scopeFocus);
+    const earthIn = bodies.has('EARTH'); // every SGP4 object and every pad is the Earth's
+    const dynSystem = new Uint8Array(this.dynIds.length);
+    this.dynIds.forEach((id, i) => {
+      const rec = this.recs.get(id);
+      dynSystem[i] = !rec || inScope({ parent: listedParent(rec), keep: false, kind: rec.kind }, bodies) ? 1 : 0;
+    });
+    const m = this.scopeMatrix.multiplyMatrices(this.rcam.projectionMatrix, this.rcam.matrixWorldInverse).elements.slice();
+    const occluded = this.occ; // the slots built by prepareRender this frame: every drawn body
+    const cones = this.discCones;
+    const discHidden = (x: number, y: number, z: number) => hiddenByDisc(x, y, z, cones);
+    const exemptIds = [this.selectedId, this.hoverId, this.followId];
+    const keepIds = new Set(this.ctx.focus);
+    if (this.hoverId) keepIds.add(this.hoverId);
+    // the bodies follow the same hierarchy (lib/scope.ts `bodyInScope`, applied per frame in prepareRender): kept are the
+    // selection, related, hovered and followed body and, with an only / text term, the bodies the search lets through
+    this.scopeBodySet = bodies;
+    const active = queryActive(this.query);
+    const bodyKeep = new Set<string>();
+    for (const id of this.bodyIds) {
+      const rec = this.recs.get(id);
+      if (keepIds.has(id) || id === this.selectedId || id === this.followId || (active && rec && classify(rec, this.query, this.ctx) === 'show')) bodyKeep.add(id);
+    }
+    this.bodyKeep = bodyKeep;
+    // `keepFlags`: 1 = a filter lets the object through. `exemptFlags`: 1 = launch vehicle, stage or capsule. The selected,
+    // hovered and followed point, the ones a filter lets through and the flagged ones in flight get aShow = 2, which the
+    // point shader and pickAll never hide over a small body's disc; every other point (related, labelled, pads, ground
+    // stations) is scoped in by `keep` but hides over a small disc like the cloud
+    const part = (set: PointSet, ids: readonly string[], system: Uint8Array | null, systemAll: boolean, keepFlags: Uint8Array | null, exemptFlags: Uint8Array | null) => {
+      const special = this.specialsFor(set, ids, keepIds, exemptIds);
+      const input: ScopeScanInput = {
+        world: set.pos.world, fixed: set.pos.fixed, spinCos: f.spin.cos, spinSin: f.spin.sin, shift: set.pos.shift,
+        rel: set.pos.attr.array as Float32Array, size: set.size.array as Float32Array, show: set.show.array as Float32Array,
+        keep: keepFlags, exempt: exemptFlags, special, system, systemAll, mode: this.scopeMode, m, occluded, discHidden,
+        showExempt: SHOW_EXEMPT, inFlightKm: RE + IN_FLIGHT_KM,
+      };
+      return { set, n: ids.length, input };
     };
-    scan(this.sats, this.propagator.ids, true, this.satKeep, this.satExempt);
-    scan(this.dyn, this.dynIds, false, this.dynKeep, this.dynExempt);
-    scan(this.pads, this.launches.map((l) => l.entityId), false, null, null);
-    this.scopeCounts = { rendered, total };
+    return {
+      phase: 0, at: 0, total: 0, rendered: 0,
+      sets: [
+        part(this.sats, this.propagator.ids, null, earthIn, this.satKeep, this.satExempt),
+        part(this.dyn, this.dynIds, dynSystem, true, this.dynKeep, this.dynExempt),
+        part(this.pads, this.launches.map((l) => l.entityId), null, earthIn, null, null),
+      ],
+    };
+  }
+
+  /** The `SPECIAL_*` byte array of a point set; only resolved again when its ids or the special ids change. */
+  private specialsFor(set: PointSet, ids: readonly string[], keepIds: ReadonlySet<string>, exemptIds: readonly (string | null)[]): Uint8Array {
+    const key = `${[...keepIds].join('|')}#${exemptIds.join('|')}`;
+    const c = this.specialCache.get(set);
+    if (c && c.ids === ids && c.n === ids.length && c.key === key) return c.out;
+    const out = c && c.out.length === ids.length ? c.out : new Uint8Array(ids.length);
+    markSpecials(ids, out, keepIds, exemptIds);
+    this.specialCache.set(set, { ids, n: ids.length, key, out });
+    return out;
   }
 
   private updateDyn(t: number): void {

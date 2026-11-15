@@ -6,7 +6,7 @@ import { glslBodyHides } from './glsl-occlusion';
 import { liftNearSurface, makePathBuffers, nowIndex, planPathWindow, samplePath } from '../src/lib/paths';
 import { NEAR_EARTH_LIMIT_KM, refDisplay, refPositionEci, refRadiusKm, refViewDistKm } from '../src/lib/ref-body';
 import { toCameraRelative, spinOf } from '../src/lib/floating-origin';
-import { inScope, scopeRadius } from '../src/lib/scope';
+import { inScope, scopeBodies } from '../src/lib/scope';
 
 const NOW = Date.UTC(2026, 5, 1, 12, 0, 0);
 const DAY = 86_400_000, MIN = 60_000;
@@ -189,9 +189,9 @@ describe('precision far from the origin', () => {
 });
 
 describe('scope and true scale', () => {
-  it('a camera pulled back far enough to see a probe at true scale keeps it in scope', () => {
-    expect(inScope({ d: 2.5e10, key: 0, bulk: false, keep: false }, scopeRadius(1.1e10))).toBe(true);
-    expect(inScope({ d: 2.5e10, key: 0, bulk: false, keep: false }, scopeRadius(24_000))).toBe(false);
+  it('a probe listed under the Sun is in scope for the Earth focus, at any true-scale distance (not a distance rule)', () => {
+    expect(inScope({ parent: 'SUN', keep: false }, scopeBodies('EARTH'))).toBe(true);
+    expect(inScope({ parent: 'MARS', keep: false }, scopeBodies('EARTH'))).toBe(false);
     expect(NEAR_EARTH_LIMIT_KM).toBe(2e6);
   });
 });

@@ -6,6 +6,7 @@ import { CATEGORIES } from '../lib/browser-ui';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { launchOfPathEntity, liftoffMsOf, pathTipText } from '../lib/launch-seek';
 import { relatedFor } from '../lib/related';
+import { scopeLabel } from '../lib/scope';
 import { modelDef } from '../scene/models/registry';
 import { LabelLayer, type LabelItem } from '../scene/LabelLayer';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
@@ -292,8 +293,11 @@ export function SceneView() {
               ) : (
                 <span>Camera {fmtDist(stats.distKm)}{fromFrame}{stats.frame.locked ? ' (locked)' : ''}</span>
               )}
-              <span style={{ minWidth: '22ch' }} title="Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position">
-                {stats.scope.rendered.toLocaleString('en-US')} of {stats.scope.total.toLocaleString('en-US')} drawn
+              <span
+                style={{ minWidth: '22ch' }}
+                title={'Objects drawn (in scope, not filtered out, in view, not behind the Earth) out of all with a position. In scope: the objects of the system the camera is in and of the bodies above it (' + scopeLabel(stats.scope.focus, stats.scope.mode) + '); View > Draw everything turns this off'}
+              >
+                {stats.scope.rendered.toLocaleString('en-US')} of {stats.scope.total.toLocaleString('en-US')} drawn · {scopeLabel(stats.scope.focus, stats.scope.mode)}
               </span>
               <span title="Satellites propagated with SGP4 in the worker, plus objects propagated on the main thread">
                 {stats.satCount.toLocaleString('en-US')} SGP4, {stats.dynCount} other
