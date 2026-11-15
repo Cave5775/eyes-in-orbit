@@ -87,7 +87,7 @@ export function categoryOf(rec: { kind: string; group?: string; bodyId?: string;
   if (k === 'station' || ck === 'station') return 'stations';
   if (k === 'debris' || ck === 'debris') return 'debris';
   // an orbiter of another body (MRO, LRO) is a satellite of that body, not a deep-space probe (lib/view-class.ts)
-  if (rec.bodyId !== undefined && viewClass({ kind: k, bodyId: rec.bodyId, provider: rec.provider as EntityRecord['provider'] }) === 'orbiter') return 'satellites';
+  if (rec.bodyId !== undefined && viewClass(rec as { kind: string; bodyId: string }) === 'orbiter') return 'satellites';
   if (k === 'probe' || k === 'rover' || k === 'lander' || ck === 'probe' || ck === 'rover') return 'probes';
   if (k === 'launch_vehicle' || k === 'stage' || k === 'capsule' || ck === 'vehicle') return 'launch-vehicles';
   if (k === 'ground_station' || k === 'pad' || ck === 'ground') return 'ground';
@@ -180,12 +180,8 @@ export function matchesType(rec: { kind: string; group?: string; bodyId?: string
   if (m.observatory) return observatoryOf(rec) !== null;
   if (m.category) return categoryOf(rec) === m.category;
   // the kind as shown (`typeOf`): an orbiter of another body is a satellite, not a probe
-  return !!m.kinds && m.kinds.includes(kindOf(rec).toLowerCase());
+  return !!m.kinds && m.kinds.includes(typeOf(rec).toLowerCase());
 }
-
-/** The displayed kind of a record or a search hit (a hit without position data keeps its stored kind). */
-const kindOf = (rec: { kind: string; bodyId?: string; provider?: { type: string } }): string =>
-  rec.bodyId === undefined ? rec.kind : typeOf({ kind: rec.kind, bodyId: rec.bodyId, provider: rec.provider as EntityRecord['provider'] });
 
 /** Entities per category (all categories present, in chip order; `other` only when it has members). */
 export function categoryCounts(records: Iterable<{ kind: string; group?: string; render?: { colorKey?: string } }>): [CategoryId, number][] {

@@ -38,7 +38,7 @@ export function facetCounts(records: Iterable<Pick<EntityRecord, 'kind' | 'group
   const kinds = new Map<string, number>();
   const groups = new Map<string, number>();
   for (const r of records) {
-    const kind = r.bodyId === undefined ? r.kind : typeOf({ kind: r.kind, bodyId: r.bodyId, provider: r.provider });
+    const kind = typeOf(r);
     kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
     if (r.group) groups.set(r.group, (groups.get(r.group) ?? 0) + 1);
   }

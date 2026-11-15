@@ -3,6 +3,7 @@ import type { EntityRecord, Sample } from '@eio/core';
 import { categoryCounts, categoryOf, matchesType } from '../src/lib/browser-ui';
 import { facetCounts, rankEntities, searchHitOf } from '../src/lib/filters';
 import { textHitsOf } from '../src/lib/text-match';
+import { NO_FOCUS, classify, isDrawn, termFromWord, type Query } from '../src/lib/query';
 import { typeOf, viewClass } from '../src/lib/view-class';
 import { mockGroundAndProbes } from '../src/mock/generators';
 import { DSN_TARGETS, probeEntity } from '../../server/src/connectors/dsn-targets';
@@ -91,5 +92,18 @@ describe('the type is what every surface uses', () => {
     const all = [mro, vgr, rec('s', 'satellite', 'EARTH')];
     expect(Object.fromEntries(facetCounts(all).kinds)).toEqual({ satellite: 2, probe: 1 });
     expect(Object.fromEntries(categoryCounts(all))).toMatchObject({ satellites: 2, probes: 1 });
+  });
+});
+
+describe('a saved type:probe term keeps working on what is still a probe', () => {
+  it('hide type:probe leaves an orbiter visible and hides a heliocentric probe; only type:probe is the reverse', () => {
+    const mro = rec('dsn-MRO', 'probe', 'MARS', sampled('MARS:inertial', 3800));
+    const vgr = rec('dsn-VGR1', 'probe', 'EARTH', sampled('EARTH:inertial', 2.5e10));
+    const q = (effect: 'only' | 'hide'): Query => ({ terms: [termFromWord('type:probe', effect)!] });
+    const ctx = { focus: NO_FOCUS };
+    expect(classify(mro, q('hide'), ctx)).toBe('off');
+    expect(classify(vgr, q('hide'), ctx)).toBe('hide');
+    expect(isDrawn(classify(mro, q('only'), ctx))).toBe(false);
+    expect(isDrawn(classify(vgr, q('only'), ctx))).toBe(true);
   });
 });

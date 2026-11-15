@@ -50,7 +50,7 @@ function Eye({ off }: { off: boolean }) {
 
 const HELP_TAGS: [string, string][] = [
   ['#starlink  group:gps-ops', 'a CelesTrak group'],
-  ['type:probe', 'what it is: a category (the chips above) or a kind (satellite, launch_vehicle, ground_station, moon...)'],
+  ['type:probe', 'what it is: a category (the chips above) or a kind (satellite, launch_vehicle, ground_station, moon...). Orbiters of other bodies (MRO, LRO) are satellites; probe is only what is in solar orbit or leaving'],
   ['launch:2024-123', 'one launch (launch:1993 is a year)'],
   ['type:navigation', 'a whole category (probes also holds rovers and landers)'],
   ['id:25544', 'a NORAD, COSPAR or entity id'],

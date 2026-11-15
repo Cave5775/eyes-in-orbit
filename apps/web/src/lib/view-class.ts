@@ -51,6 +51,7 @@ export const primaryOf = (rec: Rec): string | undefined => (viewClass(rec) === '
  * the server keeps the kind and this is derived from the data, by the same `viewClass` rule as the category and the colour.
  * Every other kind (and an Earth-bound probe, whose class needs the live geocentric radius) is returned as stored.
  */
-export function typeOf(rec: Rec): string {
-  return rec.kind === 'probe' && viewClass(rec) === 'orbiter' ? 'satellite' : rec.kind;
+export function typeOf(rec: { kind: string; bodyId?: string; provider?: { type: string } }): string {
+  // a record or a search hit as it is (no copy): only `probe` needs the rule, and a hit without `bodyId` has no position data to read
+  return rec.kind === 'probe' && rec.bodyId !== undefined && viewClass(rec as Rec) === 'orbiter' ? 'satellite' : rec.kind;
 }
