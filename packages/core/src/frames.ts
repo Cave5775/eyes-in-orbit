@@ -121,6 +121,18 @@ export function setBodyStream(id: string, data: BodyEphemerisData | undefined, b
   return true;
 }
 
+/**
+ * Is the position of `id` at `tMs` a streamed (JPL Horizons) one rather than the offline fallback: a stream was installed with
+ * `setBodyStream` and `tMs` lies inside its sample window. Outside the window the body follows the shifted fallback orbit (see
+ * `setBodyStream`), so this is false there. A moon's fallback has an arbitrary phase (see bodies.ts), so this is the only way to
+ * tell a trustworthy moon position from a made-up one; the `approx` attribute of a body entity is static and cannot.
+ */
+export function isBodyStreamed(id: string, tMs: number, bodies: BodyRegistry = defaultBodies): boolean {
+  const s = bodies.streamOf(id);
+  if (!s || s.samples.length < 2) return false;
+  return tMs >= s.samples[0][0] && tMs <= s.samples[s.samples.length - 1][0];
+}
+
 /** Convert a state into `to`. Handles inertial<->fixed and hops across body inertial frames. */
 export function convert(
   s: StateVector,
