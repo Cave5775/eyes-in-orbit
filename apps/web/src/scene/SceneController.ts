@@ -1633,6 +1633,7 @@ export class SceneController {
     });
 
     this.celestial.updateMarkers(this.camera.fov, this.container.clientHeight); // glyphs of the bodies too small to see
+    this.celestial.updateMeshes(this.camera.fov, this.container.clientHeight); // detailed body models, loaded only when approached
     const tUp = perf.on ? performance.now() : 0;
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);

@@ -56,6 +56,7 @@ An npm workspaces monorepo:
 - [Reference](docs/reference.md): every feature, control, setting, data source and known issue in detail.
 - [API contract](docs/CONTRACT.md): REST and WebSocket routes and entity conventions.
 - [Frames of reference](docs/frames.md): how the frame, lock and orbit-line rules work.
+- [Models](docs/models.md): how an object gets its shape (sphere, ellipsoid, procedural model, glb mesh) and how assets are loaded and freed.
 
 ## Credits
 

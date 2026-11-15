@@ -2,12 +2,15 @@ import * as THREE from 'three';
 import { EARTH, MARS, MOON, SUN, bodyOf, defaultBodies, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
 import { bodyFixedToInertial, fitMapSize, poleDirection } from '../lib/body-map';
 import { MARKER_BELOW_PX, MARKER_SIZE_PX, bodyStyle, hexRgb } from '../lib/body-style';
+import type { AssetCache } from '../lib/asset-cache';
+import { BODY_SHAPES, MESH_LOAD_PX, baseEllipsoid, ellipsoidScale, meshWanted, type BodyShape, type MeshShape } from '../lib/body-shape';
 import { bodyDiscRadiusPx, SHOW_EXEMPT } from '../lib/pick';
 import type { DrawnBody } from '../lib/body-scene';
 import type { SceneBody } from '../lib/occlusion';
 import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM } from '../lib/disc-hide';
 import { isRegistryBody, refDisplay, refPositionEci, refRadiusKm } from '../lib/ref-body';
 import { createBodyMaterial, createMapMaterial, createRingGeometry, createRingMaterial } from './materials';
+import { MODEL_ASSETS, type LoadedGlb } from './models/glb';
 
 /**
  * Bodies drawn with a map (file in /textures, `npm run assets`): a sphere of the body's equatorial radius (the flattening,
@@ -28,6 +31,10 @@ export interface MapEnv {
    * behind a body exactly as a satellite is. Absent (tests without a GPU): no markers.
    */
   pointMaterial?: THREE.Material;
+  /** body shapes by registry id (default `BODY_SHAPES`, lib/body-shape.ts); a test passes its own */
+  shapes?: Readonly<Record<string, BodyShape>>;
+  /** where body meshes are loaded from (default `MODEL_ASSETS`, the cache the entity models use) */
+  meshes?: AssetCache<LoadedGlb>;
 }
 
 const DEFAULT_ENV: MapEnv = {
@@ -64,6 +71,18 @@ interface Drawn extends SceneBody {
   /** set when the body leaves the layer (a map still loading is then dropped) */
   removed?: boolean;
   place?: (origin: THREE.Vector3, t: number) => void;
+  /** a body with a detailed mesh (lib/body-shape.ts `MeshShape`): loaded while its disc is big enough, the sphere shows otherwise */
+  mesh?: BodyMesh;
+}
+
+/** The mesh tier of one body: held (referenced in the cache) while its disc is big, attached to the scene once the file has loaded. */
+interface BodyMesh {
+  spec: MeshShape;
+  held: boolean;
+  /** the sphere drawn until the mesh is there (and again after it is dropped) */
+  sphere: THREE.Mesh;
+  group: THREE.Group | null;
+  light: THREE.DirectionalLight | null;
 }
 
 /** The small glyphs of the bodies whose disc is too small to see (one `THREE.Points`, updated in place by `updateMarkers`). */
@@ -216,6 +235,7 @@ export class CelestialLayer {
 
   private remove(d: Drawn): void {
     d.removed = true;
+    if (d.mesh?.held) this.dropMesh(d, d.mesh);
     for (const o of d.objects) {
       o.removeFromParent();
       (o as THREE.Mesh).geometry?.dispose?.();
@@ -291,8 +311,12 @@ export class CelestialLayer {
     const style = bodyStyle(d.bodyId);
     const body = map ? map.body : defaultBodies.has(d.bodyId) ? defaultBodies.get(d.bodyId) : undefined;
     const sunFromBody = new THREE.Vector3(1, 0, 0);
-    const f = !map && body && body.flattening >= MIN_DRAWN_FLATTENING ? body.flattening : 0;
-    const mat = createBodyMaterial(sunFromBody, style, 1 / ((1 - f) * (1 - f)));
+    // a sourced shape (lib/body-shape.ts) replaces the registry flattening: the tier-2 ellipsoid, or the fallback under a mesh
+    const shape = (this.env.shapes ?? BODY_SHAPES)[d.bodyId];
+    const ell = baseEllipsoid(shape);
+    const axes = !map && ell ? ellipsoidScale(ell.radiiKm, refRadiusKm(d.bodyId)) : null;
+    const f = !map && !axes && body && body.flattening >= MIN_DRAWN_FLATTENING ? body.flattening : 0;
+    const mat = createBodyMaterial(sunFromBody, style, axes ? [1 / (axes[0] * axes[0]), 1 / (axes[1] * axes[1]), 1 / (axes[2] * axes[2])] : [1, 1, 1 / ((1 - f) * (1 - f))]);
     if (map) d.radiusKm = map.body.radiusKm;
     const mesh = new THREE.Mesh(createMapSphere(d.radiusKm, 96, 48), mat);
     d.objects.push(mesh);
@@ -308,7 +332,8 @@ export class CelestialLayer {
     d.place = (origin, t) => {
       const m = refDisplay(d.bodyId, t);
       mesh.position.set(m.r[0] - origin.x, m.r[1] - origin.y, m.r[2] - origin.z);
-      mesh.scale.set(m.k, m.k, m.k * (1 - f));
+      if (axes) mesh.scale.set(m.k * axes[0], m.k * axes[1], m.k * axes[2]);
+      else mesh.scale.set(m.k, m.k, m.k * (1 - f));
       if (body) this.orient(mesh, body, t);
       if (ring) {
         ring.position.copy(mesh.position);
@@ -320,8 +345,73 @@ export class CelestialLayer {
       sunFromBody.set(s[0] - p[0], s[1] - p[1], s[2] - p[2]).normalize();
       d.c = [m.r[0], m.r[1], m.r[2]];
       d.k = m.k;
+      const bm = d.mesh;
+      if (bm?.group) {
+        // the loaded model replaces the sphere: same place, same IAU orientation, drawn at the body's mean radius
+        bm.group.position.copy(mesh.position);
+        bm.group.quaternion.copy(mesh.quaternion);
+        bm.group.scale.setScalar(d.radiusKm * m.k);
+        bm.light?.position.copy(sunFromBody);
+      }
     };
+    if (shape?.kind === 'mesh') d.mesh = { spec: shape, held: false, sphere: mesh, group: null, light: null };
     if (map) this.loadMapTexture(d, mesh, sunFromBody, map.file);
+  }
+
+  /**
+   * The mesh tier (lib/body-shape.ts): for each body that names a glb, hold the file while the body's disc is at least
+   * `loadPx` big (kept until under 40% of it) and let it go beyond; call after `update`, like `updateMarkers`. Nothing is requested
+   * for a body that is never approached; a file that fails leaves the sphere (the cache retries after a minute). A body behind
+   * the camera still counts by distance only: a disc that big and that near is on screen in practice.
+   */
+  updateMeshes(fovDeg: number, viewportPx: number): void {
+    for (const d of this.list) {
+      const bm = d.mesh;
+      if (!bm) continue;
+      const dist = Math.hypot(d.rel[0], d.rel[1], d.rel[2]);
+      const px = bodyDiscRadiusPx(d.radiusKm, d.k, dist, fovDeg, viewportPx);
+      const want = meshWanted(px === Infinity ? 1e6 : px, bm.spec.loadPx ?? MESH_LOAD_PX, bm.held);
+      if (want && !bm.held) this.holdMesh(d, bm);
+      else if (!want && bm.held) this.dropMesh(d, bm);
+    }
+  }
+
+  private holdMesh(d: Drawn, bm: BodyMesh): void {
+    const cache = this.env.meshes ?? MODEL_ASSETS;
+    bm.held = true;
+    const got = cache.acquire(bm.spec.url);
+    if (got.value) this.attachMesh(d, bm, got.value);
+    else {
+      void got.ready.then(() => {
+        const v = cache.peek(bm.spec.url);
+        if (v && bm.held && !bm.group && !d.removed && !this.disposed) this.attachMesh(d, bm, v);
+        else if (!v && cache.stateOf(bm.spec.url) === 'failed') console.info(`[${d.bodyId.toLowerCase()}] ${bm.spec.url} could not be loaded, keeping the sphere:`, cache.errorOf(bm.spec.url));
+      });
+    }
+  }
+
+  private attachMesh(d: Drawn, bm: BodyMesh, glb: LoadedGlb): void {
+    // the cloned graph shares the cache's geometry and materials; only the cache disposes them
+    const group = new THREE.Group();
+    const model = glb.scene.clone(true);
+    model.traverse((o) => { o.frustumCulled = false; });
+    group.add(model);
+    // the glb's standard materials need a light: the Sun, from this body's own direction (set every frame in `place`)
+    const light = new THREE.DirectionalLight(0xfff4e4, 3.3);
+    bm.group = group;
+    bm.light = light;
+    this.scene.add(group, light);
+    bm.sphere.visible = false;
+  }
+
+  private dropMesh(d: Drawn, bm: BodyMesh): void {
+    (this.env.meshes ?? MODEL_ASSETS).release(bm.spec.url);
+    bm.held = false;
+    bm.group?.removeFromParent();
+    bm.light?.removeFromParent();
+    bm.group = null;
+    bm.light = null;
+    bm.sphere.visible = true;
   }
 
   /**

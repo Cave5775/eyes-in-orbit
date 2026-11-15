@@ -276,10 +276,11 @@ export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | n
 /**
  * A body without a map: a lit sphere in its style's colour (lib/body-style.ts). Gas and ice giants get a latitudinal band
  * pattern (bands run with the pole = local z, a deterministic sine with a little longitudinal turbulence, in the body's own two
- * band colours); solid bodies get slight albedo noise. Terminator as the Moon's (no scene lights). `invB2 = 1 / (1 - f)^2`
- * corrects the normal of a geometry squashed along z by (1 - f) (the oblate giants, scene/celestial.ts); 1 for a sphere.
+ * band colours); solid bodies get slight albedo noise. Terminator as the Moon's (no scene lights). `inv2` = 1 / s^2 per axis
+ * corrects the normal of a geometry scaled by `s` (the oblate giants squashed along z by (1 - f), a triaxial ellipsoid from
+ * lib/body-shape.ts; scene/celestial.ts): the normal of a scaled sphere is n / s, and the model matrix supplies one factor s; [1, 1, 1] for a sphere.
  */
-export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, invB2 = 1): THREE.ShaderMaterial {
+export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, inv2: readonly [number, number, number] = [1, 1, 1]): THREE.ShaderMaterial {
   const bands = style.bands;
   const a = hexRgb(bands?.colors[0] ?? style.color), b = hexRgb(bands?.colors[1] ?? style.color);
   return new THREE.ShaderMaterial({
@@ -291,16 +292,16 @@ export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, invB2 =
       uBandN: { value: bands ? bands.count : 0 },
       uBandK: { value: bands ? bands.contrast : 0 },
       uNoise: { value: bands ? 0.04 : (style.noise ?? DEFAULT_NOISE) },
-      uInvB2: { value: invB2 },
+      uInv2: { value: new THREE.Vector3(inv2[0], inv2[1], inv2[2]) },
     },
     vertexShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_vertex>
-      uniform float uInvB2;
+      uniform vec3 uInv2;
       varying vec3 vL; varying vec3 vN;
       void main() {
         vL = normal;
-        vN = normalize(mat3(modelMatrix) * vec3(normal.xy, normal.z * uInvB2));
+        vN = normalize(mat3(modelMatrix) * normal * uInv2);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         #include <logdepthbuf_vertex>
       }`,
