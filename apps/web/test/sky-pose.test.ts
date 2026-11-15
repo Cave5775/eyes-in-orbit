@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { V3 } from '../src/lib/camera';
 import { FP_MAX_EL, firstPersonLookDir } from '../src/lib/first-person';
 import { azElToRaDec, lstRad, parallacticAngleDeg, precessToJ2000, raDecToDir, dirToRaDec } from '../src/lib/sky-frame';
-import { dirToAzEl, hFovToVFov, poseFromLook, vFovToHFov } from '../src/lib/sky-pose';
+import { dirToAzEl, hFovToVFov, maxVFovFor, poseFromLook, vFovToHFov } from '../src/lib/sky-pose';
 
 const DEG = Math.PI / 180;
 const wrapPi = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -166,5 +166,21 @@ describe('poseFromLook', () => {
     const pole = poseFromLook([0, 0, 1], T0, 60, 1, [1, 0, 0]);
     expect(Number.isFinite(pole.rotationDeg)).toBe(true);
     expect(pole.decDeg).toBeCloseTo(90, 9);
+  });
+});
+
+describe('cutting the scene field to what the viewer can show', () => {
+  it('maxVFovFor is the vertical field whose horizontal field is the limit', () => {
+    for (const aspect of [1, 1.6, 16 / 9, 21 / 9, 3]) {
+      expect(vFovToHFov(maxVFovFor(150, aspect), aspect)).toBeCloseTo(150, 9);
+    }
+  });
+
+  it('the first-person maximum (120 deg vertical) is 140.3 horizontal at 16:10, 144.0 at 16:9 and 152.2 at 21:9', () => {
+    expect(vFovToHFov(120, 1.6)).toBeCloseTo(140.3, 1);
+    expect(vFovToHFov(120, 16 / 9)).toBeCloseTo(144.0, 1);
+    expect(vFovToHFov(120, 21 / 9)).toBeCloseTo(152.2, 1);
+    expect(maxVFovFor(150, 21 / 9)).toBeLessThan(120); // so only the widest aspects are cut
+    expect(maxVFovFor(150, 16 / 9)).toBeGreaterThan(120);
   });
 });

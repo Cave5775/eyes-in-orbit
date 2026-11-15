@@ -26,6 +26,12 @@
  *   loop (0.6 s took about 0.75 s from the call: (100, 20) -> (130, 40) passed (104.9, 24.3), (109, 27.6), (117.3, 33.4), (126.0, 38.2)),
  *   and the field of view and the rotation are untouched (40 and 30 stayed 40 and 30). `world2pix` follows the moving centre, so
  *   a layer that projects every frame stays on the sky. `SkyView.animateTo` uses it; a build without it gets an eased `gotoRaDec`.
+ * - There is NO pause, stop or destroy call, and `aladin.remove` only removes a layer. The view's render loop (`view.redraw`) calls
+ *   `wasm.update` and re-arms itself with `requestAnimationFrame(this.redrawClbk)` on every frame, hidden or not. Measured here
+ *   (headless Edge, scene paused, 5 s): never opened 0 rAF/s and 3.6 ms/s of main-thread tasks; opened once and hidden 130 rAF/s
+ *   and 54 ms/s. Removing the host from the DOM does not stop it. `SkyView.setActive(false)` parks it: the loop reads
+ *   `view.redrawClbk` at every re-arm, so a gate installed there lets the loop die while off and starts it again on demand (a
+ *   build without `view.redrawClbk` is left running).
  */
 
 import { easeInOut, slerpRaDec } from './sky-markers';
@@ -43,6 +49,7 @@ interface AladinInstance {
   on(event: string, cb: (...args: number[]) => void): void;
   getRaDec?(): ArrayLike<number> | null | undefined;
   setRotation?(deg: number): void;
+  view?: { redrawClbk?: unknown; prevTime?: number; requestRedraw?(): void };
   animateToRaDec?(raDeg: number, decDeg: number, seconds: number): void;
   stopAnimation?(): void;
   getRotation?(): number;
@@ -138,6 +145,8 @@ export interface SkyView {
   animateTo(raDeg: number, decDeg: number, ms: number): void;
   /** stop a running `animateTo` where it is (the user starts dragging) */
   stopAnimation(): void;
+  /** run (default) or park Aladin's render loop: parked it costs nothing, and the view keeps its state; false when this build cannot be parked */
+  setActive(on: boolean): boolean;
   setSurvey(id: string): void;
   /** sets the HORIZONTAL (screen width) field of view, degrees */
   setFov(deg: number): void;
@@ -156,11 +165,14 @@ export interface SkyView {
 }
 
 /**
- * Widest horizontal field of view the Sky view allows: the gnomonic (TAN) projection stretches the edges without bound toward
- * 180 degrees. The first-person view reaches 120 degrees vertical (about 136 horizontal at 16:10), so the limit lets the match
- * with the scene hold over its whole range.
+ * Widest horizontal field of view the Sky view allows: 150 degrees, which is Aladin Lite 3.8.2's own limit (probed: `setFoV(152)`
+ * through `setFoV(175)` all answer `getFoV()[0] = 150`, with the pixels of the 150 degree view). The first-person view reaches
+ * 120 degrees vertical, which is 140.3 horizontal at 16:10, 144.0 at 16:9 and 152.2 at 21:9: the first two fit, and on entering
+ * the scene's own field is cut to what the viewer can show (`maxVFovFor`), so the match holds at any aspect.
  */
-export const MAX_FOV_DEG = 140;
+export const MAX_FOV_DEG = 150;
+
+const clampFovDeg = (deg: number): number => (Number.isFinite(deg) ? Math.min(MAX_FOV_DEG, Math.max(0.001, deg)) : 60);
 
 /**
  * Aladin's `setRotation` for a position angle of screen-up. Checked against the real 3.8.2 widget (see the header): a positive
@@ -195,10 +207,20 @@ export function resetLiveSkyView(): void {
 
 /** Create a view in `el` from a loaded Aladin (the options turn off everything but pan and zoom). */
 export function createSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewInit): SkyView {
+  try {
+    return buildSkyView(A, el, init);
+  } catch (e) {
+    // Aladin may have added its container and canvases before it threw: a retry must start from an empty host
+    el.replaceChildren?.();
+    throw e;
+  }
+}
+
+function buildSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewInit): SkyView {
   const a = A.aladin(el, {
     survey: init.survey,
     target: `${init.raDeg} ${init.decDeg}`,
-    fov: init.fovDeg,
+    fov: clampFovDeg(init.fovDeg),
     cooFrame: 'equatorial',
     // gnomonic (TAN), what a camera sees: the default orthographic projection draws the sky as a ball that turns under the cursor
     projection: 'TAN',
@@ -220,6 +242,32 @@ export function createSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewIni
   a.on('zoomChanged', (fov) => {
     if (fov > MAX_FOV_DEG) a.setFoV(MAX_FOV_DEG);
   });
+  // the render loop gate (see the header): `running` is true while a frame of the loop is queued or executing
+  let loopOn = true;
+  let running = true;
+  const loop = a.view?.redrawClbk;
+  const canPark = typeof loop === 'function' && !!a.view;
+  if (canPark) {
+    const real = loop as (t: number) => void;
+    a.view!.redrawClbk = (t: number) => {
+      if (!loopOn) {
+        running = false; // not re-armed: the loop stops here
+        return;
+      }
+      real(t);
+    };
+  }
+  const setActive = (on: boolean): boolean => {
+    if (!canPark) return false;
+    loopOn = on;
+    if (on && !running) {
+      running = true;
+      if (a.view) a.view.prevTime = performance.now(); // no huge time step for the first frame back
+      a.view?.requestRedraw?.();
+      requestAnimationFrame(a.view!.redrawClbk as (t: number) => void);
+    }
+    return true;
+  };
   let fallback = 0;
   const stopAnimation = () => {
     if (fallback) cancelAnimationFrame(fallback);
@@ -230,6 +278,7 @@ export function createSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewIni
   };
   const view: SkyView = {
     gotoRaDec: (ra, dec) => a.gotoRaDec(ra, dec),
+    setActive,
     stopAnimation,
     animateTo: (ra, dec, ms) => {
       stopAnimation();
@@ -252,7 +301,7 @@ export function createSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewIni
       step();
     },
     setSurvey: (id) => a.setImageSurvey(id),
-    setFov: (deg) => a.setFoV(Math.min(MAX_FOV_DEG, Math.max(0.001, deg))),
+    setFov: (deg) => a.setFoV(clampFovDeg(deg)),
     fov: () => {
       const f = a.getFoV();
       const v = Array.isArray(f) ? f[0] : f;

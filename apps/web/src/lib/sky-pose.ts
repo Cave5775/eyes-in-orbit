@@ -27,6 +27,11 @@ export function vFovToHFov(vDeg: number, aspect: number): number {
   return (2 * Math.atan(aspect * Math.tan((vDeg * DEG) / 2))) / DEG;
 }
 
+/** The largest vertical field (deg) whose horizontal field at `aspect` does not pass `maxHDeg` (what the sky viewer can show); the scene's own field is cut to it on entering. */
+export function maxVFovFor(maxHDeg: number, aspect: number): number {
+  return hFovToVFov(maxHDeg, aspect);
+}
+
 /** Vertical field of view (deg) of a rectilinear camera of horizontal field `hDeg`; the inverse of `vFovToHFov`. */
 export function hFovToVFov(hDeg: number, aspect: number): number {
   return (2 * Math.atan(Math.tan((hDeg * DEG) / 2) / aspect)) / DEG;

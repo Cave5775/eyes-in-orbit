@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SKY_OFF, skyBusy, skyCoversScene, skyReduce, type SkyEvent, type SkyModeState, type SkyPhase } from '../src/lib/sky-mode';
+import { RequestTokens, SKY_OFF, shouldAim, skyBusy, skyCoversScene, skyReduce, type SkyEvent, type SkyModeState, type SkyPhase } from '../src/lib/sky-mode';
 
 const st = (phase: SkyPhase, over: Partial<SkyModeState> = {}): SkyModeState => ({ phase, obsId: phase === 'off' ? null : 'obs-a', ready: false, error: null, ...over });
 const ev = {
@@ -11,6 +11,7 @@ const ev = {
   leave: { type: 'leave' } as SkyEvent,
   left: { type: 'left' } as SkyEvent,
   fpEnded: { type: 'fpEnded' } as SkyEvent,
+  reset: { type: 'reset' } as SkyEvent,
   clearError: { type: 'clearError' } as SkyEvent,
 };
 
@@ -103,5 +104,47 @@ describe('sky phase machine', () => {
     const phases: SkyPhase[] = ['off', 'flying', 'loading', 'entering', 'on', 'leaving'];
     expect(phases.filter(skyCoversScene)).toEqual(['entering', 'on']);
     expect(phases.filter(skyBusy)).toEqual(['flying', 'loading', 'entering', 'on', 'leaving']);
+  });
+});
+
+describe('reset (the scene is unmounted)', () => {
+  it('goes off from every phase, even leaving, and forgets the observatory and the error', () => {
+    for (const phase of ['flying', 'loading', 'entering', 'on', 'leaving'] as SkyPhase[]) {
+      expect(skyReduce(st(phase, { ready: true }), ev.reset)).toEqual(SKY_OFF);
+    }
+    expect(skyReduce(st('off', { error: 'x' }), ev.reset)).toEqual(SKY_OFF);
+  });
+
+  it('is the same object when already clean', () => {
+    expect(skyReduce(SKY_OFF, ev.reset)).toBe(SKY_OFF);
+  });
+});
+
+describe('request tokens', () => {
+  it('only the latest token is current', () => {
+    const t = new RequestTokens();
+    const a = t.take();
+    expect(t.current(a)).toBe(true);
+    const b = t.take();
+    expect(t.current(a)).toBe(false);
+    expect(t.current(b)).toBe(true);
+  });
+
+  it('invalidate makes every token stale', () => {
+    const t = new RequestTokens();
+    const a = t.take();
+    t.invalidate();
+    expect(t.current(a)).toBe(false);
+    expect(t.current(t.take())).toBe(true);
+  });
+});
+
+describe('when the loading phases aim the view', () => {
+  it('never without a pose (a second start has none until the first drawn frame), never without a view, only once', () => {
+    expect(shouldAim(null, true, false)).toBe(false);
+    expect(shouldAim(undefined, true, false)).toBe(false);
+    expect(shouldAim({ dir: [1, 0, 0] }, false, false)).toBe(false);
+    expect(shouldAim({ dir: [1, 0, 0] }, true, true)).toBe(false);
+    expect(shouldAim({ dir: [1, 0, 0] }, true, false)).toBe(true);
   });
 });

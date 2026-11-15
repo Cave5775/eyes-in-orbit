@@ -1,5 +1,6 @@
 import { DEFAULT_HIPS_SURVEY } from '@eio/core';
 import { createSkyView, loadAladin, type SkyView, type SkyViewPose } from '../lib/aladin';
+import { RequestTokens } from '../lib/sky-mode';
 import { mirrors } from '../lib/hips-mirror';
 import { surveyOf } from '../lib/observatories';
 import { curtainEasing, curtainKeyframes, scanKeyframes, TRANSITION_MS, type SkyTransitionId } from '../lib/sky-transition';
@@ -31,9 +32,12 @@ const NO_SURVEY = (id: string) => `${surveyOf(id)?.label ?? id} is unavailable r
 export class SkyDriver {
   private v: SkyView | null = null;
   private surveyId: string | null = null;
+  private active = true;
   private anims: Animation[] = [];
   private frame = 0;
   private tweenEnd: (() => void) | null = null;
+  /** the latest prepare / survey change: an older one that finishes later must not touch the view (see `RequestTokens`) */
+  private readonly tokens = new RequestTokens();
 
   constructor(private readonly els: SkyDriverEls) {}
 
@@ -44,24 +48,44 @@ export class SkyDriver {
   /**
    * Load Aladin Lite and a server for `surveyId`, then create the view (once) or point the existing one at the survey. `pose` is
    * asked for when the view is created, so it starts where the camera will end up and its first tiles load during the camera blend.
+   * A pose of `null` (the camera has not drawn a frame yet) aims nothing: a NEW view is created at a placeholder (the caller aims
+   * it when a pose exists), an existing one stays where it is. Does nothing, and resolves, when a later `prepare`, `useSurvey` or
+   * `invalidate` has taken over while it was waiting.
    */
   async prepare(surveyId: string, pose: () => SkyViewPose | null): Promise<void> {
+    const token = this.tokens.take();
     // both start at once: the library and the survey server are independent, and either failing ends the attempt
     const [url, A] = await Promise.all([this.mirrorOf(surveyId), loadAladin()]);
-    const p = pose() ?? { raDeg: 0, decDeg: 0, hFovDeg: 60, rotationDeg: 0 };
+    if (!this.tokens.current(token)) return;
+    const p = pose();
     if (!this.v) {
-      this.v = createSkyView(A, this.els.host, { survey: url, raDeg: p.raDeg, decDeg: p.decDeg, fovDeg: p.hFovDeg });
+      const at = p ?? { raDeg: 0, decDeg: 0, hFovDeg: 60, rotationDeg: 0 };
+      this.v = createSkyView(A, this.els.host, { survey: url, raDeg: at.raDeg, decDeg: at.decDeg, fovDeg: at.hFovDeg });
       this.surveyId = surveyId;
     } else if (this.surveyId !== surveyId) {
       this.v.setSurvey(url);
       this.surveyId = surveyId;
     }
-    this.v.setPose(p);
+    if (p) this.v.setPose(p);
+    this.v.setActive(this.active);
   }
 
-  /** Switch the survey of the live view; rejects with a readable message when none of its servers answer. */
+  /** Run Aladin's render loop (a sky view starts) or park it (nothing is shown: a hidden view costs main-thread time every frame otherwise, see lib/aladin.ts). */
+  setActive(on: boolean): void {
+    this.active = on;
+    this.v?.setActive(on);
+  }
+
+  /** Make every `prepare` and `useSurvey` still waiting stale (the sky view was left or a new one requested). */
+  invalidate(): void {
+    this.tokens.invalidate();
+  }
+
+  /** Switch the survey of the live view; rejects with a readable message when none of its servers answer. A later call or `invalidate` makes it a no-op. */
   async useSurvey(surveyId: string): Promise<void> {
+    const token = this.tokens.take();
     const url = await this.mirrorOf(surveyId);
+    if (!this.tokens.current(token)) return;
     if (this.v && this.surveyId !== surveyId) this.v.setSurvey(url);
     this.surveyId = surveyId;
   }

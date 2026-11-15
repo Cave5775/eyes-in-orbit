@@ -23,6 +23,8 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (e.key === 'Escape' && !(t instanceof HTMLInputElement && t.type === 'search' && t.value)) {
+        // key repeat: the first Esc already left the sky view or the first-person view, and the repeats would fall through to resetView
+        if (e.repeat) return;
         // the sky view: Esc leaves it and the first-person view under it in one step (the selection stays); further presses
         // while it is leaving are swallowed so they do not reset the view under the transition
         const sky = useView.getState().sky.phase;

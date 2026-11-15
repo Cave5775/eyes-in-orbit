@@ -36,6 +36,7 @@ export type SkyEvent =
   | { type: 'leave' }
   | { type: 'left' }
   | { type: 'fpEnded' }
+  | { type: 'reset' }
   | { type: 'clearError' };
 
 export const SKY_OFF: SkyModeState = { phase: 'off', obsId: null, ready: false, error: null };
@@ -64,9 +65,38 @@ export function skyReduce(s: SkyModeState, e: SkyEvent): SkyModeState {
       return s.phase === 'leaving' ? off() : s;
     case 'fpEnded':
       return s.phase === 'leaving' ? s : s.phase === 'off' && !s.error ? s : off();
+    case 'reset':
+      return s.phase === 'off' && !s.error && s.obsId === null && !s.ready ? s : off(); // the scene is gone (unmount, hot reload): nothing to reverse
     case 'clearError':
       return s.error ? { ...s, error: null } : s;
   }
+}
+
+/**
+ * Request tokens: an asynchronous step (loading Aladin, probing a survey server) takes a token when it starts and may change the
+ * live view only while it is still the latest (`current`); a new request, a leave or `invalidate` makes every earlier one stale, so a
+ * slow answer for an observatory that is no longer shown cannot switch the survey or aim the view.
+ */
+export class RequestTokens {
+  private n = 0;
+  take(): number {
+    return ++this.n;
+  }
+  current(token: number): boolean {
+    return token === this.n;
+  }
+  invalidate(): void {
+    this.n++;
+  }
+}
+
+/**
+ * Should the loading phases aim the Aladin view at the camera's pose now? Only with a real pose (the camera has no pose until its
+ * first drawn frame after the first-person view starts: a second start finds `null` for a moment), once the view exists, and once
+ * per start. Never with a made-up one: that would turn the view the previous start left (and its prefetched tiles) to nowhere.
+ */
+export function shouldAim(pose: unknown, viewReady: boolean, alreadyAimed: boolean): boolean {
+  return !!pose && viewReady && !alreadyAimed;
 }
 
 /** The scene shows the Aladin view (or is about to): scene hotkeys are inert and the scene's labels are hidden. */

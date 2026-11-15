@@ -127,6 +127,86 @@ describe('aladin adapter', () => {
     expect(calls).toEqual([['fov', MAX_FOV_DEG]]);
   });
 
+  it('the field limit is Aladin own 150 degrees and also caps the start field; a bad one starts at 60', () => {
+    expect(MAX_FOV_DEG).toBe(150);
+    const { A, calls } = fakeAladin();
+    createSkyView(A, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 400 });
+    expect((calls[0][1] as { fov: number }).fov).toBe(MAX_FOV_DEG);
+    calls.length = 0;
+    createSkyView(A, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: NaN });
+    expect((calls[0][1] as { fov: number }).fov).toBe(60);
+  });
+
+  it('a create that throws partway empties the host before the error goes on, so a retry starts clean', () => {
+    let cleared = 0;
+    const el = { replaceChildren: () => { cleared++; } } as unknown as HTMLElement;
+    const A: AladinGlobal = { init: Promise.resolve(), aladin: () => { throw new Error('no WebGL2'); } };
+    expect(() => createSkyView(A, el, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 })).toThrow(/WebGL2/);
+    expect(cleared).toBe(1);
+  });
+
+  describe('setActive parks the render loop', () => {
+    /** Aladin's loop: the real callback does a frame and re-arms itself with whatever view.redrawClbk is then (as view.redraw does) */
+    function loopWorld() {
+      const queue: ((t: number) => void)[] = [];
+      let frames = 0;
+      const view: { redrawClbk?: (t: number) => void; prevTime?: number; requestRedraw: () => void } = { requestRedraw: () => { redraws++; } };
+      let redraws = 0;
+      view.redrawClbk = () => { frames++; queue.push(view.redrawClbk!); };
+      queue.push(view.redrawClbk); // the loop is running
+      vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => queue.push(cb));
+      vi.stubGlobal('performance', { now: () => 1234 });
+      const run = (n: number) => { for (let i = 0; i < n; i++) { const q = queue.splice(0); for (const cb of q) cb(i); } };
+      const { A } = fakeAladin();
+      const inst = A.aladin({} as HTMLElement, {});
+      const v = createSkyView({ init: A.init, aladin: () => ({ ...inst, view }) }, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 });
+      return { v, run, frames: () => frames, redraws: () => redraws, queued: () => queue.length, view };
+    }
+
+    it('keeps the loop running by default, stops re-arming when parked, and starts it again once', () => {
+      const w = loopWorld();
+      try {
+        w.run(3);
+        expect(w.frames()).toBe(3);
+        expect(w.v.setActive(false)).toBe(true);
+        w.run(5); // one queued frame may still run, then the loop is not re-armed
+        const parked = w.frames();
+        expect(parked).toBeLessThanOrEqual(4);
+        w.run(5);
+        expect(w.frames()).toBe(parked);
+        expect(w.queued()).toBe(0);
+        w.v.setActive(true);
+        w.v.setActive(true); // a second call must not start a second loop
+        expect(w.view.prevTime).toBe(1234);
+        expect(w.redraws()).toBe(1);
+        w.run(4);
+        expect(w.frames()).toBe(parked + 4);
+        expect(w.queued()).toBe(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('parking and resuming before the queued frame has run starts no second loop', () => {
+      const w = loopWorld();
+      try {
+        w.v.setActive(false);
+        w.v.setActive(true);
+        w.run(5);
+        expect(w.frames()).toBe(5);
+        expect(w.queued()).toBe(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('a build without the loop callback cannot be parked and is left running', () => {
+      const { A } = fakeAladin();
+      const v = createSkyView(A, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 });
+      expect(v.setActive(false)).toBe(false);
+    });
+  });
+
   it('setPose aims, sets the horizontal field (clamped) and rotates by minus the position angle', () => {
     const { A, calls } = fakeAladin();
     const v = createSkyView(A, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });

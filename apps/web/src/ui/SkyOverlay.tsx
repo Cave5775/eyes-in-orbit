@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_HIPS_SURVEY } from '@eio/core';
-import { ALADIN_VERSION, type SkyViewPose } from '../lib/aladin';
+import { ALADIN_VERSION, MAX_FOV_DEG, type SkyViewPose } from '../lib/aladin';
 import { SURVEYS, observatoryRows } from '../lib/observatories';
-import { skyCoversScene } from '../lib/sky-mode';
-import { poseFromLook, vFovToHFov } from '../lib/sky-pose';
+import { shouldAim, skyCoversScene } from '../lib/sky-mode';
+import { maxVFovFor, poseFromLook, vFovToHFov } from '../lib/sky-pose';
 import {
   ZOOM_PULL_BACK_MS, ZOOM_SCENE_MS, effectiveTransition, zoomAladinFov, zoomNarrowFov, zoomSceneFov, ZOOM_NARROW_FACTOR,
 } from '../lib/sky-transition';
@@ -66,20 +66,29 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
   useEffect(() => {
     if (!waiting || !obsId) return;
     let cancelled = false;
+    let aimed = false;
     const d = drv();
+    d.setActive(true); // a hidden view is parked: the survey tiles load during the camera blend, so it runs from now on
     const rec = useStore.getState().entities.get(obsId);
     const surveyId = (rec ? observatoryRows([rec])[0]?.meta.survey : null) ?? DEFAULT_HIPS_SURVEY;
     setSurvey(surveyId);
     setSurveyError(null);
     d.prepare(surveyId, () => {
+      // no pose yet (a second start: the camera has not drawn a frame in the first-person view): nothing is aimed, the poll below does it
       const p = runtime.camera?.firstPersonPose();
+      if (p) aimed = true;
       return p ? poseOf(p) : null;
     }).then(
       () => { if (!cancelled) dispatch({ type: 'ready' }); },
       (e: unknown) => { if (!cancelled) dispatch({ type: 'failed', message: failText(e) }); },
     );
     const poll = setInterval(() => {
-      if (runtime.camera?.firstPersonPose()?.settled) {
+      const p = runtime.camera?.firstPersonPose();
+      if (p && shouldAim(p, !!d.view, aimed)) {
+        aimed = true;
+        d.aim(poseOf(p)); // the first real pose: the view (and its prefetch) is turned there once, never to a made-up place
+      }
+      if (p?.settled) {
         clearInterval(poll);
         dispatch({ type: 'settled' });
       }
@@ -87,6 +96,7 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
     return () => {
       cancelled = true;
       clearInterval(poll);
+      d.invalidate(); // a prepare still waiting for the library or a survey server must not touch the view later
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waiting, obsId]);
@@ -106,7 +116,16 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
     if (phase !== 'entering') return;
     const d = drv();
     const cam = runtime.camera;
-    const pose = cam?.firstPersonPose();
+    let first = cam?.firstPersonPose();
+    if (cam && first) {
+      // the viewer cannot show more than MAX_FOV_DEG across: cut the scene's own field to it, so both views still match
+      const maxV = maxVFovFor(MAX_FOV_DEG, first.aspect);
+      if (first.vFovDeg > maxV) {
+        cam.setFirstPersonLook(first.dir, maxV);
+        first = cam.firstPersonPose() ?? first;
+      }
+    }
+    const pose = first;
     if (!cam || !pose || !d.view) {
       dispatch({ type: 'failed', message: failText(new Error('The camera or the sky viewer is not available.')) });
       return;
@@ -147,6 +166,7 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
   useLayoutEffect(() => {
     if (phase !== 'leaving') return;
     const d = drv();
+    d.invalidate();
     let cancelled = false;
     const done = () => { if (!cancelled) dispatch({ type: 'left' }); };
     runtime.camera?.setPaused(false);
@@ -172,8 +192,10 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
   // off: nothing inline or animated is left on the curtain, and the scene is drawing (also after a failure)
   useLayoutEffect(() => {
     if (phase !== 'off') return;
+    driver.current?.invalidate();
     driver.current?.cancelTween();
     driver.current?.settle();
+    driver.current?.setActive(false); // nothing of it is shown: park its render loop
     runtime.camera?.setPaused(false);
   }, [phase]);
 

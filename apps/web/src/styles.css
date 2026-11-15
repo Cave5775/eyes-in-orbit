@@ -827,6 +827,8 @@ video.stream-frame { background: #000; object-fit: contain; }
 /* the scene under a covering sky view: its own overlays and extra tools are out of the way (hotkeys are inert too) */
 .scene[data-sky='entering'] .scene-top, .scene[data-sky='on'] .scene-top,
 .scene[data-sky='entering'] .scene-legend, .scene[data-sky='on'] .scene-legend,
-.scene[data-sky='on'] .path-labels, .scene[data-sky='on'] .scene-tip { visibility: hidden; }
+.scene[data-sky='on'] .path-labels { visibility: hidden; }
+/* the hover tooltip and the path marker (z-index 5) would show over the overlay while it fades in or out, and freeze while it is on */
+.scene:not([data-sky='off']) .scene-tip, .scene:not([data-sky='off']) .path-dot { visibility: hidden; }
 @media (prefers-reduced-motion: reduce) { .sky-curtain, .sky-scan { transition: none; } }
 .float-head { position: relative; z-index: 5; }

@@ -230,6 +230,7 @@ export function SceneView() {
       if (runtime.camera === camera) runtime.camera = undefined; // StrictMode remounts: only clear our own
       ctl.dispose();
       useView.getState().setFirstPerson(null);
+      useView.getState().skyDispatch({ type: 'reset' }); // the scene is gone (unmount, hot reload): no sky view of it is left in any phase
       pathLayer.dispose();
       objectLayer.dispose();
       scene.current = null;
