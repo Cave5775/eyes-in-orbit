@@ -4,11 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { BODY_CATEGORY_KINDS, CATEGORIES, categoryCounts, categoryLabel } from '../lib/browser-ui';
 import { buildTreeRows, revealKeys, revealRowIndex, stickyAncestors, type TreeBody } from '../lib/entity-tree';
 import { colorKeyOf, kindLabel } from '../lib/entity';
-import { browseOrder, facetCounts, type SearchHit } from '../lib/filters';
+import { browseOrder, facetCounts, jumpTarget, type SearchHit } from '../lib/filters';
 import { isEarthCentre } from '../lib/frame';
 import { buildLaunchGroups, launchMembers } from '../lib/launch-group';
 import {
-  NO_FOCUS, findTerm, hasHide, isDrawn, classify, queryActive, tagTerms, termFromWord, termWord, textOf, type Ctx, type Term,
+  NO_FOCUS, findTerm, hasHide, isDrawn, classify, queryActive, tagTerms, termFromWord, termWord, textOf, type Ctx, type Query, type Term,
 } from '../lib/query';
 import {
   acceptTag, activeTag, backspaceRemovesChip, parseQuery, splitCommitted, suggestTags, type TagKey, type TagSuggestion,
@@ -56,6 +56,12 @@ const HELP_TAGS: [string, string][] = [
   ['body:moon', 'what orbits that body'],
   ['-type:debris', 'a leading - leaves those out'],
 ];
+
+/** Whether the query lists a row: the predicate the list, the tree and the scene share. */
+const listedBy = (entities: ReadonlyMap<string, EntityRecord>, query: Query, text: ReadonlySet<string> | null) => {
+  const ctx: Ctx = { focus: NO_FOCUS, text };
+  return (r: SearchHit) => isDrawn(classify(entities.get(r.id) ?? r, query, ctx));
+};
 
 export function EntityBrowser() {
   const entities = useStore((s) => s.entities);
@@ -140,10 +146,8 @@ export function EntityBrowser() {
   // groups are not listed. The text ranks them; without text the notable kinds come first.
   const ordered = useMemo(() => [...entities.values()].sort(browseOrder), [shape]);
   const rows: SearchHit[] = useMemo(() => {
-    const ctx: Ctx = { focus: NO_FOCUS, text: textIds };
     const t0 = perf.on ? performance.now() : 0;
-    const pass = (r: SearchHit) => isDrawn(classify(entities.get(r.id) ?? r, query, ctx));
-    const out = (textOf(query) && textHits ? textHits : ordered).filter(pass);
+    const out = (textOf(query) && textHits ? textHits : ordered).filter(listedBy(entities, query, textIds));
     if (perf.on) perf.time('rows', performance.now() - t0);
     return out;
   }, [shape, ordered, query, textHits, textIds]);
@@ -249,6 +253,7 @@ export function EntityBrowser() {
     inputRef.current?.focus();
   };
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && e.nativeEvent.isComposing) return; // the Enter that confirms an IME candidate is not ours
     if (suggestOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       e.preventDefault();
       setSel((cur + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
@@ -265,6 +270,14 @@ export function EntityBrowser() {
         addChips(done.chips);
         setInput(done.rest.trim());
       }
+      // jump to the best match of the text, like a click on the first row. The text is set now (not after the typing pause) so
+      // the ranking is for what is typed; a server-ranked catalogue (store.ts askServer) answers a moment later, so a very quick
+      // Enter there still sees the previous ranking
+      const text = parseQuery(done.rest).text;
+      setText(text);
+      const s = useStore.getState();
+      const id = jumpTarget(text, s.textHits, listedBy(s.entities, s.query, s.textIds));
+      if (id) pick(id);
     } else if (e.key === 'Backspace' && backspaceRemovesChip(input, e.currentTarget.selectionStart, e.currentTarget.selectionEnd, chips.length)) {
       // nothing in front of the caret to delete: the chip before the field goes (the typed text stays)
       e.preventDefault();
