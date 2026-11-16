@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { MARS, MOON, bodyEntityRecords, inertialToFixedMatrix, mulMV, type Vec3 } from '@eio/core';
+import { MARS, MOON, bodyEntityRecords, bodyStateEci, convert, inertialToFixedMatrix, mulMV, precessDir, type Vec3 } from '@eio/core';
 import { bodyFixedToInertial, fitMapSize, poleDirection } from '../src/lib/body-map';
 import { CelestialLayer, createMapSphere, type MapEnv } from '../src/scene/celestial';
 
@@ -20,8 +20,8 @@ describe('fitMapSize', () => {
 describe('body orientation of a mapped sphere', () => {
   it('the geometry z axis (the texture poles) maps to the IAU pole direction in the inertial frame', () => {
     for (const body of [MARS, MOON]) {
-      const pole = poleDirection(body);
       for (const t of [T0, T0 + 3.7 * 3_600_000, Date.UTC(2030, 0, 1), Date.UTC(2000, 0, 1, 12)]) {
+        const pole = poleDirection(body, t); // precessed to the date for Mars (J2000 pole in the scene's of-date axes)
         const z = mulMV(bodyFixedToInertial(body, t), [0, 0, 1]);
         for (let i = 0; i < 3; i++) expect(z[i]).toBeCloseTo(pole[i], 12);
       }
@@ -37,7 +37,7 @@ describe('body orientation of a mapped sphere', () => {
     const dt = 60_000;
     const a = mulMV(bodyFixedToInertial(MARS, T0), [1, 0, 0]);
     const b = mulMV(bodyFixedToInertial(MARS, T0 + dt), [1, 0, 0]);
-    const pole = poleDirection(MARS);
+    const pole = poleDirection(MARS, T0);
     expect(dot(a, pole)).toBeCloseTo(0, 12);
     // counterclockwise about the north pole = prograde rotation
     expect(dot(cross(a, b), pole)).toBeGreaterThan(0);
@@ -50,8 +50,19 @@ describe('body orientation of a mapped sphere', () => {
     const lon = (-133.8 * Math.PI) / 180, lat = (18.65 * Math.PI) / 180; // Olympus Mons
     const fixed: Vec3 = [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
     const inertial = mulMV(bodyFixedToInertial(MARS, T0), fixed);
-    const back = mulMV(inertialToFixedMatrix(MARS, T0), inertial);
+    const back = mulMV(inertialToFixedMatrix(MARS, T0), precessDir(inertial, T0, true)); // scene axes are of date, the IAU matrix is J2000
     for (let i = 0; i < 3; i++) expect(back[i]).toBeCloseTo(fixed[i], 12);
+  });
+
+  it('a point on the Mars surface through convert lands on the drawn mesh (within metres), and the Mars pole of the mesh is the precessed IAU pole', () => {
+    const lon = (-133.8 * Math.PI) / 180, lat = (18.65 * Math.PI) / 180;
+    const fixed: Vec3 = [MARS.radiusKm * Math.cos(lat) * Math.cos(lon), MARS.radiusKm * Math.cos(lat) * Math.sin(lon), MARS.radiusKm * Math.sin(lat)];
+    for (const t of [T0, Date.UTC(2031, 5, 1)]) {
+      const viaConvert = convert({ frame: 'MARS:fixed', r: fixed }, 'EARTH:inertial', t).r;
+      const centre = bodyStateEci('MARS', t).r;
+      const mesh = mulMV(bodyFixedToInertial(MARS, t), fixed);
+      for (let i = 0; i < 3; i++) expect(Math.abs(viaConvert[i] - centre[i] - mesh[i])).toBeLessThan(1e-3); // 1 m
+    }
   });
 });
 
@@ -104,7 +115,7 @@ describe('Mars in the celestial layer', () => {
     for (const t of [T0, T0 + 86_400_000 * 100]) {
       layer.update(t, new THREE.Vector3());
       const z = new THREE.Vector3(0, 0, 1).applyQuaternion(mesh.quaternion);
-      const pole = poleDirection(MARS);
+      const pole = poleDirection(MARS, t);
       expect(z.x).toBeCloseTo(pole[0], 6);
       expect(z.y).toBeCloseTo(pole[1], 6);
       expect(z.z).toBeCloseTo(pole[2], 6);

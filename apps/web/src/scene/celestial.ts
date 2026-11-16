@@ -371,6 +371,7 @@ export class CelestialLayer {
       if (axes) mesh.scale.set(m.k * axes[0], m.k * axes[1], m.k * axes[2]);
       else mesh.scale.set(m.k, m.k, m.k * (1 - f));
       if (body) this.orient(mesh, body, t);
+      if (f > 0 && body) d.pole = poleDirection(body, t);
       if (ring) {
         ring.position.copy(mesh.position);
         ring.scale.setScalar(m.k);

@@ -20,3 +20,4 @@ export * from './describe';
 export * from './observatory';
 export * from './archive-images';
 export * from './match';
+export * from './precession';

@@ -1,4 +1,4 @@
-import { DEG, EARTH, bodyEntityId, bodyOf, bodyStateEci, gmstRad, isBodyStreamed, sunPositionEci, type EntityRecord } from '@eio/core';
+import { DEG, EARTH, bodyEntityId, bodyOf, bodyStateEci, gmstRad, isBodyStreamed, type EntityRecord } from '@eio/core';
 import type { V3 } from './camera';
 import { LABEL_H } from './labels';
 import { dirToRaDec, precessDir, raDecToDir, type RaDec } from './sky-frame';
@@ -26,38 +26,18 @@ export type Epoch = 'date' | 'j2000';
 
 /**
  * The ONE place that decides the axes of a body's position in the scene's Earth-inertial frame (docs/frames.md, "Sky
- * pointing"): the Sun and the Moon come from series of the date (`sunPositionEci`, `moonPositionEci`: mean equator and
- * equinox of date), every other body (planets, dwarf planets, moons; fallback Kepler orbits and the Horizons ICRF stream
- * alike) is a J2000 orbit rotated by the J2000 obliquity. `bodyId` is a registry id (`MOON`, not `body-moon`). The Earth is
- * the origin of the frame and has no direction; it is listed as of date, like its axes.
+ * pointing"). Since the heliocentric hop was put in the axes of date (core `frameEpoch`, `hopInertial`), EVERY body is of date:
+ * the Sun and the Moon come from series of the date, a planet, dwarf planet or moon is its J2000 (ICRF) orbit, fallback Kepler
+ * or Horizons stream alike, precessed to the date in the hop. `bodyId` is a registry id (`MOON`, not `body-moon`). Kept as a
+ * function so a future body with J2000 axes has one place to say so.
  */
-export function epochOf(bodyId: string): Epoch {
-  return bodyId === 'SUN' || bodyId === 'MOON' || bodyId === 'EARTH' ? 'date' : 'j2000';
+// It relies on core (`frameEpoch`, `hopInertial`) putting EVERY body in the scene's of-date axes; if a body ever enters the scene
+// in J2000 axes again, this is the one place to say so (and the observer must then be precessed with it).
+export function epochOf(_bodyId: string): Epoch {
+  return 'date';
 }
 
 const D: V3 = [0, 0, 0];
-const S: V3 = [0, 0, 0];
-const SP: V3 = [0, 0, 0];
-
-/**
- * The scene position of a J2000 body (planet, dwarf planet, moon) made a true geocentric J2000 position, in place of `out`.
- * The scene builds such a body as `X(J2000) - EarthFromSun`, and `EarthFromSun` is `-sunPositionEci`, a series OF DATE
- * (core `earthInSunFrame`). So the scene vector is `X_J2000 + S_date`, a mix of two epochs; the geocentric J2000 vector is
- * `X_J2000 + S_J2000` with `S_J2000 = precess(S_date)`. This adds the difference `S_J2000 - S_date`: a rotation of the 1 AU
- * Sun vector by the precession since J2000 (about 22 arcmin in 2026), i.e. up to 9.8e5 km, which seen from Earth is at most
- * 0.07 deg for Jupiter (about 5 AU), 0.4 deg for Mars at 1 AU and 1.4 deg for Venus near inferior conjunction (0.27 AU),
- * depending on the geometry (1992 Venus, Meeus 33.a: 0.07 deg). `out`
- * may be `rScene`. Valid for the Earth-inertial scene positions of `epochOf(...) === 'j2000'` bodies only.
- */
-export function j2000Geocentric(rScene: V3, tMs: number, out: V3 = [0, 0, 0]): V3 {
-  const s = sunPositionEci(tMs);
-  S[0] = s[0]; S[1] = s[1]; S[2] = s[2];
-  precessDir(S, tMs, true, SP);
-  out[0] = rScene[0] + SP[0] - S[0];
-  out[1] = rScene[1] + SP[1] - S[1];
-  out[2] = rScene[2] + SP[2] - S[2];
-  return out;
-}
 
 /**
  * J2000 RA/Dec (degrees, RA in [0, 360)) of the direction from an observer at `rObs` to a target at `rTarget`, both km in the
@@ -170,9 +150,6 @@ export interface SelectOptions {
 const KINDS: ReadonlySet<string> = new Set(['star', 'planet', 'dwarf_planet', 'moon']);
 
 const rel: V3 = [0, 0, 0];
-const obsJ: V3 = [0, 0, 0];
-const upJ: V3 = [0, 0, 0];
-const rJ: V3 = [0, 0, 0];
 const tmpRd: RaDec = { raDeg: 0, decDeg: 0 };
 
 /**
@@ -187,15 +164,14 @@ const tmpRd: RaDec = { raDeg: 0, decDeg: 0 };
  * - Kept and flagged: `hidden` for a body below the ground observer's horizon or behind the Earth for a space observer.
  * - `approx` is the entity's flag without a stream: a streamed body (JPL Horizons) is not approximate.
  *
- * Planets, dwarf planets and moons go through `j2000Geocentric` first (the scene's mixed epochs, see there), and the
- * observer is precessed to J2000 with them, so every J2000 body is a consistent J2000 geometry.
+ * Every body is of date in the scene (planets and moons included, see `epochOf`), so the observer and the bodies share one
+ * geometry and only the final direction is precessed to J2000 (`topocentricRaDec`).
  */
 export function selectBodies(records: Iterable<EntityRecord>, opts: SelectOptions): SkyMarker[] {
   const { tMs, observer, isHidden } = opts;
   const own = observer.bodyId ?? 'EARTH';
   const positionOf = opts.positionOf ?? ((id: string, t: number): V3 => bodyStateEci(id, t).r);
   const streamed = opts.isStreamed ?? ((id: string, t: number) => isBodyStreamed(id, t));
-  let haveObsJ = false;
   const out: SkyMarker[] = [];
   for (const rec of records) {
     const bodyId = bodyOf(rec);
@@ -205,19 +181,9 @@ export function selectBodies(records: Iterable<EntityRecord>, opts: SelectOption
     const r = positionOf(bodyId, tMs);
     if (!r || !Number.isFinite(r[0] + r[1] + r[2])) continue;
 
-    const epoch = epochOf(bodyId);
-    let target = r, obs = observer.r, up = observer.up;
-    if (epoch === 'j2000') {
-      if (!haveObsJ) {
-        precessDir(observer.r, tMs, true, obsJ);
-        if (observer.up) precessDir(observer.up, tMs, true, upJ);
-        haveObsJ = true;
-      }
-      target = j2000Geocentric(r, tMs, rJ);
-      obs = obsJ;
-      up = observer.up ? upJ : undefined;
-    }
-    topocentricRaDec(target, obs, tMs, epoch, tmpRd);
+    // every scene position is in the axes of date now (core `frameEpoch`), the observer's too: one geometry for all bodies
+    const target = r, obs = observer.r, up = observer.up;
+    topocentricRaDec(target, obs, tMs, epochOf(bodyId), tmpRd);
     rel[0] = target[0] - obs[0]; rel[1] = target[1] - obs[1]; rel[2] = target[2] - obs[2];
     out.push({
       id: rec.id, name: rec.name, kind: rec.kind,

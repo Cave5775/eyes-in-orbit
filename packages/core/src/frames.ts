@@ -2,6 +2,7 @@ import { Body, BodyEphemerisData, BodyRegistry, bodyPeriodSec, defaultBodies } f
 import { SampledProvider } from './providers/sampled';
 import { eclipticToEquatorial, moonStateEci, sunPositionEci } from './ephemeris';
 import { keplerState } from './kepler';
+import { precessDir } from './precession';
 import {
   DEG, J2000_MS, Mat3, MS_PER_DAY, Vec3, add, mulMM, mulMV, rotX, rotZ, sub, transpose, wrap2Pi,
 } from './math';
@@ -38,7 +39,23 @@ function bodyAngularRate(body: Body): number {
   return (body.rotation.rateDegPerDay * DEG) / 86400;
 }
 
-/** Position of `body` relative to its parent in the parent's inertial frame, or null for the root. */
+/**
+ * The axes of a body's `<BODY>:inertial` frame: the mean equator and equinox OF DATE for the Earth (SGP4/TEME, the Sun and
+ * Moon series, the Earth rotation) and the Moon (its series is of date), J2000 (ICRF) for everything else: the Sun's frame
+ * (Horizons heliocentric data), the planets, dwarf planets, their moons (offsets from their planet's J2000 pole) and every
+ * Horizons stream. `convert` rotates by the precession of the date where a hop crosses from one to the other, so a planet is
+ * drawn from the SAME of-date Earth that the Sun and Moon are, and `EARTH:inertial` stays consistently of date.
+ */
+export type FrameEpoch = 'date' | 'j2000';
+export function frameEpoch(bodyId: string): FrameEpoch {
+  return bodyId === 'EARTH' || bodyId === 'MOON' ? 'date' : 'j2000';
+}
+
+/**
+ * Position of `body` relative to its parent in the parent's inertial frame, or null for the root. In the axes of the parent's
+ * frame (`frameEpoch`): the Earth's state in the Sun's frame is J2000 like every heliocentric vector, a streamed or Kepler
+ * planet is J2000, the Moon is of date in the Earth's frame.
+ */
 export function bodyStateInParent(
   body: Body,
   tMs: number,
@@ -188,21 +205,39 @@ function hopInertial(s: StateVector, fromId: string, toId: string, tMs: number, 
   const common = up.find((b) => downIds.has(b.id));
   if (!common) throw new Error(`No common ancestor for ${fromId} and ${toId}`);
 
+  // Each step also changes axes when the two bodies' frames are of different epochs (`frameEpoch`): the Earth and the Moon are
+  // of date, everything else J2000. Only the Earth's step from the Sun (and back) crosses epochs, which is what puts a
+  // planet's heliocentric J2000 vector into the axes of date before the Earth's own (of-date) Sun vector is taken off it.
+  // The velocity is rotated with the same matrix; the turning of the axes themselves (omega x r, 50 arcsec/yr: 1.1 m/s at
+  // 1 AU) is not added, so velocities are those of non-rotating J2000 axes written in the axes of date.
   let r = s.r;
   let v = s.v;
   for (const b of up) {
     if (b.id === common.id) break;
     const o = bodyStateInParent(b, tMs, bodies);
     if (!o) break;
+    if (frameEpoch(b.id) !== frameEpoch(b.parentId as string)) {
+      r = precessDir(r, tMs, frameEpoch(b.id) === 'date');
+      if (v) v = precessDir(v, tMs, frameEpoch(b.id) === 'date');
+    }
     r = add(r, o.r);
     if (v) v = add(v, o.v);
   }
+  // down from the common ancestor to the destination: ancestor side first, because a step may change the axes
+  const path: Body[] = [];
   for (const b of down) {
     if (b.id === common.id) break;
+    path.push(b);
+  }
+  for (const b of path.reverse()) {
     const o = bodyStateInParent(b, tMs, bodies);
     if (!o) break;
     r = sub(r, o.r);
     if (v) v = sub(v, o.v);
+    if (frameEpoch(b.id) !== frameEpoch(b.parentId as string)) {
+      r = precessDir(r, tMs, frameEpoch(b.id) !== 'date');
+      if (v) v = precessDir(v, tMs, frameEpoch(b.id) !== 'date');
+    }
   }
   return { ...s, frame: frameId(toId, 'inertial'), r, v };
 }

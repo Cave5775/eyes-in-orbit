@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   Clock, CompositeProvider, EntityGraph, EARTH, GeodeticProvider, KeplerianProvider,
   SampledProvider, Sgp4Provider, DEG, convert, deriveMissionState, formatCountdown, fixedToGeodetic,
-  geodeticToFixed, gmstRad, missionTimingFor, norm, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS, MARS, MOON,
+  geodeticToFixed, gmstRad, missionTimingFor, norm, precessDir, providerFromSpec, stateToGeodetic, sunDirectionEci, LL2_STATUS, MARS, MOON,
   type Omm, type Sample,
 } from '../src';
 
@@ -83,11 +83,13 @@ describe('entity sampled in MARS:inertial (Mars-centred Horizons track of a Mars
       const e = g.stateIn('mro', t, 'EARTH:inertial')!;
       const mars = convert({ frame: 'MARS:inertial', r: [0, 0, 0], v: [0, 0, 0] }, 'EARTH:inertial', t);
       const rel = at(t);
+      // the sample is in Mars' J2000 axes; EARTH:inertial is of date, so the hop precesses the Mars-relative offset with Mars
+      const relD = [...precessDir([rel[0], rel[1], rel[2]], t, false), ...precessDir([rel[3], rel[4], rel[5]], t, false)];
       expect(e.frame).toBe('EARTH:inertial');
       expect(norm(e.r)).toBeGreaterThan(5e7); // millions of km from the Earth
       for (let k = 0; k < 3; k++) {
-        expect(e.r[k] - mars.r[k]).toBeCloseTo(rel[k], -0.5); // Hermite error well below 0.5 km at 5 min steps
-        expect(e.v![k] - mars.v![k]).toBeCloseTo(rel[3 + k], 2);
+        expect(e.r[k] - mars.r[k]).toBeCloseTo(relD[k], -0.5); // Hermite error well below 0.5 km at 5 min steps
+        expect(e.v![k] - mars.v![k]).toBeCloseTo(relD[3 + k], 2);
       }
       expect(norm([e.r[0] - mars.r[0], e.r[1] - mars.r[1], e.r[2] - mars.r[2]])).toBeCloseTo(R, 0);
     }

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  BodyProvider, BodyRegistry, bodyEntityRecords, bodyOf, entityRank, isBodyEntity, isOrbitable, bodyPeriodSec, bodyStateEci, bodyStateInParent, defaultBodies, providerFromSpec,
+  BodyProvider, BodyRegistry, bodyEntityRecords, bodyOf, entityRank, isBodyEntity, isOrbitable, bodyPeriodSec, bodyStateEci, bodyStateInParent, defaultBodies, precessDir, providerFromSpec,
   setBodyStream, type Sample,
 } from '@eio/core';
 import { registerApi } from '../src/api';
@@ -181,7 +181,8 @@ describe('recorded Horizons responses (2026-10-29)', () => {
     // Io relative to Jupiter in the Earth frame is the sample too (Io's own frame hop goes through the streamed Jupiter)
     const tIo = io[5][0];
     const rel = bodyStateEci('IO', tIo, reg).r.map((x, k) => x - bodyStateEci('JUPITER', tIo, reg).r[k]);
-    expect(dist(rel, io[5].slice(1))).toBeLessThan(1e-3);
+    // (rotated to the date with the planet: EARTH:inertial is of date, the Horizons sample is ICRF)
+    expect(dist(rel, precessDir(io[5].slice(1, 4) as [number, number, number], tIo, false))).toBeLessThan(1e-3);
     // outside the window: the registered orbit shifted by the edge difference, fading out over a quarter period (3 y for Jupiter)
     const fresh = new BodyRegistry();
     const kep = (t: number) => bodyStateInParent(fresh.get('JUPITER'), t, fresh)!.r;
