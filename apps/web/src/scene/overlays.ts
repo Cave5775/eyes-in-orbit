@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { EARTH, bodyEntityId, cross, fixedToGeodetic, geodeticToFixed, norm, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
 import { dimmed } from '../lib/dim';
 import {
-  EARTH_CENTRE, centrePositionEci, framePathPoint, frameForRec, frameSampler, graphLookup, type Centre, type EntityLookup, type FrameSampler,
+  EARTH_CENTRE, centrePositionEci, framePathPoint, frameForRec, frameSampler, graphLookup, orbitLinePoint, orbitSampleFrame, type Centre, type EntityLookup, type FrameSampler,
 } from '../lib/frame';
 import { chordSagKm } from '../lib/occlusion';
 import { orbitPeriodSec } from '../lib/orbit';
@@ -196,10 +196,12 @@ export class EntityOverlay {
     this.orbitRef = inFrame?.ref ?? null;
     let n = 0;
     let prev: Vec3 | null = null;
+    // a primary with J2000 axes is sampled in its own frame and rotated once (see `orbitSampleFrame`)
+    const ownFrame = inFrame ? orbitSampleFrame(rec.bodyId) : null;
     if (!inFrame || inFrame.ref) {
       for (let i = 0; i <= ORBIT_POINTS; i++) {
         const ts = t + (i / ORBIT_POINTS) * periodSec * 1000;
-        const s = graph.stateIn(rec.id, ts, 'EARTH:inertial');
+        const s = graph.stateIn(rec.id, ts, ownFrame ?? 'EARTH:inertial');
         if (!s) continue;
         // a step of a quarter of the radius or more is no orbit: the provider moved the entity elsewhere (a modeled orbit
         // that ends hands the launch vehicle back to its pad marker), so the line stops where the orbit does
@@ -209,7 +211,7 @@ export class EntityOverlay {
         if (inFrame) {
           const c = inFrame.centreAt(ts);
           if (!c) continue;
-          p = framePathPoint(p, c, inFrame.ref!);
+          p = ownFrame ? orbitLinePoint(p, inFrame.refMs, inFrame.ref!) : framePathPoint(p, c, inFrame.ref!);
         }
         pos.setXYZ(n++, p[0], p[1], p[2]);
       }

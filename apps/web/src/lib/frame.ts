@@ -1,4 +1,4 @@
-import { bodyEntityId, isBodyEntity, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
+import { bodyEntityId, frameEpoch, isBodyEntity, precessDir, type EntityGraph, type EntityRecord, type StateVector, type Vec3 } from '@eio/core';
 
 /**
  * Frame of reference (see docs/frames.md). The frame is a centre, and a centre is an ENTITY ID: a body entity (`body-moon`)
@@ -82,6 +82,26 @@ export function entityRelativeToCentre(id: string, centre: Centre, tMs: number, 
  */
 export function framePathPoint(r: Vec3, cAtSample: Vec3, cAtRef: Vec3): Vec3 {
   return [r[0] - cAtSample[0] + cAtRef[0], r[1] - cAtSample[1] + cAtRef[1], r[2] - cAtSample[2] + cAtRef[2]];
+}
+
+/**
+ * The frame id in which an orbit line round the primary body `bodyId` is sampled, or null to sample in `EARTH:inertial`. A
+ * primary whose own axes are J2000 (`frameEpoch`: the Sun, the planets) is sampled in ITS axes and rotated ONCE by the
+ * precession of the line's reference time (`orbitLinePoint`): sampling the Earth-inertial position per sample time would
+ * precess each point with its own date and a long-period orbit (Neptune: 2.3 deg, Eris: 7.8 deg) would not close.
+ */
+export function orbitSampleFrame(bodyId: string): `${string}:inertial` | null {
+  return frameEpoch(bodyId) === 'j2000' ? `${bodyId}:inertial` : null;
+}
+
+/**
+ * Where a sample of an orbit line (`r`: relative to the primary body, in the primary's own J2000 axes) is drawn: rotated to the
+ * axes of date by the precession of `refMs` (one rotation for the whole line, so the loop closes) and placed round the
+ * primary's position at the reference time `cRef`. At `refMs` it is the drawn body's own position.
+ */
+export function orbitLinePoint(r: Vec3, refMs: number, cRef: Vec3): Vec3 {
+  const p = precessDir(r, refMs, false);
+  return [p[0] + cRef[0], p[1] + cRef[1], p[2] + cRef[2]];
 }
 
 /**

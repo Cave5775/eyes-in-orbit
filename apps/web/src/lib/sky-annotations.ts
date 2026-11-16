@@ -31,6 +31,8 @@ export type Epoch = 'date' | 'j2000';
  * or Horizons stream alike, precessed to the date in the hop. `bodyId` is a registry id (`MOON`, not `body-moon`). Kept as a
  * function so a future body with J2000 axes has one place to say so.
  */
+// It relies on core (`frameEpoch`, `hopInertial`) putting EVERY body in the scene's of-date axes; if a body ever enters the scene
+// in J2000 axes again, this is the one place to say so (and the observer must then be precessed with it).
 export function epochOf(_bodyId: string): Epoch {
   return 'date';
 }

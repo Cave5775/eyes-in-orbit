@@ -30,15 +30,24 @@ export function precessionAngles(tMs: number): { zeta: number; z: number; theta:
  * inverse (the transpose). Works on any length and writes into `out` (may be the input).
  */
 export function precessDir(d: Vec3, tMs: number, toJ2000: boolean, out: Vec3 = [0, 0, 0]): Vec3 {
-  const { zeta, z, theta } = precessionAngles(tMs);
-  const first = toJ2000 ? -z : zeta, last = toJ2000 ? -zeta : z, th = toJ2000 ? -theta : theta;
-  let c = Math.cos(first), s = Math.sin(first);
-  const x1 = c * d[0] - s * d[1], y1 = s * d[0] + c * d[1], z1 = d[2];
-  c = Math.cos(th); s = Math.sin(th);
-  const x2 = c * x1 - s * z1, z2 = s * x1 + c * z1;
-  c = Math.cos(last); s = Math.sin(last);
-  out[0] = c * x2 - s * y1;
-  out[1] = s * x2 + c * y1;
+  const k = trigAt(tMs);
+  // J2000 -> date: R3(+z) tilt(theta) R3(+zeta); the inverse is the transpose (angles negated, order reversed)
+  const cf = toJ2000 ? k.cz : k.cZeta, sf = toJ2000 ? -k.sz : k.sZeta;
+  const ct = k.cTheta, st = toJ2000 ? -k.sTheta : k.sTheta;
+  const cl = toJ2000 ? k.cZeta : k.cz, sl = toJ2000 ? -k.sZeta : k.sz;
+  const x1 = cf * d[0] - sf * d[1], y1 = sf * d[0] + cf * d[1], z1 = d[2];
+  const x2 = ct * x1 - st * z1, z2 = st * x1 + ct * z1;
+  out[0] = cl * x2 - sl * y1;
+  out[1] = sl * x2 + cl * y1;
   out[2] = z2;
   return out;
+}
+
+/** cos and sin of the three angles for one time: a frame hop rotates the position and the velocity (and a mesh three columns) at the same `tMs`, so the last time is kept. */
+let cached: { t: number; cZeta: number; sZeta: number; cz: number; sz: number; cTheta: number; sTheta: number } | null = null;
+function trigAt(tMs: number) {
+  if (cached && cached.t === tMs) return cached;
+  const { zeta, z, theta } = precessionAngles(tMs);
+  cached = { t: tMs, cZeta: Math.cos(zeta), sZeta: Math.sin(zeta), cz: Math.cos(z), sz: Math.sin(z), cTheta: Math.cos(theta), sTheta: Math.sin(theta) };
+  return cached;
 }
