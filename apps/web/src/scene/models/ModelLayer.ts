@@ -5,13 +5,10 @@ import { basisToQuaternion, forwardBasis, lvlhBasis, rocketForward, sunlitFracti
 import type { V3 } from '../../lib/camera';
 import { modelLod, ringHiddenFor } from '../../lib/model-lod';
 import { modelDef } from './registry';
+import { AMBIENT_I, SUN_I, lightRig } from '../../lib/shading';
 import type { ModelDef, ModelInstance, ModelUpdate } from './types';
 
 const KM_PER_M = 1e-3;
-/** Sun and earthshine strengths. three's lights give albedo * I * cos / pi, so PI is "full white at normal incidence". */
-const SUN_I = 3.3;
-const AMBIENT_I = 1.2;
-const EARTHSHINE_I = 1.1;
 
 export interface ModelFrame {
   /** simulation time, ms */
@@ -70,6 +67,8 @@ export class ModelLayer {
   /** ids whose point sprite is replaced by the model / whose selection ring is hidden */
   readonly spriteHidden = new Set<string>();
   readonly ringHidden = new Set<string>();
+  /** sunlight shading (View menu): off = even ambient light only, no Sun, earthshine or eclipse dimming (lib/shading.ts) */
+  private shaded = true;
   private tmp = new THREE.Vector3();
   private q = new THREE.Quaternion();
 
@@ -119,6 +118,10 @@ export class ModelLayer {
     return [...this.entries.values()].filter((e) => e.active).map((e) => e.id);
   }
 
+  setShaded(on: boolean): void {
+    this.shaded = on;
+  }
+
   get size(): number {
     return this.entries.size;
   }
@@ -147,9 +150,11 @@ export class ModelLayer {
     this.group.visible = lit !== null;
     if (lit) {
       this.sunLight.position.set(f.sunDir[0], f.sunDir[1], f.sunDir[2]);
-      this.sunLight.intensity = SUN_I * lit.sunlit;
+      const rig = lightRig(this.shaded, lit.sunlit, lit.day);
+      this.sunLight.intensity = rig.sun;
+      this.ambient.intensity = rig.ambient;
       this.earthLight.position.set(lit.nadir[0], lit.nadir[1], lit.nadir[2]);
-      this.earthLight.intensity = EARTHSHINE_I * lit.day;
+      this.earthLight.intensity = rig.earth;
     }
     return changed;
   }

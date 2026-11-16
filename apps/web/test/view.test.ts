@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DETAIL_KEY, LABELS_KEY, SURFACE_PREF_KEY, createViewStore, loadFlag, saveFlag, type StorageLike } from '../src/state/view';
+import { DETAIL_KEY, LABELS_KEY, SUN_SHADING_KEY, SURFACE_PREF_KEY, createViewStore, loadFlag, saveFlag, type StorageLike } from '../src/state/view';
 
 const mem = (init: Record<string, string> = {}): StorageLike & { data: Record<string, string> } => {
   const data = { ...init };
@@ -44,6 +44,17 @@ describe('view store', () => {
     store.getState().setSurfaceAuto(true);
     expect(store.getState().surfaceAuto).toBe(true);
     expect(storage.data[SURFACE_PREF_KEY]).toBe('on');
+  });
+  it('remembers sunlight shading, on unless stored off', () => {
+    expect(createViewStore(mem()).getState().sunShading).toBe(true);
+    const storage = mem({ [SUN_SHADING_KEY]: 'off' });
+    const store = createViewStore(storage);
+    expect(store.getState().sunShading).toBe(false);
+    store.getState().toggleSunShading();
+    expect(store.getState().sunShading).toBe(true);
+    expect(storage.data[SUN_SHADING_KEY]).toBe('on');
+    store.getState().toggleSunShading();
+    expect(storage.data[SUN_SHADING_KEY]).toBe('off');
   });
   it('sets detail directly (Settings) and remembers it', () => {
     const storage = mem();

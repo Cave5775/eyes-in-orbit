@@ -178,11 +178,13 @@ export function SceneView() {
     const v0 = useView.getState();
     ctl.setDetailEnabled(v0.detail);
     ctl.setLabelsEnabled(v0.labels);
+    ctl.setSunShading(v0.sunShading);
     ctl.setScopeMode(v0.scopeAll ? 'all' : 'auto');
     ctl.setSurfaceAuto(v0.surfaceAuto);
     const unsubView = useView.subscribe((v, p) => {
       if (v.detail !== p.detail) ctl.setDetailEnabled(v.detail);
       if (v.labels !== p.labels) ctl.setLabelsEnabled(v.labels);
+      if (v.sunShading !== p.sunShading) ctl.setSunShading(v.sunShading);
       if (v.scopeAll !== p.scopeAll) ctl.setScopeMode(v.scopeAll ? 'all' : 'auto');
       if (v.surfaceAuto !== p.surfaceAuto) ctl.setSurfaceAuto(v.surfaceAuto);
     });

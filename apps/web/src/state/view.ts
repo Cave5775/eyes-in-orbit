@@ -12,6 +12,8 @@ import { SURFACE_PREF_KEY } from '../lib/surface';
 export interface ViewState {
   labels: boolean;
   detail: boolean;
+  /** day / night shading from the Sun on bodies and models; off lights everything evenly (View menu) */
+  sunShading: boolean;
   scopeAll: boolean;
   surface: boolean;
   /** focusing an object near the Earth switches to the surface view (Settings; the last S / Surface also sets it) */
@@ -29,6 +31,7 @@ export interface ViewState {
   toggleLabels(): void;
   toggleDetail(): void;
   setDetail(on: boolean): void;
+  toggleSunShading(): void;
   toggleScope(): void;
   setSurface(on: boolean): void;
   setSurfaceAuto(on: boolean): void;
@@ -41,6 +44,7 @@ export interface ViewState {
 
 export const LABELS_KEY = 'eio.labels';
 export const DETAIL_KEY = 'eio.detail';
+export const SUN_SHADING_KEY = 'eio.sunShading';
 export { SKY_TRANSITION_KEY };
 export { SURFACE_PREF_KEY };
 
@@ -86,6 +90,7 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
   return create<ViewState>((set, get) => ({
     labels: loadFlag(LABELS_KEY, storage),
     detail: loadFlag(DETAIL_KEY, storage),
+    sunShading: loadFlag(SUN_SHADING_KEY, storage),
     scopeAll: false,
     surface: false,
     surfaceAuto: loadFlag(SURFACE_PREF_KEY, storage),
@@ -102,6 +107,11 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
     setDetail: (detail) => {
       saveFlag(DETAIL_KEY, detail, storage);
       if (get().detail !== detail) set({ detail });
+    },
+    toggleSunShading: () => {
+      const sunShading = !get().sunShading;
+      saveFlag(SUN_SHADING_KEY, sunShading, storage);
+      set({ sunShading });
     },
     toggleScope: () => set({ scopeAll: !get().scopeAll }),
     setSurface: (surface) => { if (get().surface !== surface) set({ surface }); },

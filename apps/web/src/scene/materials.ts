@@ -13,6 +13,12 @@ import { DEFAULT_NOISE, hexRgb, ringTexture, type BodyStyle, type RingStyle } fr
  * 1.5e8 km out (the Sun frame) `b^2 - c2` would be pure float32 cancellation (b^2 ~ 2e16, R^2 ~ 4e7). Arrays are built once
  * and mutated (`setOccluderUniforms`): nothing is allocated per frame.
  */
+/**
+ * Sunlight shading switch shared by every body shader (View > Sunlight shading): 1 = lit by the Sun (day / night), 0 = evenly
+ * lit, the whole texture visible. One uniform object, so flipping it never recompiles a shader.
+ */
+export const SHADING: THREE.IUniform<number> = { value: 1 };
+
 export function occlusionUniforms(): Record<string, THREE.IUniform> {
   return {
     uOccN: { value: 0 },
@@ -173,6 +179,7 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
   return new THREE.ShaderMaterial({
     uniforms: {
       uSun: { value: sun },
+      uShade: SHADING,
       uTex: { value: texture },
       uHasTex: { value: texture ? 1 : 0 },
       // streamed close-up imagery (scene/earth-detail.ts): premultiplied RGBA atlas, its box in the base map's uv, on/off
@@ -193,7 +200,7 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
       }`,
     fragmentShader: /* glsl */ `
       #include <logdepthbuf_pars_fragment>
-      uniform vec3 uSun; uniform sampler2D uTex; uniform float uHasTex;
+      uniform vec3 uSun; uniform float uShade; uniform sampler2D uTex; uniform float uHasTex;
       uniform sampler2D uDetail; uniform vec4 uDetailBox; uniform float uDetailOn;
       varying vec3 vL; varying vec3 vN; varying vec2 vUv;
       ${NOISE}
@@ -228,7 +235,7 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
         vec3 night = base * vec3(0.085, 0.11, 0.18);
         vec3 col = mix(night, lit, day);
         col += vec3(0.8, 0.35, 0.12) * 0.07 * exp(-pow(d * 7.0, 2.0));
-        gl_FragColor = vec4(col, 1.0);
+        gl_FragColor = vec4(mix(base, col, uShade), 1.0);
       }`,
   });
 }
@@ -242,6 +249,7 @@ export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | n
   return new THREE.ShaderMaterial({
     uniforms: {
       uSun: { value: sun },
+      uShade: SHADING,
       uTex: { value: texture },
       uHasTex: { value: texture ? 1 : 0 },
     },
@@ -258,7 +266,7 @@ export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | n
       }`,
     fragmentShader: /* glsl */ `
       #include <logdepthbuf_pars_fragment>
-      uniform vec3 uSun; uniform sampler2D uTex; uniform float uHasTex;
+      uniform vec3 uSun; uniform float uShade; uniform sampler2D uTex; uniform float uHasTex;
       varying vec3 vL; varying vec3 vN; varying vec2 vUv;
       ${NOISE}
       void main() {
@@ -268,7 +276,7 @@ export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | n
           : vec3(0.18 + 0.30 * fbm(vL * 3.0 + 1.7) + 0.12 * fbm(vL * 14.0));
         float d = dot(normalize(vN), normalize(uSun));
         float lit = smoothstep(-0.02, 0.35, d) * (0.15 + 0.95 * max(d, 0.0));
-        gl_FragColor = vec4(base * (0.012 + 1.05 * lit), 1.0);
+        gl_FragColor = vec4(mix(base, base * (0.012 + 1.05 * lit), uShade), 1.0);
       }`,
   });
 }
@@ -287,6 +295,7 @@ export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, inv2: r
     uniforms: {
       uSun: { value: sun },
       uTint: { value: new THREE.Vector3(...hexRgb(style.color)) },
+      uShade: SHADING,
       uBandA: { value: new THREE.Vector3(...a) },
       uBandB: { value: new THREE.Vector3(...b) },
       uBandN: { value: bands ? bands.count : 0 },
@@ -307,7 +316,7 @@ export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, inv2: r
       }`,
     fragmentShader: /* glsl */ `
       #include <logdepthbuf_pars_fragment>
-      uniform vec3 uSun; uniform vec3 uTint; uniform vec3 uBandA; uniform vec3 uBandB;
+      uniform vec3 uSun; uniform float uShade; uniform vec3 uTint; uniform vec3 uBandA; uniform vec3 uBandB;
       uniform float uBandN; uniform float uBandK; uniform float uNoise;
       varying vec3 vL; varying vec3 vN;
       ${NOISE}
@@ -325,7 +334,7 @@ export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, inv2: r
         col *= 1.0 + uNoise * (fbm(n * 4.0 + 1.3) * 2.0 - 1.0) + 0.5 * uNoise * (fbm(n * 17.0) - 0.5);
         float d = dot(normalize(vN), normalize(uSun));
         float lit = smoothstep(-0.02, 0.35, d) * (0.15 + 0.95 * max(d, 0.0));
-        gl_FragColor = vec4(col * (0.012 + 1.05 * lit), 1.0);
+        gl_FragColor = vec4(mix(col, col * (0.012 + 1.05 * lit), uShade), 1.0);
       }`,
   });
 }
@@ -354,7 +363,7 @@ export const createRingGeometry = (ring: RingStyle): THREE.RingGeometry => new T
  */
 export function createRingMaterial(sun: THREE.Vector3, ring: RingStyle, data: THREE.Texture = createRingData(ring)): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { uSun: { value: sun }, uTex: { value: data }, uInner: { value: ring.innerKm }, uOuter: { value: ring.outerKm } },
+    uniforms: { uSun: { value: sun }, uShade: SHADING, uTex: { value: data }, uInner: { value: ring.innerKm }, uOuter: { value: ring.outerKm } },
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -371,7 +380,7 @@ export function createRingMaterial(sun: THREE.Vector3, ring: RingStyle, data: TH
       }`,
     fragmentShader: /* glsl */ `
       #include <logdepthbuf_pars_fragment>
-      uniform vec3 uSun; uniform sampler2D uTex; uniform float uInner; uniform float uOuter;
+      uniform vec3 uSun; uniform float uShade; uniform sampler2D uTex; uniform float uInner; uniform float uOuter;
       varying float vR; varying vec3 vN; varying vec3 vW;
       void main() {
         #include <logdepthbuf_fragment>
@@ -380,7 +389,7 @@ export function createRingMaterial(sun: THREE.Vector3, ring: RingStyle, data: TH
         float d = dot(vN, normalize(uSun));
         float side = (dot(vN, -vW) * d > 0.0) ? 1.0 : 0.3;
         float lit = (0.16 + 0.9 * pow(abs(d), 0.5)) * side;
-        gl_FragColor = vec4(t.rgb * lit, t.a);
+        gl_FragColor = vec4(t.rgb * mix(0.9, lit, uShade), t.a);
       }`,
   });
 }
@@ -388,7 +397,7 @@ export function createRingMaterial(sun: THREE.Vector3, ring: RingStyle, data: TH
 /** Limb glow drawn on the back faces of a slightly larger sphere. */
 export function createAtmosphereMaterial(sun: THREE.Vector3): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { uSun: { value: sun } },
+    uniforms: { uSun: { value: sun }, uShade: SHADING },
     side: THREE.BackSide,
     transparent: true,
     depthWrite: false,
@@ -407,13 +416,13 @@ export function createAtmosphereMaterial(sun: THREE.Vector3): THREE.ShaderMateri
       }`,
     fragmentShader: /* glsl */ `
       #include <logdepthbuf_pars_fragment>
-      uniform vec3 uSun;
+      uniform vec3 uSun; uniform float uShade;
       varying vec3 vN; varying vec3 vView; varying vec3 vWN;
       void main() {
         #include <logdepthbuf_fragment>
         float d = clamp(dot(normalize(vN), normalize(vView)), 0.0, 1.0);
         float a = pow(clamp(d / 0.19, 0.0, 1.0), 1.7);
-        float sunlit = 0.2 + 0.8 * smoothstep(-0.5, 0.35, dot(normalize(vWN), normalize(uSun)));
+        float sunlit = mix(1.0, 0.2 + 0.8 * smoothstep(-0.5, 0.35, dot(normalize(vWN), normalize(uSun))), uShade);
         gl_FragColor = vec4(vec3(0.30, 0.55, 1.0), a * sunlit * 0.9);
       }`,
   });

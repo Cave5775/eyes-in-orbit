@@ -32,6 +32,7 @@ export function ViewMenu() {
 
   const scene: Row[] = [
     { key: 'labels', label: 'Labels', hint: 'Names of bodies, the selection and search matches', on: view.labels, toggle: view.toggleLabels },
+    { key: 'sunShading', label: 'Sunlight shading', hint: 'Off: light every body and model evenly, so the side away from the Sun shows its texture', on: view.sunShading, toggle: view.toggleSunShading },
     { key: 'highlight', label: 'Highlight', hint: 'Dim what the search leaves out instead of hiding it', on: highlight, toggle: () => setHighlight(!highlight) },
     { key: 'scope', label: 'Draw everything', hint: 'Off: only what is near the camera focus, the selection and search matches', on: view.scopeAll, toggle: view.toggleScope },
     { key: 'legend', label: PANEL_INFO.legend.label, hint: PANEL_INFO.legend.hint, on: visible.legend, toggle: () => togglePanel('legend') },

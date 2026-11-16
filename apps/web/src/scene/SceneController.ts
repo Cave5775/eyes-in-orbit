@@ -29,7 +29,7 @@ import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpac
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
-import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial, setOccluderUniforms } from './materials';
+import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial, setOccluderUniforms, SHADING } from './materials';
 import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
 import type { DetailView } from '../lib/earth-detail';
 import { CelestialLayer } from './celestial';
@@ -581,6 +581,17 @@ export class SceneController {
   }
 
   /** Turn the streamed close-up imagery on or off (off: the base map only, no tile requests). */
+  /**
+   * Sunlight shading (View > Sunlight shading): off lights every 3D object evenly, so the half turned away from the Sun shows
+   * its texture too: the planet / moon / ring / atmosphere shaders through the shared uniform `SHADING` (no recompile), the
+   * body and satellite models through their lights (lib/shading.ts; no eclipse dimming either).
+   */
+  setSunShading(on: boolean): void {
+    SHADING.value = on ? 1 : 0;
+    this.celestial.setShaded(on);
+    this.models.setShaded(on);
+  }
+
   setDetailEnabled(on: boolean): void {
     this.detail.enabled = on;
     this.lastDetailAt = 0;
