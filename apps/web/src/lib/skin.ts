@@ -7,7 +7,7 @@
 export const SKINS = [
   { id: 'classic', label: 'Classic', hint: 'Graphite and ink, the original look' },
   { id: 'terminal', label: 'Terminal', hint: 'Monospace on black, amber cursor, square corners, no shadows' },
-  { id: 'mission', label: 'Mission 1960s', hint: 'Navy and cream with orange label plates, after space-race era mission control' },
+  { id: 'mission', label: 'Mission 1960s', hint: 'Navy and cream control console: chamfered panels, screws, nixie clock, lamp-lit keys, CRT scene' },
 ] as const;
 
 export type SkinId = (typeof SKINS)[number]['id'];
