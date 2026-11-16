@@ -6,6 +6,7 @@ import type { AssetCache } from '../lib/asset-cache';
 import { BODY_SHAPES, MESH_LOAD_PX, baseEllipsoid, ellipsoidScale, meshWanted, type BodyShape, type MeshShape } from '../lib/body-shape';
 import { bodyDiscRadiusPx, SHOW_EXEMPT } from '../lib/pick';
 import { bodyShown } from '../lib/scope';
+import { SUN_I, lightRig } from '../lib/shading';
 import type { DrawnBody } from '../lib/body-scene';
 import type { SceneBody } from '../lib/occlusion';
 import { EARTH_SYSTEM_DEPTH_KM, EARTH_SYSTEM_REACH_KM } from '../lib/disc-hide';
@@ -86,6 +87,8 @@ interface BodyMesh {
   sphere: THREE.Mesh;
   group: THREE.Group | null;
   light: THREE.DirectionalLight | null;
+  /** even light for the unshaded view (intensity 0 while the Sun lights the model) */
+  ambient: THREE.AmbientLight | null;
 }
 
 /** The small glyphs of the bodies whose disc is too small to see (one `THREE.Points`, updated in place by `updateMarkers`). */
@@ -115,6 +118,7 @@ export class CelestialLayer {
   private readonly drawn = new Map<string, Drawn>();
   private readonly rot = new THREE.Matrix4();
   private disposed = false;
+  private shaded = true;
   /** the bodies in layer order, rebuilt when the set changes (the objects are the `drawn` values, mutated by `update`) */
   private list: Drawn[] = [];
   /** `list` without the bodies `applyScope` hid (what picking sees) */
@@ -360,7 +364,7 @@ export class CelestialLayer {
         bm.light?.position.copy(sunFromBody);
       }
     };
-    if (shape?.kind === 'mesh') d.mesh = { spec: shape, held: false, sphere: mesh, group: null, light: null };
+    if (shape?.kind === 'mesh') d.mesh = { spec: shape, held: false, sphere: mesh, group: null, light: null, ambient: null };
     if (map) this.loadMapTexture(d, mesh, sunFromBody, map.file);
   }
 
@@ -396,6 +400,18 @@ export class CelestialLayer {
     }
   }
 
+  /** Sunlight shading on / off (View menu) for the loaded body models; the body shaders follow the shared uniform `SHADING`. */
+  setShaded(on: boolean): void {
+    this.shaded = on;
+    for (const d of this.drawn.values()) if (d.mesh) this.applyShading(d.mesh);
+  }
+
+  private applyShading(bm: BodyMesh): void {
+    const rig = lightRig(this.shaded, 1, 0); // a body model has no eclipse or earthshine term, only the Sun
+    if (bm.light) bm.light.intensity = rig.sun;
+    if (bm.ambient) bm.ambient.intensity = this.shaded ? 0 : rig.ambient;
+  }
+
   private attachMesh(d: Drawn, bm: BodyMesh, glb: LoadedGlb): void {
     // the cloned graph shares the cache's geometry and materials; only the cache disposes them
     const group = new THREE.Group();
@@ -403,10 +419,14 @@ export class CelestialLayer {
     model.traverse((o) => { o.frustumCulled = false; });
     group.add(model);
     // the glb's standard materials need a light: the Sun, from this body's own direction (set every frame in `place`)
-    const light = new THREE.DirectionalLight(0xfff4e4, 3.3);
+    const light = new THREE.DirectionalLight(0xfff4e4, SUN_I);
+    const ambient = new THREE.AmbientLight(0xffffff, 0);
+    group.add(ambient);
     bm.group = group;
     bm.light = light;
+    bm.ambient = ambient;
     this.scene.add(group, light);
+    this.applyShading(bm);
     bm.sphere.visible = false;
   }
 
@@ -417,6 +437,7 @@ export class CelestialLayer {
     bm.light?.removeFromParent();
     bm.group = null;
     bm.light = null;
+    bm.ambient = null;
     bm.sphere.visible = true;
   }
 
