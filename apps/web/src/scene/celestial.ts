@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { EARTH, MARS, MOON, SUN, bodyOf, defaultBodies, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
+import { EARTH, MOON, SUN, bodyOf, defaultBodies, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
 import { bodyFixedToInertial, fitMapSize, poleDirection } from '../lib/body-map';
+import { BODY_TEXTURES, MAP_LOAD_PX, textureOf, type BodyTexture } from '../lib/body-textures';
 import { MARKER_BELOW_PX, MARKER_SIZE_PX, bodyStyle, hexRgb } from '../lib/body-style';
 import type { AssetCache } from '../lib/asset-cache';
 import { BODY_SHAPES, MESH_LOAD_PX, baseEllipsoid, ellipsoidScale, meshWanted, type BodyShape, type MeshShape } from '../lib/body-shape';
@@ -17,9 +18,13 @@ import { MODEL_ASSETS, type LoadedGlb } from './models/glb';
 /**
  * Bodies drawn with a map (file in /textures, `npm run assets`): a sphere of the body's equatorial radius (the flattening,
  * 1/169.8 for Mars, is ignored: the maps are sphere-based simple cylindrical) oriented by its IAU rotation. Until the file
- * has loaded (or when it is missing) the body keeps its tinted sphere.
+ * has loaded (or when it is missing) the body keeps its tinted sphere. Only Mars is loaded eagerly like this; the other bodies
+ * with a map (lib/body-textures.ts) load it lazily when their disc is big enough (`updateTextures`) and keep their flattening.
  */
-const BODY_MAPS: Record<string, { body: Body; file: string }> = { MARS: { body: MARS, file: 'mars.jpg' } };
+function eagerMap(bodyId: string, table: Readonly<Record<string, BodyTexture>>): { body: Body; file: string } | undefined {
+  const t = textureOf(bodyId, table);
+  return t?.eager && defaultBodies.has(bodyId) ? { body: defaultBodies.get(bodyId), file: t.file } : undefined;
+}
 
 /** What the layer needs from the renderer and the loader; the defaults are for tests (no GPU). */
 export interface MapEnv {
@@ -33,6 +38,8 @@ export interface MapEnv {
    * behind a body exactly as a satellite is. Absent (tests without a GPU): no markers.
    */
   pointMaterial?: THREE.Material;
+  /** body maps by registry id (default `BODY_TEXTURES`, lib/body-textures.ts); `eager: true` loads at build; a test passes its own */
+  textures?: Readonly<Record<string, BodyTexture>>;
   /** body shapes by registry id (default `BODY_SHAPES`, lib/body-shape.ts); a test passes its own */
   shapes?: Readonly<Record<string, BodyShape>>;
   /** where body meshes are loaded from (default `MODEL_ASSETS`, the cache the entity models use) */
@@ -75,8 +82,26 @@ interface Drawn extends SceneBody {
   place?: (origin: THREE.Vector3, t: number) => void;
   /** a body with a detailed mesh (lib/body-shape.ts `MeshShape`): loaded while its disc is big enough, the sphere shows otherwise */
   mesh?: BodyMesh;
+  /** a body with a lazily loaded surface map (lib/body-textures.ts) */
+  tex?: BodyTex;
   /** glyph, label and pick area shown (lib/scope.ts `bodyShown`, set by `applyScope`); false for another planet's moon */
   shown: boolean;
+}
+
+/** The lazily loaded map of one body: requested while its disc is big, released (texture and material disposed) when it is small again. */
+interface BodyTex {
+  file: string;
+  mesh: THREE.Mesh;
+  sun: THREE.Vector3;
+  /** the procedural material set aside while the map material is on the mesh */
+  tinted: THREE.Material | null;
+  held: boolean;
+  /** bumped on every hold and drop: a load that finishes under an older number is discarded */
+  gen: number;
+  /** the normal correction of the procedural material (shared with the map material so the terminator does not jump at the swap) */
+  inv2: THREE.Vector3;
+  /** the file is not there (or no image): not asked for again this session */
+  missing: boolean;
 }
 
 /** The mesh tier of one body: held (referenced in the cache) while its disc is big, attached to the scene once the file has loaded. */
@@ -235,7 +260,7 @@ export class CelestialLayer {
     }
     if (bodyId === 'MOON') this.buildMoon(d);
     else if (bodyId === 'SUN') this.buildSun(d);
-    else if (bodyId !== 'EARTH') this.buildGeneric(d, BODY_MAPS[bodyId]);
+    else if (bodyId !== 'EARTH') this.buildGeneric(d, eagerMap(bodyId, this.env.textures ?? BODY_TEXTURES));
     for (const o of d.objects) {
       o.frustumCulled = false; // positions are huge and re-derived every frame; three's bounding sphere would be stale
       this.scene.add(o);
@@ -253,6 +278,7 @@ export class CelestialLayer {
       (mat?.uniforms?.uTex?.value as THREE.Texture | null | undefined)?.dispose();
       mat?.dispose();
     }
+    d.tex?.tinted?.dispose();
     if (d.bodyId === 'MOON') this.moonMat = null;
   }
 
@@ -366,6 +392,59 @@ export class CelestialLayer {
     };
     if (shape?.kind === 'mesh') d.mesh = { spec: shape, held: false, sphere: mesh, group: null, light: null, ambient: null };
     if (map) this.loadMapTexture(d, mesh, sunFromBody, map.file);
+    else {
+      const spec = textureOf(d.bodyId, this.env.textures ?? BODY_TEXTURES);
+      if (spec && !spec.eager) d.tex = { file: spec.file, mesh, sun: sunFromBody, tinted: null, held: false, gen: 0, missing: false, inv2: mat.uniforms.uInv2.value as THREE.Vector3 };
+    }
+  }
+
+  /**
+   * Surface maps (lib/body-textures.ts): request a body's map while its disc is at least `MAP_LOAD_PX` px (kept until under 40 % of it)
+   * and free it beyond, so only the bodies being looked at hold video memory. A missing file is asked for once. Call with `updateMeshes`.
+   */
+  private updateTextures(fovDeg: number, viewportPx: number): void {
+    if (this.disposed) return;
+    for (const d of this.list) {
+      const t = d.tex;
+      if (!t || t.missing) continue;
+      const dist = Math.hypot(d.rel[0], d.rel[1], d.rel[2]);
+      const px = bodyDiscRadiusPx(d.radiusKm, d.k, dist, fovDeg, viewportPx);
+      const want = d.shown && meshWanted(px === Infinity ? 1e6 : px, MAP_LOAD_PX, t.held);
+      if (want && !t.held) this.holdMap(d, t);
+      else if (!want && t.held) this.dropMap(t);
+    }
+  }
+
+  private holdMap(d: Drawn, t: BodyTex): void {
+    t.held = true;
+    const gen = ++t.gen;
+    const tag = d.bodyId.toLowerCase();
+    this.env.loadTexture(
+      `/textures/${t.file}`,
+      (tex) => {
+        if (this.disposed || d.removed || !t.held || t.gen !== gen) return tex.dispose();
+        const map = this.fitTexture(tex, t.file, tag);
+        t.tinted = t.mesh.material as THREE.Material;
+        t.mesh.material = createMapMaterial(t.sun, map, [t.inv2.x, t.inv2.y, t.inv2.z]);
+      },
+      () => {
+        if (t.gen !== gen) return;
+        t.missing = true;
+        t.held = false;
+        console.info(`[${tag}] ${t.file} is missing: keeping the procedural look (run npm run assets, then reload the page)`);
+      },
+    );
+  }
+
+  private dropMap(t: BodyTex): void {
+    t.held = false;
+    t.gen++;
+    if (!t.tinted) return;
+    const mat = t.mesh.material as THREE.ShaderMaterial;
+    (mat.uniforms.uTex?.value as THREE.Texture | null | undefined)?.dispose();
+    mat.dispose();
+    t.mesh.material = t.tinted;
+    t.tinted = null;
   }
 
   /**
@@ -375,6 +454,7 @@ export class CelestialLayer {
    * the camera still counts by distance only: a disc that big and that near is on screen in practice.
    */
   updateMeshes(fovDeg: number, viewportPx: number): void {
+    this.updateTextures(fovDeg, viewportPx);
     for (const d of this.list) {
       const bm = d.mesh;
       if (!bm) continue;
@@ -451,27 +531,33 @@ export class CelestialLayer {
       `/textures/${file}`,
       (tex) => {
         if (this.disposed || d.removed) return tex.dispose();
-        const img = tex.image as { width: number; height: number };
-        const max = this.env.maxTextureSize();
-        const fit = fitMapSize(img.width, img.height, max);
-        let map = tex;
-        if (fit.scaled) {
-          const canvas = document.createElement('canvas');
-          canvas.width = fit.width;
-          canvas.height = fit.height;
-          canvas.getContext('2d')?.drawImage(img as CanvasImageSource, 0, 0, fit.width, fit.height);
-          tex.dispose();
-          map = new THREE.CanvasTexture(canvas);
-          console.info(`[${tag}] using ${file} scaled from ${img.width} to ${max} px (GPU texture limit)`);
-        } else console.info(`[${tag}] using ${file} (${img.width} x ${img.height})`);
-        map.colorSpace = THREE.NoColorSpace;
-        map.anisotropy = Math.min(8, this.env.maxAnisotropy());
+        const map = this.fitTexture(tex, file, tag);
         const tinted = mesh.material as THREE.Material;
         mesh.material = createMapMaterial(sun, map);
         tinted.dispose();
       },
       () => console.info(`[${tag}] ${file} is missing: tinted ${d.bodyId === 'MARS' ? 'Mars' : 'sphere'} (run npm run assets, then reload the page)`),
     );
+  }
+
+  /** A loaded map as the sphere uses it: scaled down to the GPU's texture limit, linear colour, anisotropic. */
+  private fitTexture(tex: THREE.Texture, file: string, tag: string): THREE.Texture {
+    const img = tex.image as { width: number; height: number };
+    const max = this.env.maxTextureSize();
+    const fit = fitMapSize(img.width, img.height, max);
+    let map = tex;
+    if (fit.scaled) {
+      const canvas = document.createElement('canvas');
+      canvas.width = fit.width;
+      canvas.height = fit.height;
+      canvas.getContext('2d')?.drawImage(img as CanvasImageSource, 0, 0, fit.width, fit.height);
+      tex.dispose();
+      map = new THREE.CanvasTexture(canvas);
+      console.info(`[${tag}] using ${file} scaled from ${img.width} to ${max} px (GPU texture limit)`);
+    } else console.info(`[${tag}] using ${file} (${img.width} x ${img.height})`);
+    map.colorSpace = THREE.NoColorSpace;
+    map.anisotropy = Math.min(8, this.env.maxAnisotropy());
+    return map;
   }
 
   private loadMoonTexture(mat: THREE.ShaderMaterial): void {
@@ -553,6 +639,14 @@ export class CelestialLayer {
     this.disposed = true;
     this.disposeMarkers();
     for (const d of this.drawn.values()) {
+      if (d.tex) {
+        this.dropMap(d.tex);
+        d.tex.missing = true;
+      }
+      for (const o of d.objects) {
+        const m = (o as THREE.Mesh).material as THREE.ShaderMaterial | undefined;
+        (m?.uniforms?.uTex?.value as THREE.Texture | null | undefined)?.dispose();
+      }
       for (const o of d.objects) {
         const mat = (o as THREE.Sprite).material as THREE.SpriteMaterial | undefined;
         if (o instanceof THREE.Sprite) mat?.map?.dispose();
