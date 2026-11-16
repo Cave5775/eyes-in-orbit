@@ -5,7 +5,8 @@ import * as THREE from 'three';
 import { bodyEntityRecords, defaultBodies, NO_ROTATION } from '@eio/core';
 import { BODY_TEXTURES, MAP_LOAD_PX, textureCredits, textureOf, textureU } from '../src/lib/body-textures';
 import { refPositionEci, refRadiusKm } from '../src/lib/ref-body';
-import { CelestialLayer, createMapSphere } from '../src/scene/celestial';
+import { CelestialLayer, createMapSphere, type MapEnv } from '../src/scene/celestial';
+import { createBodyMaterial, createMapMaterial } from '../src/scene/materials';
 
 const repo = resolve(__dirname, '../../..');
 const read = (p: string) => readFileSync(resolve(repo, p), 'utf8');
@@ -92,9 +93,9 @@ describe('lazy loading of a body map in the celestial layer', () => {
   const focal = VP / (2 * Math.tan((FOV * Math.PI) / 360));
   const camAt = (id: string, px: number) => new THREE.Vector3(...refPositionEci(id, T0)).add(new THREE.Vector3(refRadiusKm(id) / (px / focal), 0, 0));
 
-  function make(loadTexture: (url: string, ok: (t: THREE.Texture) => void, fail: () => void) => void, ids = ['body-io']) {
+  function make(loadTexture: (url: string, ok: (t: THREE.Texture) => void, fail: () => void) => void, ids = ['body-io'], extra: Partial<MapEnv> = {}) {
     const scene = new THREE.Scene();
-    const layer = new CelestialLayer(scene, new THREE.Vector3(1, 0, 0), { loadTexture });
+    const layer = new CelestialLayer(scene, new THREE.Vector3(1, 0, 0), { loadTexture, ...extra });
     layer.setBodies(bodyEntityRecords().filter((r) => ids.includes(r.id)));
     const sphereOf = (id: string) => scene.children.find((o) => (o as THREE.Mesh).isMesh && Math.abs(((o as THREE.Mesh).geometry as THREE.SphereGeometry).parameters.radius - refRadiusKm(id)) < 1e-6) as THREE.Mesh;
     return { scene, layer, io: sphereOf('IO'), jupiter: sphereOf('JUPITER') };
@@ -156,6 +157,54 @@ describe('lazy loading of a body map in the celestial layer', () => {
     finish?.();
     expect(dispose).toHaveBeenCalled();
     expect((io.material as THREE.ShaderMaterial).uniforms.uTint).toBeDefined();
+  });
+
+  it('the eager flag is the one switch: an eager body other than Mars loads at build, a lazy one does not', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const urls: string[] = [];
+    const entry = { file: 'io.jpg', layout: 'centred-east' as const, credit: 'test credit line' };
+    make((u) => { urls.push(u); }, ['body-io'], { textures: { IO: { ...entry, eager: true } } });
+    expect(urls).toEqual(['/textures/io.jpg']);
+    urls.length = 0;
+    make((u) => { urls.push(u); }, ['body-io'], { textures: { IO: entry } });
+    expect(urls).toEqual([]);
+  });
+
+  it('the map material takes the same normal correction as the tinted one (same uniform, same shader line), for the oblate giants and the ellipsoids', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const { layer, jupiter } = make((_u, ok) => ok(tex()), ['body-jupiter']);
+    const tinted = jupiter.material as THREE.ShaderMaterial;
+    const f = defaultBodies.get('JUPITER').flattening;
+    expect(tinted.uniforms.uInv2.value.toArray()).toEqual([1, 1, expect.closeTo(1 / ((1 - f) * (1 - f)), 12)]);
+    layer.update(T0, camAt('JUPITER', MAP_LOAD_PX * 2));
+    layer.updateMeshes(FOV, VP);
+    const mapped = jupiter.material as THREE.ShaderMaterial;
+    expect(mapped).not.toBe(tinted);
+    expect(mapped.uniforms.uInv2.value.toArray()).toEqual(tinted.uniforms.uInv2.value.toArray());
+    const line = 'normalize(mat3(modelMatrix) * (normal * uInv2))';
+    expect(mapped.vertexShader).toContain(line);
+    expect(createBodyMaterial(new THREE.Vector3(1, 0, 0), { color: '#fff' }).vertexShader).toContain(line);
+    expect(createMapMaterial(new THREE.Vector3(1, 0, 0), null, [4, 1, 0.25]).uniforms.uInv2.value.toArray()).toEqual([4, 1, 0.25]);
+  });
+
+  it('dispose() frees a held map and the set-aside material, and later frames request nothing', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const urls: string[] = [];
+    const t = tex();
+    const dispose = vi.spyOn(t, 'dispose');
+    const { layer, io } = make((u, ok) => { urls.push(u); ok(t); });
+    layer.update(T0, camAt('IO', MAP_LOAD_PX * 2));
+    layer.updateMeshes(FOV, VP);
+    const mapped = io.material as THREE.ShaderMaterial;
+    expect(mapped.uniforms.uTex.value).toBe(t);
+    const matDispose = vi.spyOn(mapped, 'dispose');
+    layer.dispose();
+    expect(dispose).toHaveBeenCalled();
+    expect(matDispose).toHaveBeenCalled();
+    expect((io.material as THREE.ShaderMaterial).uniforms.uTint).toBeDefined();
+    layer.update(T0, camAt('IO', MAP_LOAD_PX * 3));
+    layer.updateMeshes(FOV, VP);
+    expect(urls.length).toBe(1);
   });
 
   it('keeps the flattening of a mapped giant: Jupiter stays squashed along its pole with or without the map', () => {

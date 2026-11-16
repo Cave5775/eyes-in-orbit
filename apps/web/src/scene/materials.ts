@@ -243,24 +243,28 @@ export function createEarthMaterial(sun: THREE.Vector3, texture: THREE.Texture |
 /**
  * Surface of the Moon or Mars lit by the Sun: plain Lambert with a trace of ambient light on the night side. Geometry and
  * UVs follow the Earth's convention (z = pole, +x at the centre of an equirectangular map). Without a texture a grey noise
- * surface is used (clearly procedural, not geography; Mars keeps its tinted material until its map has loaded).
+ * surface is used (clearly procedural, not geography; Mars keeps its tinted material until its map has loaded). `inv2` is the same
+ * normal correction as `createBodyMaterial`'s (1 / s^2 per axis of a squashed or ellipsoidal sphere): the normal is n * inv2 in the
+ * body's own axes, then the model matrix (rotation and scale s) takes it to world, giving R n / s.
  */
-export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | null): THREE.ShaderMaterial {
+export function createMapMaterial(sun: THREE.Vector3, texture: THREE.Texture | null, inv2: readonly [number, number, number] = [1, 1, 1]): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uSun: { value: sun },
       uShade: SHADING,
       uTex: { value: texture },
       uHasTex: { value: texture ? 1 : 0 },
+      uInv2: { value: new THREE.Vector3(inv2[0], inv2[1], inv2[2]) },
     },
     vertexShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_vertex>
+      uniform vec3 uInv2;
       varying vec3 vL; varying vec3 vN; varying vec2 vUv;
       void main() {
         vUv = uv;
         vL = normal;
-        vN = normalize(mat3(modelMatrix) * normal);
+        vN = normalize(mat3(modelMatrix) * (normal * uInv2));
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         #include <logdepthbuf_vertex>
       }`,
@@ -310,7 +314,7 @@ export function createBodyMaterial(sun: THREE.Vector3, style: BodyStyle, inv2: r
       varying vec3 vL; varying vec3 vN;
       void main() {
         vL = normal;
-        vN = normalize(mat3(modelMatrix) * normal * uInv2);
+        vN = normalize(mat3(modelMatrix) * (normal * uInv2));
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         #include <logdepthbuf_vertex>
       }`,

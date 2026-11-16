@@ -72,8 +72,8 @@ export function textureU(eastLonDeg: number, layout: MapLayout = 'centred-east')
 }
 
 /** The map of a registry body, or undefined (it keeps the procedural look). */
-export function textureOf(bodyId: string): BodyTexture | undefined {
-  return BODY_TEXTURES[bodyId];
+export function textureOf(bodyId: string, table: Readonly<Record<string, BodyTexture>> = BODY_TEXTURES): BodyTexture | undefined {
+  return table[bodyId];
 }
 
 /** The distinct credits, in table order, for the README / About text. */

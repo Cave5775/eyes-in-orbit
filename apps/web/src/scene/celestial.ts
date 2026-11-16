@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { EARTH, MARS, MOON, SUN, bodyOf, defaultBodies, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
+import { EARTH, MOON, SUN, bodyOf, defaultBodies, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
 import { bodyFixedToInertial, fitMapSize, poleDirection } from '../lib/body-map';
-import { MAP_LOAD_PX, textureOf } from '../lib/body-textures';
+import { BODY_TEXTURES, MAP_LOAD_PX, textureOf, type BodyTexture } from '../lib/body-textures';
 import { MARKER_BELOW_PX, MARKER_SIZE_PX, bodyStyle, hexRgb } from '../lib/body-style';
 import type { AssetCache } from '../lib/asset-cache';
 import { BODY_SHAPES, MESH_LOAD_PX, baseEllipsoid, ellipsoidScale, meshWanted, type BodyShape, type MeshShape } from '../lib/body-shape';
@@ -21,7 +21,10 @@ import { MODEL_ASSETS, type LoadedGlb } from './models/glb';
  * has loaded (or when it is missing) the body keeps its tinted sphere. Only Mars is loaded eagerly like this; the other bodies
  * with a map (lib/body-textures.ts) load it lazily when their disc is big enough (`updateTextures`) and keep their flattening.
  */
-const BODY_MAPS: Record<string, { body: Body; file: string }> = { MARS: { body: MARS, file: 'mars.jpg' } };
+function eagerMap(bodyId: string, table: Readonly<Record<string, BodyTexture>>): { body: Body; file: string } | undefined {
+  const t = textureOf(bodyId, table);
+  return t?.eager && defaultBodies.has(bodyId) ? { body: defaultBodies.get(bodyId), file: t.file } : undefined;
+}
 
 /** What the layer needs from the renderer and the loader; the defaults are for tests (no GPU). */
 export interface MapEnv {
@@ -35,6 +38,8 @@ export interface MapEnv {
    * behind a body exactly as a satellite is. Absent (tests without a GPU): no markers.
    */
   pointMaterial?: THREE.Material;
+  /** body maps by registry id (default `BODY_TEXTURES`, lib/body-textures.ts); `eager: true` loads at build; a test passes its own */
+  textures?: Readonly<Record<string, BodyTexture>>;
   /** body shapes by registry id (default `BODY_SHAPES`, lib/body-shape.ts); a test passes its own */
   shapes?: Readonly<Record<string, BodyShape>>;
   /** where body meshes are loaded from (default `MODEL_ASSETS`, the cache the entity models use) */
@@ -93,6 +98,8 @@ interface BodyTex {
   held: boolean;
   /** bumped on every hold and drop: a load that finishes under an older number is discarded */
   gen: number;
+  /** the normal correction of the procedural material (shared with the map material so the terminator does not jump at the swap) */
+  inv2: THREE.Vector3;
   /** the file is not there (or no image): not asked for again this session */
   missing: boolean;
 }
@@ -253,7 +260,7 @@ export class CelestialLayer {
     }
     if (bodyId === 'MOON') this.buildMoon(d);
     else if (bodyId === 'SUN') this.buildSun(d);
-    else if (bodyId !== 'EARTH') this.buildGeneric(d, BODY_MAPS[bodyId]);
+    else if (bodyId !== 'EARTH') this.buildGeneric(d, eagerMap(bodyId, this.env.textures ?? BODY_TEXTURES));
     for (const o of d.objects) {
       o.frustumCulled = false; // positions are huge and re-derived every frame; three's bounding sphere would be stale
       this.scene.add(o);
@@ -386,8 +393,8 @@ export class CelestialLayer {
     if (shape?.kind === 'mesh') d.mesh = { spec: shape, held: false, sphere: mesh, group: null, light: null, ambient: null };
     if (map) this.loadMapTexture(d, mesh, sunFromBody, map.file);
     else {
-      const spec = textureOf(d.bodyId);
-      if (spec && !spec.eager) d.tex = { file: spec.file, mesh, sun: sunFromBody, tinted: null, held: false, gen: 0, missing: false };
+      const spec = textureOf(d.bodyId, this.env.textures ?? BODY_TEXTURES);
+      if (spec && !spec.eager) d.tex = { file: spec.file, mesh, sun: sunFromBody, tinted: null, held: false, gen: 0, missing: false, inv2: mat.uniforms.uInv2.value as THREE.Vector3 };
     }
   }
 
@@ -396,6 +403,7 @@ export class CelestialLayer {
    * and free it beyond, so only the bodies being looked at hold video memory. A missing file is asked for once. Call with `updateMeshes`.
    */
   private updateTextures(fovDeg: number, viewportPx: number): void {
+    if (this.disposed) return;
     for (const d of this.list) {
       const t = d.tex;
       if (!t || t.missing) continue;
@@ -417,7 +425,7 @@ export class CelestialLayer {
         if (this.disposed || d.removed || !t.held || t.gen !== gen) return tex.dispose();
         const map = this.fitTexture(tex, t.file, tag);
         t.tinted = t.mesh.material as THREE.Material;
-        t.mesh.material = createMapMaterial(t.sun, map);
+        t.mesh.material = createMapMaterial(t.sun, map, [t.inv2.x, t.inv2.y, t.inv2.z]);
       },
       () => {
         if (t.gen !== gen) return;
@@ -631,6 +639,14 @@ export class CelestialLayer {
     this.disposed = true;
     this.disposeMarkers();
     for (const d of this.drawn.values()) {
+      if (d.tex) {
+        this.dropMap(d.tex);
+        d.tex.missing = true;
+      }
+      for (const o of d.objects) {
+        const m = (o as THREE.Mesh).material as THREE.ShaderMaterial | undefined;
+        (m?.uniforms?.uTex?.value as THREE.Texture | null | undefined)?.dispose();
+      }
       for (const o of d.objects) {
         const mat = (o as THREE.Sprite).material as THREE.SpriteMaterial | undefined;
         if (o instanceof THREE.Sprite) mat?.map?.dispose();
