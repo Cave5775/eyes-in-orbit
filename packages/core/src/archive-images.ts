@@ -106,3 +106,116 @@ export function mastTargetOf(bodyId: string): string | null {
   const id = bodyId.toUpperCase();
   return ['JUPITER', 'SATURN', 'MARS', 'URANUS', 'NEPTUNE', 'PLUTO', 'CERES', 'ERIS', 'HAUMEA', 'MAKEMAKE'].includes(id) ? id : null;
 }
+
+// ---- MAST (Hubble, JWST): response rows and their selection. Pure, so the web mock builds its answer from a real response the same way.
+
+const MAST_DOWNLOAD = 'https://mast.stsci.edu/api/v0.1/Download/file';
+const MAST_PORTAL = 'https://mast.stsci.edu/portal/Mashup/Clients/Mast/Portal.html';
+/** At most this many previews of one observing day (a visit has dozens of exposures of one scene). */
+export const PER_DAY_CAP = 6;
+
+const MJD_UNIX_EPOCH = 40587;
+export const mjdToMs = (mjd: number): number => Math.round((mjd - MJD_UNIX_EPOCH) * 86_400_000);
+export const msToMjd = (ms: number): number => ms / 86_400_000 + MJD_UNIX_EPOCH;
+
+export interface MastRow extends ArchiveImage {
+  /** CAOM calibration level (3 = combined product, 2 = calibrated, 1 = raw) */
+  calib: number;
+}
+
+/** A preview jpeg of a `mast:` URI (the CAOM `jpegURL`); an image needs no CORS, so the browser loads it from MAST itself. */
+export const previewUrl = (jpegUri: string): string => `${MAST_DOWNLOAD}?uri=${encodeURIComponent(jpegUri)}`;
+export const portalUrl = (obsId: string): string => `${MAST_PORTAL}?searchQuery=${encodeURIComponent(obsId)}`;
+
+export interface MastParsed {
+  rows: MastRow[];
+  /** rows the archive matched (can exceed the page) */
+  total: number;
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+
+/** Rows with a preview jpeg from a `Mast.Caom.Filtered` JSON answer. Throws on a wrong shape or a status other than COMPLETE. */
+export function parseMast(text: string): MastParsed {
+  let j: { status?: unknown; msg?: unknown; data?: unknown; paging?: { rowsFiltered?: unknown } };
+  try {
+    j = JSON.parse(text);
+  } catch {
+    throw new Error('MAST returned unexpected non-JSON text');
+  }
+  if (!j || j.status !== 'COMPLETE' || !Array.isArray(j.data)) throw new Error(`MAST returned unexpected status ${String(j?.status)}${j?.msg ? `: ${String(j.msg)}` : ''}`);
+  const rows: MastRow[] = [];
+  for (const d of j.data as Record<string, unknown>[]) {
+    const jpeg = str(d.jpegURL), obsId = str(d.obs_id);
+    if (!jpeg || !obsId || typeof d.t_min !== 'number' || !Number.isFinite(d.t_min)) continue;
+    const program = d.proposal_id === undefined || d.proposal_id === null ? '' : String(d.proposal_id).trim();
+    rows.push({
+      id: obsId, thumbUrl: previewUrl(jpeg), fullUrl: previewUrl(jpeg), pageUrl: portalUrl(obsId), tMs: mjdToMs(d.t_min),
+      instrument: str(d.instrument_name), filters: str(d.filters),
+      ...(typeof d.t_exptime === 'number' ? { exposureS: d.t_exptime } : {}),
+      ...(program ? { program } : {}),
+      calib: typeof d.calib_level === 'number' ? d.calib_level : 0,
+    });
+  }
+  const total = typeof j.paging?.rowsFiltered === 'number' ? j.paging.rowsFiltered : j.data.length;
+  return { rows, total };
+}
+
+const day = (tMs: number): number => Math.floor(tMs / 86_400_000);
+
+/**
+ * Newest first, near-identical exposures removed: one row per day, instrument and filter (the same scene exposed again; the
+ * higher calibration level wins, then the longer exposure), then at most `PER_DAY_CAP` of one day, at most `cap` rows.
+ */
+export function selectImages(rows: readonly MastRow[], cap = ARCHIVE_IMAGE_CAP): ArchiveImage[] {
+  const best = new Map<string, MastRow>();
+  for (const r of rows) {
+    const k = `${day(r.tMs)}|${r.instrument}|${r.filters}`;
+    const b = best.get(k);
+    if (!b || r.calib > b.calib || (r.calib === b.calib && (r.exposureS ?? 0) > (b.exposureS ?? 0))) best.set(k, r);
+  }
+  const sorted = [...best.values()].sort((a, b) => b.tMs - a.tMs || (a.id < b.id ? -1 : 1));
+  const perDay = new Map<number, number>();
+  const out: ArchiveImage[] = [];
+  for (const r of sorted) {
+    const d = day(r.tMs), n = perDay.get(d) ?? 0;
+    if (n >= PER_DAY_CAP) continue;
+    perDay.set(d, n + 1);
+    const { calib: _calib, ...img } = r;
+    out.push(img);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+const cap1 = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase();
+
+/** How far back observations are asked for, years. */
+export const WINDOW_YEARS = 4;
+
+/**
+ * What an ask resolves to before any request: a final answer (`unsupported`: no archive or no preview service for this
+ * observatory; `none`: the archive holds no images of this body as a target), or the MAST query to run.
+ */
+export function planArchiveAsk(
+  obs: { id: string; name: string; aliases?: Record<string, string> }, bodyId: string, now: number,
+): { done: ArchiveImagesResult } | { ask: { spec: ArchiveSpec; collection: 'HST' | 'JWST'; target: string; base: ArchiveImagesResult } } {
+  const body = bodyId.toUpperCase();
+  const base: ArchiveImagesResult = { observatoryId: obs.id, observatory: obs.name, body, archive: null, status: 'unsupported', images: [], fetchedAt: now };
+  const spec = archiveOf(obs);
+  if (!spec) return { done: { ...base, reason: `No public image archive is mapped to ${obs.name}.` } };
+  const archive = { id: spec.id, label: spec.label, url: spec.url };
+  if (!spec.mastCollection) return { done: { ...base, archive, reason: spec.unsupported ?? `${spec.label} has no public preview service here.` } };
+  const target = mastTargetOf(body);
+  if (!target) return { done: { ...base, archive, status: 'none', reason: `${spec.label} holds no images of ${cap1(body)} as an observation target.` } };
+  return { ask: { spec, collection: spec.mastCollection, target, base: { ...base, archive } } };
+}
+
+/** The answer for the rows MAST returned: `ok` with the selection, or `none` with a reason. */
+export function archiveAnswer(base: ArchiveImagesResult, spec: ArchiveSpec, target: string, parsed: MastParsed): ArchiveImagesResult {
+  const images = selectImages(parsed.rows);
+  const out = { ...base, images, total: parsed.total };
+  return images.length
+    ? { ...out, status: 'ok' }
+    : { ...out, status: 'none', reason: `${spec.label} has no preview images of ${cap1(target)} from the last ${WINDOW_YEARS} years.` };
+}
