@@ -2,6 +2,7 @@ import type { CredentialInfo } from '@eio/core';
 import type { Api } from '../api/types';
 import { rankEntities } from '../lib/filters';
 import { pageSlice } from '../lib/paging';
+import { mockArchiveImages } from './archive-images';
 import { mockDescription } from './describe';
 import {
   mockAscentSeries, mockBodies, mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockObservatories, mockSatellites,
@@ -55,6 +56,11 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
       const rec = entities.find((e) => e.id === entityId);
       if (!rec) throw new Error(`unknown entity ${entityId}`);
       return mockDescription(rec);
+    },
+    archiveImages: async (observatoryId, bodyId) => {
+      const rec = entities.find((e) => e.id === observatoryId);
+      if (!rec) throw new Error(`unknown entity ${observatoryId}`);
+      return mockArchiveImages(rec, bodyId);
     },
     iss: async () => ({
       fix: issOmm ? mockIssFix(issOmm, Date.now()) : undefined,
