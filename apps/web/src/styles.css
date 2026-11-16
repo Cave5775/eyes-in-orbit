@@ -820,11 +820,15 @@ video.stream-frame { background: #000; object-fit: contain; }
 .sky-msg { position: absolute; left: 0; right: 0; top: 46px; padding: 8px 14px; font-size: 12px; color: var(--ink-2); z-index: 3; background: rgba(0, 0, 0, 0.6); }
 .sky-err { color: var(--ink); }
 .sky-bar {
-  position: absolute; left: 10px; top: 10px; z-index: 3; display: flex; align-items: center; gap: 4px 8px; max-width: calc(100% - 130px); /* where the frame bar is while the scene shows */
+  position: absolute; left: 10px; top: 10px; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: calc(100% - 150px); /* where the Back button and the frame bar are: on a narrow scene the bar wraps instead of running under them */
   padding: 3px 6px; background: rgba(0, 0, 0, 0.62); font-size: 10.5px; font-stretch: var(--narrow); color: var(--ink-2);
 }
-.sky-select { max-width: 60vw; font-size: 10.5px; background: var(--hull-2); color: var(--ink); border: 1px solid var(--rule-2); }
+.sky-select { max-width: min(60vw, 100%); min-width: 0; flex: 0 1 auto; font-size: 10.5px; background: var(--hull-2); color: var(--ink); border: 1px solid var(--rule-2); }
 .sky-credit { white-space: nowrap; }
+.sky-follow { font-size: 10.5px; padding: 1px 7px; background: var(--hull-2); color: var(--ink-2); border: 1px solid var(--rule-2); cursor: pointer; }
+.sky-follow[aria-pressed='true'] { color: var(--ink); border-color: var(--ink-2); }
+.sky-notes { flex: 1 0 100%; display: flex; flex-direction: column; gap: 2px; } /* a row of its own under the survey picker, inside the bar */
+.sky-note { font-size: 10.5px; line-height: 1.35; color: var(--ink-2); }
 .sky-status, .sky-error {
   position: absolute; top: 48px; left: 10px; z-index: 4; max-width: min(520px, calc(100% - 20px)); padding: 5px 10px; /* under the frame bar and the camera tools */
   font-size: 11.5px; color: var(--ink); background: rgba(var(--hull-rgb), 0.9); border: 1px solid var(--rule-2);

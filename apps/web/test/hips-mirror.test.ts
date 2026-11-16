@@ -76,11 +76,13 @@ describe('current mirror', () => {
 });
 
 describe('survey list', () => {
-  it('every survey has https servers, CDS first', () => {
+  it('every survey has servers (every survey is listed over https: the browser cannot use http servers without CORS), no trailing slash, and the servers that answered on 2026-11-16 come before CDS', () => {
     for (const s of SURVEYS) {
       expect(s.urls.length).toBeGreaterThan(0);
-      expect(s.urls[0]).toMatch(/^https:\/\/alasky\.cds\.unistra\.fr\//);
-      for (const u of s.urls) expect(u).toMatch(/^https:\/\/[^/]+\/\S+[^/]$/);
+      for (const u of s.urls) expect(u, s.id).toMatch(/^https:\/\/[^/]+\/\S+[^/]$/);
+      const firstCds = s.urls.findIndex((u) => /cds\.unistra\.fr/.test(u));
+      const answering = s.urls.findIndex((u) => /irsa\.ipac|casda|stpubdata|cdaftp|padc-web|surveys\.roe|xcatdb/.test(u));
+      if (firstCds >= 0 && answering >= 0) expect(answering, s.id).toBeLessThan(firstCds);
     }
   });
 });

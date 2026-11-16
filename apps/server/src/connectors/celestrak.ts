@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { HUBBLE_NORAD, observatoryAttrs, type Omm, type StreamLink } from '@eio/core';
+import { FERMI_NORAD, HUBBLE_NORAD, SPACE_OBSERVATORY_META, XMM_NORAD, observatoryAttrs, type Omm, type StreamLink } from '@eio/core';
 import { clearBackoff, isBackedOff, isBlockError, isConnectError, readBackoff, recordFailure } from '../backoff';
 import type { Connector, ConnectorContext } from '../connector';
 import type { NewEntity } from '../hub';
@@ -108,8 +108,17 @@ export function satelliteEntity(omm: Omm, sourceGroup: SatGroup): NewEntity {
   }
   if (norad === HUBBLE_NORAD) {
     // Hubble: an optical/UV/near-infrared observatory (CelesTrak `active` group, NORAD 20580 = 1990-037B)
-    rec.attrs = observatoryAttrs({ site: 'space', bands: ['optical', 'ultraviolet', 'near-infrared'], survey: 'CDS/P/DSS2/color' });
+    rec.attrs = observatoryAttrs(SPACE_OBSERVATORY_META.hubble);
     rec.links = { newsQuery: 'Hubble Space Telescope' };
+  }
+  // XMM-Newton (1999-066A, NORAD 25989) and Fermi (2008-029A, NORAD 33053): both in the `active` group
+  if (norad === XMM_NORAD) {
+    rec.attrs = observatoryAttrs(SPACE_OBSERVATORY_META.xmm);
+    rec.links = { newsQuery: 'XMM-Newton' };
+  }
+  if (norad === FERMI_NORAD) {
+    rec.attrs = observatoryAttrs(SPACE_OBSERVATORY_META.fermi);
+    rec.links = { newsQuery: 'Fermi Gamma-ray Space Telescope' };
   }
   return rec;
 }

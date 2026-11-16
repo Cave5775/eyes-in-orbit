@@ -1,7 +1,7 @@
 import { observatoryAttrs, type EntityRecord } from '@eio/core';
 import { describe, expect, it } from 'vitest';
 import { categoryOf, matchesType, normaliseType } from '../src/lib/browser-ui';
-import { DEFAULT_SPACE_TARGET, SURVEYS, fmtLatLon, observatoryRows, skyTarget } from '../src/lib/observatories';
+import { DEFAULT_SPACE_TARGET, FALLBACK_SURVEYS, SURVEYS, coverageNote, fmtLatLon, fmtSkyPercent, observatoryRows, skyTarget, surveyOf, surveyPlan } from '../src/lib/observatories';
 import { classify, termFromWord, type Query } from '../src/lib/query';
 import { lstRad, precessFromJ2000 } from '../src/lib/sky-frame';
 import { mockGroundAndProbes, mockObservatories } from '../src/mock/generators';
@@ -13,11 +13,12 @@ describe('observatory rows', () => {
   const rows = observatoryRows(all());
   const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
 
-  it('mock mode lists every observatory of the plan: telescopes, DSN complexes and the three ground sites', () => {
-    for (const id of ['dsn-JWST', 'sat-20580', 'dsn-CHDR', 'dsn-TESS', 'dsn-goldstone', 'dsn-madrid', 'dsn-canberra', 'obs-maunakea', 'obs-paranal', 'obs-rubin']) {
+  it('mock mode lists every observatory of the plan: telescopes, DSN complexes and the ten ground sites', () => {
+    for (const id of ['dsn-JWST', 'sat-20580', 'dsn-CHDR', 'dsn-TESS', 'dsn-EUCL', 'sat-25989', 'sat-33053', 'dsn-goldstone', 'dsn-madrid', 'dsn-canberra',
+      'obs-maunakea', 'obs-paranal', 'obs-rubin', 'obs-haleakala', 'obs-apachepoint', 'obs-vla', 'obs-kittpeak', 'obs-ctio', 'obs-sidingspring', 'obs-palomar']) {
       expect(byId[id], id).toBeDefined();
     }
-    expect(rows).toHaveLength(10);
+    expect(rows).toHaveLength(20);
     expect(byId['dsn-VGR1']).toBeUndefined();
   });
 
@@ -36,9 +37,49 @@ describe('observatory rows', () => {
     expect(fmtLatLon(19.8207, -155.4681)).toBe('19.82°N 155.47°W');
   });
 
-  it('every survey id is a CDS HiPS id and the default of each observatory is offered', () => {
-    for (const s of SURVEYS) expect(s.id).toMatch(/^CDS\/P\//);
-    for (const r of rows) if (r.meta.survey) expect(SURVEYS.map((s) => s.id)).toContain(r.meta.survey);
+  it('every survey of every observatory is offered, and each observatory with imagery has at least one', () => {
+    for (const r of rows) {
+      expect(r.imagery, r.id).toBe(r.meta.surveys.length > 0);
+      for (const id of r.meta.surveys) expect(surveyOf(id), r.id + ' ' + id).toBeDefined();
+    }
+    const ids = SURVEYS.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const s of SURVEYS) {
+      expect(s.skyFraction, s.id).toBeGreaterThan(0);
+      expect(s.skyFraction, s.id).toBeLessThanOrEqual(1);
+    }
+    for (const id of FALLBACK_SURVEYS) expect(surveyOf(id)?.skyFraction, id).toBeGreaterThan(0.5);
+  });
+
+  it('an observatory whose survey attribute has only unknown ids has no imagery', () => {
+    const rec = { id: 'x', name: 'X', kind: 'ground_station', attrs: observatoryAttrs({ site: 'ground', bands: ['optical'], surveys: ['no/such/survey'] }) } as unknown as EntityRecord;
+    expect(observatoryRows([rec])[0].imagery).toBe(false);
+  });
+
+  it('each observatory starts with surveys of its own instruments (the default is its first)', () => {
+    expect(byId['obs-paranal'].meta.surveys).toEqual(['VOXASTRO/P/VHS/JKs/color', 'CDS/P/VISTA/VIKING/K', 'CDS/P/KiDS/DR5/color-gri']);
+    expect(byId['obs-maunakea'].meta.surveys[0]).toBe('VOXASTRO/P/UKIDSS/JHK/color');
+    expect(byId['obs-haleakala'].meta.surveys).toEqual(['CDS/P/PanSTARRS/DR1/color-i-r-g']);
+    expect(byId['obs-vla'].meta.surveys).toEqual(['CDS/P/NVSS']);
+    expect(byId['dsn-CHDR'].meta.surveys).toEqual(['cxc.harvard.edu/P/cda/hips/allsky/rgb']);
+    expect(byId['sat-20580'].meta.surveys[0]).toBe('CDS/P/HST/color');
+  });
+
+  it('the survey plan is the own list (known ids) then the all-sky fallbacks without repeats', () => {
+    const p = surveyPlan(['CDS/P/HST/color', 'nonsense', 'CDS/P/DSS2/color']);
+    expect(p.own).toEqual(['CDS/P/HST/color', 'CDS/P/DSS2/color']);
+    expect(p.fallbacks).toEqual(FALLBACK_SURVEYS.filter((id) => id !== 'CDS/P/DSS2/color'));
+    expect(surveyPlan([]).own).toEqual([]);
+    expect(surveyPlan([]).fallbacks).toEqual([...FALLBACK_SURVEYS]);
+  });
+
+  it('says how little of the sky a pointed survey covers, and nothing for an all-sky one', () => {
+    expect(coverageNote(surveyOf('CDS/P/HST/color'))).toBe('Hubble colour covers 0.18% of the sky; outside its footprint the view is empty (black).');
+    expect(coverageNote(surveyOf('CDS/P/JWST/F200W'))).toMatch(/covers 0\.0010% of the sky/);
+    expect(coverageNote(surveyOf('CDS/P/DSS2/color'))).toBeNull();
+    expect(coverageNote(surveyOf('CDS/P/PanSTARRS/DR1/color-i-r-g'))).toBeNull();
+    expect(coverageNote(undefined)).toBeNull();
+    expect([0.0018, 0.105, 0.0219, 3.4e-5].map(fmtSkyPercent)).toEqual(['0.18%', '11%', '2.2%', '0.0034%']);
   });
 });
 
@@ -74,7 +115,10 @@ describe('sky target', () => {
 describe('observatories in categories and tags', () => {
   const recs = all();
   const rec = (id: string) => recs.find((e) => e.id === id)!;
-  const OBS_IDS = ['dsn-CHDR', 'dsn-JWST', 'dsn-TESS', 'dsn-canberra', 'dsn-goldstone', 'dsn-madrid', 'obs-maunakea', 'obs-paranal', 'obs-rubin', 'sat-20580'];
+  const OBS_IDS = [
+    'dsn-CHDR', 'dsn-EUCL', 'dsn-JWST', 'dsn-TESS', 'dsn-canberra', 'dsn-goldstone', 'dsn-madrid', 'obs-apachepoint', 'obs-ctio', 'obs-haleakala', 'obs-kittpeak',
+    'obs-maunakea', 'obs-palomar', 'obs-paranal', 'obs-rubin', 'obs-sidingspring', 'obs-vla', 'sat-20580', 'sat-25989', 'sat-33053',
+  ];
 
   it('the observatory attribute does not change the category or colour of the entity', () => {
     expect(categoryOf(rec('obs-rubin'))).toBe('ground');
@@ -88,7 +132,7 @@ describe('observatories in categories and tags', () => {
       expect(normaliseType(v)).toBe('observatory');
       expect(recs.filter((e) => matchesType(e, v)).map((e) => e.id).sort()).toEqual(OBS_IDS);
     }
-    expect(matchesType({ kind: 'satellite', attrs: observatoryAttrs({ site: 'space', bands: [], survey: null }) }, 'observatory')).toBe(true);
+    expect(matchesType({ kind: 'satellite', attrs: observatoryAttrs({ site: 'space', bands: [], surveys: [] }) }, 'observatory')).toBe(true);
     expect(matchesType({ kind: 'satellite' }, 'observatory')).toBe(false);
   });
 

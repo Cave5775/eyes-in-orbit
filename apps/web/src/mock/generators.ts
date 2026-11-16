@@ -1,9 +1,9 @@
 import {
-  GROUND_OBSERVATORIES, HUBBLE_NORAD, OBSERVATORY_GROUP, observatoryAttrs,
+  FERMI_NORAD, GROUND_OBSERVATORIES, HUBBLE_NORAD, OBSERVATORY_GROUP, SPACE_OBSERVATORY_META, XMM_NORAD, observatoryAttrs,
   DEG, EARTH, LL2_STATUS, classifyFeed, MARS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, deriveMissionState,
   missionTimingFor, modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, orbitSegmentsOf, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
-  type Sample, type StreamLink, type TelemetryPoint, type Vec3,
+  type ObservatoryMeta, type Sample, type StreamLink, type TelemetryPoint, type Vec3,
 } from '@eio/core';
 
 /** Deterministic PRNG so mock catalogs are stable between reloads (and testable). */
@@ -372,7 +372,7 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
   const out: EntityRecord[] = STATIONS.map((s) => ({
     id: s.id, name: s.name, kind: 'ground_station', bodyId: 'EARTH', aliases: { dsn: s.code }, group: 'dsn',
     provider: { type: 'geodetic', bodyId: 'EARTH', latDeg: s.lat, lonDeg: s.lon, altKm: 0.5 },
-    render: { colorKey: 'ground', glyph: 'square', label: true }, attrs: observatoryAttrs({ site: 'ground', bands: ['radio'], survey: null }), updatedAt: nowMs,
+    render: { colorKey: 'ground', glyph: 'square', label: true }, attrs: observatoryAttrs({ site: 'ground', bands: ['radio'], surveys: [] }), updatedAt: nowMs,
   }));
 
   const vgr1 = unitFromRaDec(257.9, 12.2);
@@ -387,7 +387,7 @@ export function mockGroundAndProbes(nowMs: number): EntityRecord[] {
     id: 'dsn-JWST', name: 'James Webb Space Telescope', kind: 'probe', bodyId: 'EARTH', aliases: { dsn: 'JWST', horizons: '-170' }, group: 'dsn',
     provider: { type: 'sampled', frame: 'EARTH:inertial', samples: probeSamples(nowMs, (t) => sunDirectionEci(t).map((c) => -c * 1.5e6) as Vec3) },
     links: { newsQuery: 'James Webb Space Telescope' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
-    attrs: { rangeKm: 1.5e6, rtltSec: 10, dataRate: 28_000_000, dish: 'DSS-63', ...observatoryAttrs({ site: 'space', bands: ['infrared'], survey: 'CDS/P/2MASS/color' }) }, updatedAt: nowMs,
+    attrs: { rangeKm: 1.5e6, rtltSec: 10, dataRate: 28_000_000, dish: 'DSS-63', ...observatoryAttrs(SPACE_OBSERVATORY_META.jwst) }, updatedAt: nowMs,
   });
   const mroOrbit = MRO_ORBIT(nowMs);
   out.push({
@@ -434,19 +434,39 @@ export function mockObservatories(nowMs: number): EntityRecord[] {
     makeOmm({ name: 'HST', norad: HUBBLE_NORAD, cospar: '1990-037B', epochMs: nowMs, meanMotion: meanMotionForAlt(540), ecc: 0.0002, incl: 28.47, raan: 120, argp: 90, ma: 40 }),
     'satellite', 'active', 'satellite', nowMs,
   );
-  hst.attrs = observatoryAttrs({ site: 'space', bands: ['optical', 'ultraviolet', 'near-infrared'], survey: 'CDS/P/DSS2/color' });
+  hst.attrs = observatoryAttrs(SPACE_OBSERVATORY_META.hubble);
   out.push(hst);
-  const orbiter = (id: string, code: string, name: string, horizons: string, a: number, e: number, incl: number, bands: string[], survey: string): EntityRecord => {
+  const fermi = satRecord(
+    makeOmm({ name: 'FERMI', norad: FERMI_NORAD, cospar: '2008-029A', epochMs: nowMs, meanMotion: meanMotionForAlt(530), ecc: 0.0012, incl: 25.58, raan: 200, argp: 60, ma: 120 }),
+    'satellite', 'active', 'satellite', nowMs,
+  );
+  fermi.attrs = observatoryAttrs(SPACE_OBSERVATORY_META.fermi);
+  out.push(fermi);
+  // XMM-Newton: a 48 h highly elliptical orbit (illustrative elements, mock only)
+  const xmm = satRecord(
+    makeOmm({ name: 'XMM-NEWTON', norad: XMM_NORAD, cospar: '1999-066A', epochMs: nowMs, meanMotion: 0.5, ecc: 0.7, incl: 70, raan: 100, argp: 90, ma: 30 }),
+    'satellite', 'active', 'satellite', nowMs,
+  );
+  xmm.attrs = observatoryAttrs(SPACE_OBSERVATORY_META.xmm);
+  out.push(xmm);
+  const orbiter = (id: string, code: string, name: string, horizons: string, a: number, e: number, incl: number, meta: ObservatoryMeta): EntityRecord => {
     const el = { a, e, i: incl * DEG, raan: 40 * DEG, argp: 60 * DEG, m0: 1, epochMs: nowMs };
     return {
       id, name, kind: 'probe', bodyId: 'EARTH', aliases: { dsn: code, horizons }, group: 'dsn',
       provider: { type: 'sampled', frame: 'EARTH:inertial', samples: probeSamples(nowMs, (t) => { const s = keplerState(el, EARTH.gm, t); return [...s.r, ...s.v]; }, { pastDays: 3, futureDays: 7, stepMin: 30 }) },
       links: { newsQuery: name }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
-      attrs: observatoryAttrs({ site: 'space', bands, survey }), updatedAt: nowMs,
+      attrs: observatoryAttrs(meta), updatedAt: nowMs,
     };
   };
-  out.push(orbiter('dsn-CHDR', 'CHDR', 'Chandra X-ray Observatory', '-151', 80_900, 0.72, 76, ['x-ray'], 'CDS/P/RASS'));
-  out.push(orbiter('dsn-TESS', 'TESS', 'TESS', '-95', 242_000, 0.55, 40, ['optical', 'near-infrared'], 'CDS/P/DSS2/color'));
+  out.push(orbiter('dsn-CHDR', 'CHDR', 'Chandra X-ray Observatory', '-151', 80_900, 0.72, 76, SPACE_OBSERVATORY_META.chandra));
+  out.push(orbiter('dsn-TESS', 'TESS', 'TESS', '-95', 242_000, 0.55, 40, SPACE_OBSERVATORY_META.tess));
+  // Euclid sits at Sun-Earth L2 like JWST (mock: 1.5 million km opposite the Sun, a little off JWST)
+  out.push({
+    id: 'dsn-EUCL', name: 'Euclid', kind: 'probe', bodyId: 'EARTH', aliases: { dsn: 'EUCL', horizons: '-680' }, group: 'dsn',
+    provider: { type: 'sampled', frame: 'EARTH:inertial', samples: probeSamples(nowMs, (t) => sunDirectionEci(t).map((c, i) => -c * 1.5e6 + (i === 2 ? 3e5 : 0)) as Vec3) },
+    links: { newsQuery: 'Euclid space telescope' }, render: { colorKey: 'probe', glyph: 'diamond', label: true },
+    attrs: observatoryAttrs(SPACE_OBSERVATORY_META.euclid), updatedAt: nowMs,
+  });
   return out;
 }
 
