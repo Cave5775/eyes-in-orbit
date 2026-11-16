@@ -21,6 +21,30 @@ Every object is a point sprite from afar. Closer in, it can get a better shape. 
 - **Failure degrades.** A model that cannot be loaded (missing file, a dev server answering with its HTML page, a bad glb) keeps the placeholder ball (entities) or the sphere / ellipsoid (bodies), logs one line, and is asked again after a minute.
 - **Everything keeps the floating origin.** Models are positioned camera-relative in float64 on the CPU like every other object; a glb is normalised to a unit bounding sphere on load so the file's own units and origin do not matter, then scaled to the radius the registry states.
 
+## Body surface maps
+
+Tier 1 bodies can wear a downloaded global map (`npm run assets`, git-ignored, `apps/web/public/textures/<file>`). The table is `BODY_TEXTURES` in `lib/body-textures.ts`; the downloads are in `scripts/fetch-assets.mjs`. A missing file changes nothing (the body keeps its tinted or banded look and the console says so once).
+
+- **Lifecycle.** Mars loads its map at once (as before); every other body loads it when its disc reaches `MAP_LOAD_PX` (24 px) and frees it (texture and material disposed, the procedural material put back) when the disc falls under 40 % of that, the same hysteresis as the mesh tier. A 2048 x 1024 map is about 11 MB with mipmaps; the GPU's texture limit still scales a map down. A load that finishes after the body left is discarded. A file that is missing is not asked for again that session.
+- **Why downloaded global maps, not a runtime tile stream.** The Earth streams finer DETAIL tiles (NASA GIBS) because it is the one body whose imagery changes daily and that you fly low over. For the other bodies the data is static, the global maps are a few hundred KB, and the USGS WMS would need one request per tile per view with no benefit at the sizes these bodies are usually seen; a runtime stream would add network dependence and a politeness budget for nothing. A tile stream for a close-up of one body (the Moon from LRO, Mars from the same WMS) is the natural extension if a lander-scale view is added.
+- **Orientation.** The registry's IAU rotation (pole, W0, rate: `packages/core/src/bodies.ts`) puts the mesh's +x at the prime meridian with z on the pole; every map is laid out with the prime meridian at the centre column and east to the right (`textureU`, layout `centred-east`: u = 0.5 + east longitude / 360), which is how `createMapSphere` maps it. The USGS layers are declared in the IAU 2015 east-positive planetocentric system, so a WMS request for the box -180..180 returns exactly that. Checked by eye against known features after download: Io's Pele (105 E) sits at 0.79 of the width, Callisto's Valhalla (56 W) at 0.34. Spot checks were done on Mercury, Venus, Io, Callisto, Titan, Rhea, Ceres, Pluto and Triton; Europa, Ganymede, Mimas, Enceladus, Tethys, Dione, Iapetus and Charon rely on the same service's declared CRS and have not been looked at.
+- **Flattening** stays (Jupiter 0.065, Ceres 0.074, applied as a squash of the sphere along the pole; the map shader lights the sphere normal, an error of at most the flattening angle). Mars keeps its older sphere-only treatment.
+
+| Body | Source (layer) | Licence | Native layout, as requested |
+|---|---|---|---|
+| Mars | USGS Astrogeology WMS `mars/mars_simp_cyl.map` MDIM21_color (Viking, 231 m/px) | US government work, no access constraints stated | -180..180 E, 4096 x 2048 |
+| Mercury | USGS WMS `mercury/mercury_simp_cyl.map` MESSENGER (MDIS global mosaic, greyscale) | same | -180..180 E, 2048 x 1024 |
+| Venus | USGS WMS `venus/venus_simp_cyl.map` MAGELLAN_color (Magellan radar, colourised) | same | same |
+| Io | USGS WMS `jupiter/io_simp_cyl.map` SSI_VGR_color (Galileo/Voyager) | same | same |
+| Europa, Ganymede, Callisto | USGS WMS `jupiter/<body>_simp_cyl.map` GALILEO_VOYAGER | same | same |
+| Mimas, Enceladus, Tethys, Dione, Rhea, Iapetus, Titan | USGS WMS `saturn/<body>_simp_cyl.map` (CASSINI or CASSINI_VOYAGER; Titan CASSINI, Mimas falls back to CASSINI_MIMAS_MOSAIC) | same | same |
+| Triton | USGS WMS `neptune/triton_simp_cyl.map` TRITON_VOYAGER2 | same | same; half the globe was never imaged (black) |
+| Ceres | USGS WMS `asteroid_belt/ceres_simp_cyl.map` Ceres_FC_global (Dawn FC) | same | same |
+| Pluto, Charon | USGS WMS `pluto/pluto_simp_cyl.map`, `pluto/charon_simp_cyl.map` NEWHORIZONS_*_MOSAIC | same | same; the unimaged south of Pluto is white |
+| Jupiter | NASA/JPL/Space Science Institute, Cassini cylindrical map PIA07782 (Dec 2000, 3601 x 1801), the Wikimedia Commons copy | NASA imagery, public domain, credit NASA/JPL/SSI | latitude planetocentric, longitude axis west-positive increasing left, 0 at centre, so east is right. No surface: the clouds are a 2000 snapshot and the centre meridian is the nominal System III prime meridian |
+
+The WMS maps' pixel scale is the service's resampling to 2048 px, not the native resolution. Evaluated and rejected: Solar System Scope textures (CC BY 4.0 but the download URLs answer an HTML page to scripts, and the Saturn, Uranus and Neptune maps are artistic rather than mapped); NASA Photojournal direct JPEG URLs (redirect to the new site, the PIA07782 file there carries a title and a labelled grid). Saturn, Uranus and Neptune: no clear-licence cylindrical map found (Cassini saw no stable surface; Voyager 2 saw near-featureless ice giants), so they keep the banded look. Phobos, Deimos, the Uranian moons (Voyager covers one hemisphere only), Eris, Haumea and Makemake (no rotation model in the registry) were not given maps.
+
 ## Adding things
 
 **A round-ish body that needs a better shape (tier 2).** Add an entry to `BODY_SHAPES` in `lib/body-shape.ts`:
