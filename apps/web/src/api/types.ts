@@ -1,5 +1,5 @@
 import type {
-  Article, AscentSeries, ConnectorHealth, CredentialInfo, CredentialKey, Description, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch,
+  ArchiveImagesResult, Article, AscentSeries, ConnectorHealth, CredentialInfo, CredentialKey, Description, DsnSnapshot, EntityRecord, IssArrays, IssFix, Launch,
   TelemetryPoint,
 } from '@eio/core';
 import type { SearchHit } from '../lib/filters';
@@ -16,6 +16,8 @@ export interface Api {
   dsn(): Promise<DsnSnapshot>;
   /** About text of one object (`GET /api/describe/:entityId`): looked up on demand and cached by the server. */
   describe(entityId: string): Promise<Description>;
+  /** Images of a body taken by one observatory, from its public archive (`GET /api/archive-images`); cached by the server. */
+  archiveImages(observatoryId: string, bodyId: string): Promise<ArchiveImagesResult>;
   iss(): Promise<{ fix?: IssFix; telemetry: TelemetryPoint[]; arrays?: IssArrays }>;
   health(): Promise<{ serverTime: number; entityCount: number; connectors: ConnectorHealth[] }>;
   /** Modeled and measured ascent series of a launch (`GET /api/telemetry/:launchId`); null when unknown. */

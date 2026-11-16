@@ -99,6 +99,12 @@ export const LIMITS: Record<string, SourceLimit> = {
     minSpacingMs: 200, perHour: 1000, maxWaitMs: 1000,
     blockOn: { 429: 15 * MIN, 503: 15 * MIN },
   },
+  // MAST archive queries for the Sky view's image card (apps/server/src/archive-images.ts): on demand only, cached 6 h per body
+  mast: {
+    label: 'MAST archive (STScI)', policy: 'unpublished',
+    minSpacingMs: 1500, perHour: 60, demandPerHour: 40,
+    blockOn: { 429: 15 * MIN, 503: 15 * MIN },
+  },
   other: { label: 'Other hosts', policy: 'unpublished', minSpacingMs: 1000, perHour: 120 },
 };
 
@@ -119,6 +125,7 @@ export function sourceForUrl(url: string): string {
   if (is('wikipedia.org') || is('wikidata.org')) return 'wikimedia';
   if (is('esoc.esa.int')) return 'discos';
   if (is('gibs.earthdata.nasa.gov')) return 'gibs';
+  if (is('mast.stsci.edu')) return 'mast';
   return 'other';
 }
 

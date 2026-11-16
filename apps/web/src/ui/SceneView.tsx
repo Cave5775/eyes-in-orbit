@@ -22,6 +22,7 @@ import { useView } from '../state/view';
 import { FrameBar } from './FrameBar';
 import { PickPopup, type PickItem } from './PickPopup';
 import { SkyMarkers } from './SkyMarkers';
+import { SkyArchive } from './SkyArchive';
 import { SkyOverlay } from './SkyOverlay';
 
 /** The colour key: the nine browser categories, each in its own colour (lib/browser-ui.ts, `--c-<category>`), the same as the dots. */
@@ -268,6 +269,7 @@ export function SceneView() {
       <div ref={host} className="scene-host" />
       <div ref={labelHost} className="path-labels" />
       <SkyOverlay annotations={<SkyMarkers />} />
+      <SkyArchive />
       <div ref={tip} className="scene-tip" />
       <div ref={pathTip} className="scene-tip" />
       <div ref={pathDot} className="path-dot" />
