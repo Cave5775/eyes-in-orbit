@@ -444,6 +444,13 @@ button.chip:hover { border-color: var(--ink-3); color: var(--ink); }
 .stream-player { position: relative; margin: 6px 12px; aspect-ratio: 16 / 9; border: 1px solid var(--rule-2); background: #000; overflow: hidden; }
 .stream-frame { position: absolute; inset: 0; display: block; width: 100%; height: 100%; border: 0; }
 .stream-cover { position: absolute; inset: 0; background: transparent; }
+/* wheel zoom: the frame is scaled inside the clipped box; the capture layer takes the wheel (and, zoomed, the drag) the cross-origin iframe would swallow */
+.stream-zoom { position: absolute; inset: 0; transform-origin: 0 0; }
+.stream-zoomcap { position: absolute; inset: 0; background: transparent; }
+.stream-zoomcap.clear-bottom { bottom: 18%; }
+.stream-player.zoomed { cursor: grab; touch-action: none; }
+.stream-player.zoomed:active { cursor: grabbing; }
+.stream-zoom-reset { position: absolute; top: 6px; left: 6px; padding: 2px 8px; font-size: 11px; background: rgba(var(--hull-rgb), 0.85); }
 /* thin strip over the bottom edge: hidden until hover or focus so the picture stays unobstructed */
 .stream-strip {
   position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 6px; padding: 16px 8px 6px;
