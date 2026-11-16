@@ -3,6 +3,7 @@ import { providerOfEmbed, safeHref } from '../lib/stream-url';
 import { YT_ORIGIN, isLiveChannelEmbed, parseWidgetMessage, widgetCommand, widgetListen, withNativeControls, withStart, type WidgetCommand, type WidgetInfo } from '../lib/youtube';
 import { LIVE_SEEK_SECONDS, liveStatus } from '../lib/live';
 import { usePlayerPrefs } from '../state/player';
+import { ZoomBox } from './ZoomBox';
 import { barHeights, barsLit, toggleMute as toggledMute, wheelVolume, type VolumeState } from '../lib/volume';
 
 /**
@@ -29,17 +30,17 @@ export const StreamFrame = memo(function StreamFrame({ url, className = '', auto
       </div>
     );
   }
-  if (provider === 'video') return <VideoPlayer url={url} className={className} autoplay={autoplay} />;
+  if (provider === 'video') return <VideoPlayer key={url} url={url} className={className} autoplay={autoplay} />;
   if (provider === 'twitch' || provider === 'vimeo') {
     return (
-      <div className={`stream-player ${className}`.trim()}>
+      <ZoomBox key={url} className={`stream-player ${className}`.trim()} clearBottom>
         <iframe
           className="stream-frame" src={url} title="Live stream" allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
-      </div>
+      </ZoomBox>
     );
   }
-  return <YouTubeFrame url={url} className={className} />;
+  return <YouTubeFrame key={url} url={url} className={className} />;
 });
 
 /** Whether this browser plays HLS itself (Safari, iOS); other browsers would need a library, which the app does not bundle. */
@@ -62,9 +63,9 @@ function VideoPlayer({ url, className, autoplay }: { url: string; className: str
     );
   }
   return (
-    <div className={`stream-player ${className}`.trim()}>
+    <ZoomBox className={`stream-player ${className}`.trim()} clearBottom>
       <video className="stream-frame" src={url} controls autoPlay={autoplay && url.startsWith('https:')} muted playsInline preload="metadata" />
-    </div>
+    </ZoomBox>
   );
 }
 
@@ -160,10 +161,37 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
   }, [native]);
 
   return (
-    <div
+    <ZoomBox
       className={`stream-player ${hot ? 'hot' : ''} ${className}`.trim()}
-      onMouseEnter={() => setHot(true)}
-      onMouseLeave={() => setHot(false)}
+      boxProps={{ onMouseEnter: () => setHot(true), onMouseLeave: () => setHot(false) }}
+      clearBottom={native}
+      overlay={(
+        <>
+          {native ? (
+            // YouTube's own bar takes the clicks, so no cover; only a small corner button to switch back
+            <button className="btn stream-ctl-toggle" onClick={() => setNative(false)} title="Hide the player's own controls on this player (the player reloads, YouTube cannot switch its control bar live)">Hide controls</button>
+          ) : (
+            <>
+              {/* transparent: the picture stays unobstructed; a click on it reveals the strip */}
+              <div className="stream-cover" onMouseEnter={() => setHot(true)} onClick={() => setHot(true)} />
+              <div className="stream-strip">
+                <button className="btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>{playing ? 'Pause' : 'Play'}</button>
+                <button ref={muteBtn} className="btn vol-btn" onClick={toggleMute} onKeyDown={onVolumeKey} title={`${muted ? 'Unmute' : 'Mute'}; scroll the wheel to change the volume (${muted ? 0 : volume}%)`} aria-label={muted ? 'Unmute' : 'Mute'}>
+                  <span className="vol-bars" aria-hidden="true">
+                    {barHeights().map((h, i) => <span key={i} className={i < lit ? 'on' : ''} style={{ height: `${h * 100}%` }} />)}
+                  </span>
+                </button>
+                {live !== 'hidden' && (
+                  <button className={`btn live-btn ${live}`} onClick={goLive} title={live === 'live' ? 'Playing at the live edge' : 'Behind live or paused: jump to the live edge'}>
+                    <span className="live-dot" aria-hidden="true" />Live
+                  </button>
+                )}
+                <button className="btn" onClick={() => setNative(true)} title="Show the player's own controls (seek bar, quality, captions, fullscreen) on this player (the player reloads, YouTube cannot switch its control bar live)">Controls</button>
+              </div>
+            </>
+          )}
+        </>
+      )}
     >
       <iframe
         ref={frame}
@@ -175,29 +203,6 @@ function YouTubeFrame({ url, className }: { url: string; className: string }) {
         referrerPolicy="strict-origin-when-cross-origin"
         onLoad={onLoad}
       />
-      {native ? (
-        // YouTube's own bar takes the clicks, so no cover; only a small corner button to switch back
-        <button className="btn stream-ctl-toggle" onClick={() => setNative(false)} title="Hide the player's own controls on this player (the player reloads, YouTube cannot switch its control bar live)">Hide controls</button>
-      ) : (
-        <>
-          {/* transparent: the picture stays unobstructed; a click on it reveals the strip */}
-          <div className="stream-cover" onMouseEnter={() => setHot(true)} onClick={() => setHot(true)} />
-          <div className="stream-strip">
-            <button className="btn" onClick={togglePlay} title={playing ? 'Pause' : 'Play'}>{playing ? 'Pause' : 'Play'}</button>
-            <button ref={muteBtn} className="btn vol-btn" onClick={toggleMute} onKeyDown={onVolumeKey} title={`${muted ? 'Unmute' : 'Mute'}; scroll the wheel to change the volume (${muted ? 0 : volume}%)`} aria-label={muted ? 'Unmute' : 'Mute'}>
-              <span className="vol-bars" aria-hidden="true">
-                {barHeights().map((h, i) => <span key={i} className={i < lit ? 'on' : ''} style={{ height: `${h * 100}%` }} />)}
-              </span>
-            </button>
-            {live !== 'hidden' && (
-              <button className={`btn live-btn ${live}`} onClick={goLive} title={live === 'live' ? 'Playing at the live edge' : 'Behind live or paused: jump to the live edge'}>
-                <span className="live-dot" aria-hidden="true" />Live
-              </button>
-            )}
-            <button className="btn" onClick={() => setNative(true)} title="Show the player's own controls (seek bar, quality, captions, fullscreen) on this player (the player reloads, YouTube cannot switch its control bar live)">Controls</button>
-          </div>
-        </>
-      )}
-    </div>
+    </ZoomBox>
   );
 }
