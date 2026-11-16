@@ -840,7 +840,7 @@ video.stream-frame { background: #000; object-fit: contain; }
 @media (prefers-reduced-motion: reduce) { .sky-curtain, .sky-scan { transition: none; } }
 /* archive image card of the Sky view (ui/SkyArchive.tsx): right side, under the camera tools, never over the centre; the lightbox covers the scene area */
 .sky-archive {
-  position: absolute; top: 48px; right: 10px; z-index: 4; width: min(264px, 38%); max-height: calc(100% - 110px); display: flex; flex-direction: column;
+  position: absolute; top: 48px; right: 10px; z-index: 4; width: clamp(176px, 40%, 264px); max-height: calc(100% - 110px); display: flex; flex-direction: column;
   background: rgba(8, 12, 20, 0.86); border: 1px solid var(--rule-2); color: var(--ink);
 }
 .sky-archive-head { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 8px; border-bottom: 1px solid var(--rule); }
@@ -850,12 +850,12 @@ video.stream-frame { background: #000; object-fit: contain; }
 .sky-archive-body { overflow-y: auto; padding: 6px 8px 8px; }
 .sky-archive-note { margin: 0 0 6px; font-size: 11px; line-height: 1.4; color: var(--ink-2); }
 .sky-archive-note.error { color: var(--ink); }
-.sky-archive-grid { list-style: none; margin: 0 0 6px; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.sky-archive-grid { list-style: none; margin: 0 0 6px; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; }
 .sky-archive-grid li { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .sky-archive-thumb { display: block; padding: 0; border: 1px solid var(--rule-2); background: #000; aspect-ratio: 1; cursor: zoom-in; overflow: hidden; }
 .sky-archive-thumb:hover, .sky-archive-thumb:focus-visible { border-color: var(--ink); }
 .sky-archive-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.sky-archive-cap { font-size: 9.5px; line-height: 1.3; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sky-archive-cap { font-size: 9.5px; line-height: 1.3; color: var(--ink-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .sky-archive-link { font-size: 10.5px; color: var(--ink-2); }
 .sky-lightbox { position: absolute; inset: 0; z-index: 7; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.88); }
 .sky-lightbox figure { margin: 0; max-width: calc(100% - 120px); max-height: calc(100% - 24px); display: flex; flex-direction: column; align-items: center; gap: 6px; }

@@ -13,6 +13,6 @@ export function mockArchiveImages(obs: Pick<EntityRecord, 'id' | 'name' | 'alias
   const plan = planArchiveAsk(obs, bodyId, nowMs);
   if ('done' in plan) return plan.done;
   const { spec, collection, target, base } = plan.ask;
-  if (target !== 'JUPITER') return { ...base, status: 'none', reason: `Mock mode holds MAST responses for Jupiter only (${spec.label}).` };
+  if (target !== 'JUPITER') return { ...base, status: 'none', reason: `Mock mode has no saved MAST response for ${target.charAt(0) + target.slice(1).toLowerCase()} (only Jupiter).` };
   return archiveAnswer(base, spec, target, parseMast(RAW[collection]));
 }
