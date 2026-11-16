@@ -1,49 +1,71 @@
 import { DEG } from '@eio/core';
 import type { V3 } from './camera';
-import { lstRad, precessFromJ2000, raDecToAzEl } from './sky-frame';
+import { lstRad, precessDir, raDecToDir } from './sky-frame';
 import { poseFromLook } from './sky-pose';
 
 /**
  * Follow in the Sky view (pure): keep the same altitude and azimuth while the sky turns, like a telescope that does not track.
- * The zenith is the special case (altitude 90). The held direction is fixed in the observer's horizontal frame; at each sim time it
- * is converted to equatorial coordinates of date (`azElToRaDec`, mean sidereal time) and precessed to J2000, which is what Aladin
- * and the HiPS surveys use. The roll stays horizon-up: the local vertical is the screen's up vector. Both go through
- * `poseFromLook`, the function that turns the first-person camera into Aladin's pose, so Follow and the pose the view was
- * entered with agree exactly (the J2000 position angle is the parallactic angle plus the meridian convergence of the
- * precession, about 0.15 deg, which a plain parallactic angle would leave out).
+ * The zenith is the special case (altitude 90). What is held is the view's direction AND its screen-up vector, both as components
+ * on the observer's local east / north / up, so they are fixed in the horizontal frame. At each sim time they are turned back into
+ * vectors of date (the first-person frame, mean sidereal time) and go through `poseFromLook`, the function that turns the
+ * first-person camera into Aladin's pose (centre precessed to J2000 and the position angle of screen-up), so Follow and the pose
+ * the view was entered with agree exactly.
+ *
+ * Why not an azimuth and an altitude: near the zenith the azimuth is undefined (noise of 1e-6 degrees or worse decides it) and a
+ * roll derived from "local up" would be arbitrary there. The up vector is captured from Aladin's own rotation when the hold is
+ * taken, so the roll the person sees is kept (entering from the first-person view it is horizon-up) and is continuous at any altitude.
  *
  * Space telescopes have no horizon and no sky rotation in an inertial frame, so there is nothing to follow for them.
  */
 
-export interface HeldAltAz { azDeg: number; elDeg: number }
+/** The held view in the local frame: unit direction and unit screen-up, components (east, north, up). */
+export interface HeldView { dir: V3; up: V3 }
 
-/** The altitude and azimuth (of date, no refraction) of a J2000 view centre seen from a site at `tMs`: what Follow holds. */
-export function holdFromCentre(raDeg: number, decDeg: number, tMs: number, latDeg: number, lonDeg: number): HeldAltAz {
-  const of = precessFromJ2000(raDeg, decDeg, tMs);
-  const h = raDecToAzEl(of.raDeg, of.decDeg, tMs, latDeg, lonDeg);
-  return { azDeg: h.azDeg, elDeg: h.elDeg };
+interface Local { e: V3; n: V3; u: V3 }
+
+/** The local east / north / up of date, as the first-person view builds them from the mean sidereal time. */
+function localFrame(tMs: number, latDeg: number, lonDeg: number): Local {
+  const L = lstRad(tMs, lonDeg), p = latDeg * DEG;
+  const sL = Math.sin(L), cL = Math.cos(L), sp = Math.sin(p), cp = Math.cos(p);
+  return { e: [-sL, cL, 0], n: [-sp * cL, -sp * sL, cp], u: [cp * cL, cp * sL, sp] };
+}
+
+const dot = (a: V3, b: V3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const toLocal = (v: V3, f: Local): V3 => [dot(v, f.e), dot(v, f.n), dot(v, f.u)];
+const fromLocal = (c: V3, f: Local): V3 => [0, 1, 2].map((i) => c[0] * f.e[i] + c[1] * f.n[i] + c[2] * f.u[i]) as V3;
+
+/**
+ * What Follow holds for a J2000 view centre with screen-up at position angle `rotationDeg` (from north toward east, the
+ * `SkyPose.rotationDeg` convention) seen from a site at `tMs`.
+ */
+export function holdFromCentre(raDeg: number, decDeg: number, rotationDeg: number, tMs: number, latDeg: number, lonDeg: number): HeldView {
+  const ra = raDeg * DEG, dec = decDeg * DEG, r = (Number.isFinite(rotationDeg) ? rotationDeg : 0) * DEG;
+  const d = raDecToDir(raDeg, decDeg);
+  const north: V3 = [-Math.sin(dec) * Math.cos(ra), -Math.sin(dec) * Math.sin(ra), Math.cos(dec)];
+  const east: V3 = [-Math.sin(ra), Math.cos(ra), 0];
+  const upJ: V3 = [0, 1, 2].map((i) => Math.cos(r) * north[i] + Math.sin(r) * east[i]) as V3;
+  const f = localFrame(tMs, latDeg, lonDeg);
+  return { dir: toLocal(precessDir(d, tMs, false), f), up: toLocal(precessDir(upJ, tMs, false), f) };
+}
+
+/** The altitude and azimuth (degrees, azimuth from north through east) of the held direction; for display and tests. */
+export function altAzOf(h: HeldView): { azDeg: number; elDeg: number } {
+  const az = Math.atan2(h.dir[0], h.dir[1]) / DEG;
+  return { azDeg: ((az % 360) + 360) % 360, elDeg: Math.atan2(h.dir[2], Math.hypot(h.dir[0], h.dir[1])) / DEG };
 }
 
 export interface FollowAim {
   /** J2000 centre */
   raDeg: number;
   decDeg: number;
-  /** position angle of screen-up, degrees from north toward east (the `SkyPose.rotationDeg` convention): horizon-up */
+  /** position angle of screen-up, degrees from north toward east (the `SkyPose.rotationDeg` convention) */
   rotationDeg: number;
 }
 
-/** Where the held altitude/azimuth is on the sky at `tMs` (J2000 centre and the horizon-up rotation). */
-export function aimForHold(hold: HeldAltAz, tMs: number, latDeg: number, lonDeg: number): FollowAim {
-  // the local east / north / up of date, as the first-person view builds them from the mean sidereal time
-  const L = lstRad(tMs, lonDeg), p = latDeg * DEG;
-  const sL = Math.sin(L), cL = Math.cos(L), sp = Math.sin(p), cp = Math.cos(p);
-  const e: V3 = [-sL, cL, 0];
-  const n: V3 = [-sp * cL, -sp * sL, cp];
-  const u: V3 = [cp * cL, cp * sL, sp];
-  const az = hold.azDeg * DEG, el = hold.elDeg * DEG;
-  const ce = Math.cos(el), se = Math.sin(el), sa = Math.sin(az), ca = Math.cos(az);
-  const dir: V3 = [ce * sa * e[0] + ce * ca * n[0] + se * u[0], ce * sa * e[1] + ce * ca * n[1] + se * u[1], ce * sa * e[2] + ce * ca * n[2] + se * u[2]];
-  const pose = poseFromLook(dir, tMs, 60, 1, u); // the field and aspect do not enter the centre or the rotation
+/** Where the held view is on the sky at `tMs` (J2000 centre and rotation). */
+export function aimForHold(hold: HeldView, tMs: number, latDeg: number, lonDeg: number): FollowAim {
+  const f = localFrame(tMs, latDeg, lonDeg);
+  const pose = poseFromLook(fromLocal(hold.dir, f), tMs, 60, 1, fromLocal(hold.up, f)); // the field and aspect do not enter the centre or the rotation
   return { raDeg: pose.raDeg, decDeg: pose.decDeg, rotationDeg: pose.rotationDeg };
 }
 
@@ -86,4 +108,31 @@ export function separationDeg(ra1: number, dec1: number, ra2: number, dec2: numb
  */
 export function movedByOthers(aimed: { raDeg: number; decDeg: number }, now: { raDeg: number; decDeg: number }, hFovDeg: number): boolean {
   return separationDeg(aimed.raDeg, aimed.decDeg, now.raDeg, now.decDeg) > 0.02 + 0.002 * (Number.isFinite(hFovDeg) ? hFovDeg : 60);
+}
+
+/**
+ * Guards Follow against reading its own move as somebody else's. Aladin applies `gotoRaDec` at once (checked in 3.8.2: the
+ * centre read right after is the new one, and Follow stayed on across 15 minute steps at a 3600x clock), but a build that applied it on
+ * the next frame would still report the old centre, which a large step puts outside the tolerance. So the tick after an aim is not
+ * checked, and the later ones compare against the place that was aimed at.
+ */
+export class FollowGuard {
+  private at: { raDeg: number; decDeg: number } | null = null;
+  private skip = 0;
+
+  /** Follow aimed the view at `p`. */
+  aimed(p: { raDeg: number; decDeg: number }): void {
+    this.at = { raDeg: p.raDeg, decDeg: p.decDeg };
+    this.skip = 1;
+  }
+
+  /** True when the centre `now` shows that something else moved the view since the last aim. */
+  moved(now: { raDeg: number; decDeg: number } | null, hFovDeg: number): boolean {
+    if (!this.at || !now) return false;
+    if (this.skip > 0) {
+      this.skip--;
+      return false;
+    }
+    return movedByOthers(this.at, now, hFovDeg);
+  }
 }

@@ -7,8 +7,8 @@ import { precessToJ2000, zenithRaDec } from './sky-frame';
  * read 2026-11-13 and 2026-11-15). `urls` are tried in order by lib/hips-mirror.ts (the first whose `properties` file answers wins),
  * the servers that answered on 2026-11-15/16 first and CDS (alasky, alaskybis; their tile paths answered 404 or timed out then)
  * and ESA (skies.esac.esa.int, esdchips.esac.esa.int; timed out) after them, so they work again when those come back. CORS was
- * checked with an Origin header on 2026-11-16 for the CXC, PADC, MAST S3, IRSA and CASDA hosts (open); the ROE/WFAU host answers
- * without CORS headers and over http, so a browser page cannot use it and it is listed alone for its survey.
+ * checked with an Origin header on 2026-11-16 for the CXC, PADC, MAST S3, IRSA and CASDA hosts (open). The ROE/WFAU VHS K survey
+ * (http://surveys.roe.ac.uk, no CORS headers, http) is left out: a browser page cannot use it.
  * Several surveys exist only on CDS or ESA (Hubble, JWST, TESS, Rubin, Euclid, DES, DESI, SkyMapper, ZTF, HSC, KiDS, VIKING,
  * CFHTLS, Fermi, ROSAT): they are unavailable while those are, and the Sky view then falls back (lib/survey-fallback.ts).
  */
@@ -59,10 +59,6 @@ export const SURVEYS: readonly Survey[] = [
   {
     id: 'VOXASTRO/P/VHS/JKs/color', label: 'VISTA VHS J+Ks', band: 'near-infrared', skyFraction: 0.481,
     urls: ['https://padc-web.obspm.fr/planeto/hips/VOXASTRO_P_VHS_COLOR'],
-  },
-  {
-    id: 'wfau.roe.ac.uk/P/VISTA/VHS/K', label: 'VISTA VHS DR7 K', band: 'near-infrared', skyFraction: 0.447,
-    urls: ['http://surveys.roe.ac.uk/hips85/hipsVHS/VHSDR7_K_hips'],
   },
   {
     id: 'CDS/P/VISTA/VIKING/K', label: 'VISTA VIKING K', band: 'near-infrared', skyFraction: 0.0249,
@@ -192,7 +188,7 @@ export function observatoryRows(records: Iterable<EntityRecord>): ObservatoryRow
     const p = r.provider;
     const geo = p && p.type === 'geodetic' ? { latDeg: p.latDeg, lonDeg: p.lonDeg } : undefined;
     rows.push({
-      id: r.id, name: r.name, meta, imagery: meta.surveys.length > 0,
+      id: r.id, name: r.name, meta, imagery: surveyPlan(meta.surveys).own.length > 0,
       place: geo ? fmtLatLon(geo.latDeg, geo.lonDeg) : 'In space', ...geo,
     });
   }

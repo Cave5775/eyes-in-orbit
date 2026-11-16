@@ -51,8 +51,13 @@ describe('observatory rows', () => {
     for (const id of FALLBACK_SURVEYS) expect(surveyOf(id)?.skyFraction, id).toBeGreaterThan(0.5);
   });
 
+  it('an observatory whose survey attribute has only unknown ids has no imagery', () => {
+    const rec = { id: 'x', name: 'X', kind: 'ground_station', attrs: observatoryAttrs({ site: 'ground', bands: ['optical'], surveys: ['no/such/survey'] }) } as unknown as EntityRecord;
+    expect(observatoryRows([rec])[0].imagery).toBe(false);
+  });
+
   it('each observatory starts with surveys of its own instruments (the default is its first)', () => {
-    expect(byId['obs-paranal'].meta.surveys[0]).toBe('VOXASTRO/P/VHS/JKs/color');
+    expect(byId['obs-paranal'].meta.surveys).toEqual(['VOXASTRO/P/VHS/JKs/color', 'CDS/P/VISTA/VIKING/K', 'CDS/P/KiDS/DR5/color-gri']);
     expect(byId['obs-maunakea'].meta.surveys[0]).toBe('VOXASTRO/P/UKIDSS/JHK/color');
     expect(byId['obs-haleakala'].meta.surveys).toEqual(['CDS/P/PanSTARRS/DR1/color-i-r-g']);
     expect(byId['obs-vla'].meta.surveys).toEqual(['CDS/P/NVSS']);

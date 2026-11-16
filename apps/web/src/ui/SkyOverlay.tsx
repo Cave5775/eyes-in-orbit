@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ALADIN_VERSION, MAX_FOV_DEG, type SkyViewPose } from '../lib/aladin';
 import { SURVEYS, coverageNote, observatoryRows, surveyOf, surveyPlan } from '../lib/observatories';
-import { aimForHold, followDue, holdFromCentre, movedByOthers, type HeldAltAz } from '../lib/sky-follow';
+import { FollowGuard, aimForHold, followDue, holdFromCentre, type HeldView } from '../lib/sky-follow';
 import { fallbackNote } from '../lib/survey-fallback';
 import { shouldAim, skyCoversScene } from '../lib/sky-mode';
 import { maxVFovFor, poseFromLook, vFovToHFov } from '../lib/sky-pose';
@@ -79,6 +79,7 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
   const [surveyNote, setSurveyNote] = useState<string | null>(null);
   const [down, setDown] = useState<string[]>([]);
   const [follow, setFollow] = useState(false);
+  const [finding, setFinding] = useState<string | null>(null);
   const pick = useRef(0);
 
   const drv = (): SkyDriver => (driver.current ??= new SkyDriver({ host: host.current!, curtain: curtain.current!, scan: scan.current! }));
@@ -93,6 +94,8 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
     d.setActive(true); // a hidden view is parked: the survey tiles load during the camera blend, so it runs from now on
     const rec = useStore.getState().entities.get(obsId);
     const plan = surveyPlan((rec ? observatoryRows([rec])[0]?.meta.surveys : null) ?? []);
+    pick.current++; // a picker answer still waiting from before is stale
+    setFinding(null);
     setSurvey(plan.own[0] ?? plan.fallbacks[0]);
     setSurveyError(null);
     setSurveyNote(null);
@@ -127,6 +130,7 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
     }, 50);
     return () => {
       cancelled = true;
+      pick.current++;
       clearInterval(poll);
       d.invalidate(); // a prepare still waiting for the library or a survey server must not touch the view later
     };
@@ -237,27 +241,34 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
     setFollow(isOn && canFollow);
   }, [isOn, canFollow, obsId]);
 
-  // while following: hold the altitude and azimuth the centre has now, re-aim as the sim clock turns the sky
+  // while following: hold the direction and roll the view has now (local frame), re-aim as the sim clock turns the sky
   useEffect(() => {
     if (!isOn || !follow || !canFollow || lat === undefined || lon === undefined) return;
     const d = drv();
-    const v = d.view;
-    const c = v?.center();
-    if (!v || !c) return;
-    const held: HeldAltAz = holdFromCentre(c.raDeg, c.decDeg, clock.now(), lat, lon);
-    let lastSim: number | null = clock.now();
-    let lastReal = performance.now();
-    let aimed = c;
+    let held: HeldView | null = null; // taken on the first tick that has a centre (Aladin may not report one yet)
+    let lastSim: number | null = null;
+    let lastReal = 0;
+    const guard = new FollowGuard();
     const stop = d.watchUser(() => setFollow(false));
     const timer = setInterval(() => {
+      const v = d.view;
+      const cur = v?.center();
+      if (!v || !cur) return;
       const fov = v.fov() ?? 60;
-      const cur = v.center();
-      if (cur && movedByOthers(aimed, cur, fov)) { setFollow(false); return; } // a marker click or anything else moved the view
       const sim = clock.now(), real = performance.now();
+      if (!held) {
+        // Aladin's rotation is minus the position angle of screen-up (lib/aladin.ts aladinRotationDeg)
+        held = holdFromCentre(cur.raDeg, cur.decDeg, -(v.rotation() ?? 0), sim, lat, lon);
+        guard.aimed(cur);
+        lastSim = sim;
+        lastReal = real;
+        return;
+      }
+      if (guard.moved(cur, fov)) { setFollow(false); return; } // a marker click or anything else moved the view
       if (!followDue(lastSim, sim, lastReal, real, fov)) return;
       const a = aimForHold(held, sim, lat, lon);
       v.aim(a.raDeg, a.decDeg, a.rotationDeg);
-      aimed = { raDeg: a.raDeg, decDeg: a.decDeg };
+      guard.aimed(a);
       lastSim = sim;
       lastReal = real;
     }, 100);
@@ -269,15 +280,19 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
   const chooseSurvey = (id: string) => {
     const seq = ++pick.current;
     setSurveyError(null);
+    setFinding(surveyOf(id)?.label ?? id);
     drv().useSurvey(id).then(
-      () => {
+      (applied) => {
         if (seq !== pick.current) return;
+        setFinding(null);
+        if (!applied) return; // overtaken inside the driver: nothing changed
         setSurvey(id);
         setSurveyNote(null);
         setDown((x) => x.filter((y) => y !== id));
       },
       (e: unknown) => {
         if (seq !== pick.current) return;
+        setFinding(null);
         setDown((x) => (x.includes(id) ? x : [...x, id]));
         setSurveyError(e instanceof Error ? e.message : String(e));
       },
@@ -312,8 +327,9 @@ export function SkyOverlay({ annotations }: { annotations?: ReactNode }) {
               </button>
             )}
             <span className="sky-credit">Aladin Lite, CDS</span>
-            {(surveyNote || cover || surveyError) && (
+            {(surveyNote || cover || surveyError || finding) && (
               <div className="sky-notes">
+                {finding && <div className="sky-note" role="status">Finding a server for {finding}...</div>}
                 {surveyError && <div className="sky-note sky-err" role="alert">{surveyError}</div>}
                 {surveyNote && <div className="sky-note" role="status">{surveyNote}</div>}
                 {cover && <div className="sky-note" role="status">{cover}</div>}

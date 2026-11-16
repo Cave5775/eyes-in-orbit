@@ -49,7 +49,7 @@ export async function chooseSurvey<T>(plan: SurveyPlan, probe: (id: string) => P
 }
 
 /** The promise's value, or null when it rejects, resolves null or takes longer than `ms`. */
-function withCap<T>(p: Promise<T | null>, ms: number): Promise<T | null> {
+export function withCap<T>(p: Promise<T | null>, ms: number): Promise<T | null> {
   return new Promise<T | null>((resolve) => {
     const timer = setTimeout(() => resolve(null), ms);
     p.then(

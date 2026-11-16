@@ -140,8 +140,8 @@ describe('SkyDriver.useSurvey', () => {
     await tick();
     const second = d.useSurvey(FERMI);
     await tick();
-    gate[FERMI](); await second;
-    gate[TWOMASS](); await first;
+    gate[FERMI](); expect(await second).toBe(true);
+    gate[TWOMASS](); expect(await first).toBe(false); // overtaken: the caller must not label the survey as switched
     expect(calls).toEqual([['setSurvey', `https://mirror/${FERMI}`]]);
   });
 
@@ -153,8 +153,23 @@ describe('SkyDriver.useSurvey', () => {
     const u = d.useSurvey(TWOMASS);
     await tick();
     d.invalidate();
-    gate[TWOMASS](); await u;
+    gate[TWOMASS](); expect(await u).toBe(false);
     expect(calls).toEqual([]);
+  });
+
+  it('gives up on a survey whose servers do not answer within the cap (the picker is never stuck waiting)', async () => {
+    vi.useFakeTimers();
+    try {
+      const d = new SkyDriver(els);
+      const p = d.prepare(DSS, () => POSE);
+      await vi.advanceTimersByTimeAsync(0); gate[DSS](); await p;
+      const u = d.useSurvey(TWOMASS); // its gate is never opened
+      const assertion = expect(u).rejects.toThrow(/2MASS is unavailable right now/);
+      await vi.advanceTimersByTimeAsync(5000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

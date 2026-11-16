@@ -95,7 +95,7 @@ export const GROUND_OBSERVATORIES: GroundObservatory[] = [
   {
     id: 'obs-paranal', name: 'Paranal Observatory (VLT)', latDeg: -24.62722, lonDeg: -70.40389, altKm: 2.635,
     source: 'https://www.eso.org/public/teles-instr/paranal-observatory/',
-    meta: { site: 'ground', bands: ['optical', 'infrared'], surveys: ['VOXASTRO/P/VHS/JKs/color', 'wfau.roe.ac.uk/P/VISTA/VHS/K', 'CDS/P/VISTA/VIKING/K', 'CDS/P/KiDS/DR5/color-gri'] },
+    meta: { site: 'ground', bands: ['optical', 'infrared'], surveys: ['VOXASTRO/P/VHS/JKs/color', 'CDS/P/VISTA/VIKING/K', 'CDS/P/KiDS/DR5/color-gri'] },
   },
   {
     id: 'obs-rubin', name: 'Vera C. Rubin Observatory', latDeg: -30.24464, lonDeg: -70.74942, altKm: 2.67275,

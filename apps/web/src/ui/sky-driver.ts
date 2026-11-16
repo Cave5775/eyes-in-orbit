@@ -3,7 +3,7 @@ import { createSkyView, loadAladin, type SkyView, type SkyViewPose } from '../li
 import { RequestTokens } from '../lib/sky-mode';
 import { mirrors } from '../lib/hips-mirror';
 import { surveyOf } from '../lib/observatories';
-import { chooseSurvey, type SurveyPlan } from '../lib/survey-fallback';
+import { SURVEY_STAGE_CAP_MS, chooseSurvey, withCap, type SurveyPlan } from '../lib/survey-fallback';
 import { curtainEasing, curtainKeyframes, scanKeyframes, TRANSITION_MS, type SkyTransitionId } from '../lib/sky-transition';
 
 /** The elements the driver works on (rendered by SkyOverlay). */
@@ -92,13 +92,17 @@ export class SkyDriver {
     this.tokens.invalidate();
   }
 
-  /** Switch the survey of the live view; rejects with a readable message when none of its servers answer. A later call or `invalidate` makes it a no-op. */
-  async useSurvey(surveyId: string): Promise<void> {
+  /**
+   * Switch the survey of the live view; rejects with a readable message when none of its servers answers within the cap. Resolves
+   * true when it switched, false when a later call or `invalidate` took over while it waited (nothing was changed).
+   */
+  async useSurvey(surveyId: string): Promise<boolean> {
     const token = this.tokens.take();
     const url = await this.mirrorOf(surveyId);
-    if (!this.tokens.current(token)) return;
+    if (!this.tokens.current(token)) return false;
     if (this.v && this.surveyId !== surveyId) this.v.setSurvey(url);
     this.surveyId = surveyId;
+    return true;
   }
 
   /** The working server of a survey, or null (an unknown id, or no server answers). */
@@ -110,7 +114,7 @@ export class SkyDriver {
   private async mirrorOf(surveyId: string): Promise<string> {
     const s = surveyOf(surveyId) ?? surveyOf(DEFAULT_HIPS_SURVEY);
     if (!s) throw new Error(NO_SURVEY(surveyId));
-    const url = await mirrors.pick(s.id, s.urls);
+    const url = await withCap(mirrors.pick(s.id, s.urls), SURVEY_STAGE_CAP_MS);
     if (!url) throw new Error(NO_SURVEY(s.id));
     return url;
   }
