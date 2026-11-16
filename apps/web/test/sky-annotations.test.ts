@@ -3,7 +3,7 @@ import {
   EARTH, bodyEntityId, bodyEntityRecords, bodyStateEci, moonPositionEci, sunPositionEci, type EntityRecord,
 } from '@eio/core';
 import {
-  behindEarth, belowHorizon, declutter, epochOf, groundObserver, j2000Geocentric, lookDirTo, nearestMarker, selectBodies,
+  behindEarth, belowHorizon, declutter, epochOf, groundObserver, lookDirTo, nearestMarker, selectBodies,
   skyRank, topocentricRaDec, type Placed, type SkyMarker, type SkyObserver,
 } from '../src/lib/sky-annotations';
 import { LABEL_H } from '../src/lib/labels';
@@ -26,10 +26,9 @@ const angleBetween = (a: V3, b: V3) => {
 const GEO: V3 = [0, 0, 0];
 
 describe('epochOf', () => {
-  it('the Sun and the Moon are of date; planets, dwarf planets and moons are J2000 (docs/frames.md)', () => {
-    expect(epochOf('SUN')).toBe('date');
-    expect(epochOf('MOON')).toBe('date');
-    for (const id of ['MARS', 'JUPITER', 'NEPTUNE', 'CERES', 'PLUTO', 'IO', 'TITAN', 'CHARON']) expect(epochOf(id)).toBe('j2000');
+  it('every body is of date in the scene since the heliocentric hop is in the axes of date (docs/frames.md)', () => {
+    // Changed on purpose: planets, dwarf planets and moons used to be 'j2000' (a J2000 orbit against the of-date Earth).
+    for (const id of ['SUN', 'MOON', 'MARS', 'JUPITER', 'NEPTUNE', 'CERES', 'PLUTO', 'IO', 'TITAN', 'CHARON']) expect(epochOf(id)).toBe('date');
   });
 });
 
@@ -107,11 +106,11 @@ describe('topocentricRaDec: the Moon and parallax', () => {
 
   it('a far body (Jupiter, > 4 AU) moves by under 0.01 deg when the observer is on the Earth instead of at its centre', () => {
     for (const t of [Date.UTC(2026, 0, 1), Date.UTC(2026, 6, 1), Date.UTC(2026, 11, 1)]) {
-      const r = j2000Geocentric(bodyStateEci('JUPITER', t).r, t);
+      const r = bodyStateEci('JUPITER', t).r;
       const dist = Math.hypot(...r);
       expect(dist).toBeGreaterThan(4 * 149_597_870.7); // Jupiter is never nearer than 4.2 AU
       for (const obs of [[EARTH.radiusKm, 0, 0], [0, -EARTH.radiusKm, 0], [0, 0, EARTH.radiusKm]] as V3[]) {
-        const shift = sep(topocentricRaDec(r, GEO, t, 'j2000'), topocentricRaDec(r, obs, t, 'j2000'));
+        const shift = sep(topocentricRaDec(r, GEO, t, 'date'), topocentricRaDec(r, obs, t, 'date'));
         expect(shift).toBeLessThan(0.01);
         expect(shift).toBeLessThanOrEqual(Math.asin(EARTH.radiusKm / dist) / DEG + 1e-9);
       }
@@ -119,45 +118,19 @@ describe('topocentricRaDec: the Moon and parallax', () => {
   });
 });
 
-describe('j2000Geocentric: the scene mixes a J2000 planet with an of-date Earth', () => {
+describe('planets are of date in the scene, like the Sun and the Moon (no correction before the direction is taken)', () => {
   it('Venus, Meeus example 33.a, 1992 Dec 20 0h TD: apparent RA 21h04m41.454s, Dec -18d53m16.84s (of date), to 0.02 deg', () => {
     // The offline orbit is Standish's table 1 (arcmin level) and Meeus' place is apparent (light time 7.6 min, aberration 20 arcsec,
-    // nutation) while ours is geometric: 0.02 deg bounds all of that. Without the correction the same place is 0.07 deg off.
+    // nutation) while ours is geometric: 0.02 deg bounds all of that. The scene vector is used as it is (it is of date); the old
+    // `j2000Geocentric` correction would now double-count, and without either the place was 0.07 deg off (J2000 orbit, of-date Sun).
     const t = Date.UTC(1992, 11, 20);
     const expected = { raDeg: hms(21, 4, 41.454), decDeg: dms(-1, 18, 53, 16.84) };
     const venus = bodyStateEci('VENUS', t).r;
-    const fixed = topocentricRaDec(j2000Geocentric(venus, t), GEO, t, 'j2000');
-    const ofDate = precessFromJ2000(fixed.raDeg, fixed.decDeg, t);
+    const j = topocentricRaDec(venus, GEO, t, epochOf('VENUS'));
+    expect(sep(precessFromJ2000(j.raDeg, j.decDeg, t), expected)).toBeLessThan(0.02);
+    // and it is the same place the marker list gives
+    const ofDate = dirToRaDec(venus);
     expect(sep(ofDate, expected)).toBeLessThan(0.02);
-    // without the correction the scene vector is wrong by the precession of the 1 AU Sun vector seen from 0.91 AU
-    const rawJ = topocentricRaDec(venus, GEO, t, 'j2000');
-    const raw = precessFromJ2000(rawJ.raDeg, rawJ.decDeg, t);
-    expect(sep(raw, expected)).toBeGreaterThan(0.04);
-  });
-
-  it('the shift is the precession of the Sun vector: 1 AU * 22 arcmin in 2026, zero at J2000', () => {
-    const t = Date.UTC(2026, 10, 15);
-    const r = bodyStateEci('JUPITER', t).r;
-    const fixed = j2000Geocentric(r, t);
-    const shift = Math.hypot(fixed[0] - r[0], fixed[1] - r[1], fixed[2] - r[2]);
-    const sunDist = Math.hypot(...sunPositionEci(t));
-    // precession in 26.9 years along the ecliptic: 50.29 arcsec/yr (Meeus ch. 21) => the rotation angle of the Sun vector
-    const angle = (50.29 * 26.88) / 3600 * DEG;
-    expect(shift / sunDist).toBeGreaterThan(angle * 0.9);
-    expect(shift / sunDist).toBeLessThan(angle * 1.1);
-    const t0 = Date.UTC(2000, 0, 1, 12);
-    const r0 = bodyStateEci('MARS', t0).r;
-    const f0 = j2000Geocentric(r0, t0);
-    expect(Math.hypot(f0[0] - r0[0], f0[1] - r0[1], f0[2] - r0[2])).toBeLessThan(1e-3);
-  });
-
-  it('works in place', () => {
-    const t = Date.UTC(2026, 3, 1);
-    const r = bodyStateEci('SATURN', t).r;
-    const copy = j2000Geocentric(r, t, [0, 0, 0]);
-    const same = [...r] as V3;
-    expect(j2000Geocentric(same, t, same)).toBe(same);
-    expect(same).toEqual(copy);
   });
 });
 
@@ -330,15 +303,15 @@ describe('selectBodies', () => {
     expect(sep(centre, topocentricRaDec(m, GEO, T, 'date'))).toBeLessThan(1e-9);
   });
 
-  it('the observer own body is whatever the observer says, and J2000 bodies get a consistent J2000 observer', () => {
+  it('the observer own body is whatever the observer says, and a planet is placed like the Sun and the Moon (of date)', () => {
     // an observer on the Moon: the Moon is its own body and dropped, the Earth (a planet, 384,000 km away) is shown
     const out = selectBodies(records, { tMs: T, observer: { r: moonPositionEci(T), bodyId: 'MOON' }, isHidden: none, isStreamed: noStream });
     expect(out.map((m) => m.id)).not.toContain('body-moon');
     expect(Math.abs(out.find((m) => m.id === 'body-earth')!.distKm - Math.hypot(...moonPositionEci(T)))).toBeLessThan(1e-6);
-    // a J2000 body from the geocentre equals topocentricRaDec of the corrected position
+    // a planet from the geocentre equals topocentricRaDec of the scene position (no correction since the scene is of date)
     const geo = selectBodies(records, { tMs: T, observer: { r: [0, 0, 0] }, isHidden: none, isStreamed: noStream });
     const mars = geo.find((m) => m.id === 'body-mars')!;
-    expect(sep(mars, topocentricRaDec(j2000Geocentric(bodyStateEci('MARS', T).r, T), GEO, T, 'j2000'))).toBeLessThan(1e-9);
+    expect(sep(mars, topocentricRaDec(bodyStateEci('MARS', T).r, GEO, T, 'date'))).toBeLessThan(1e-9);
   });
 });
 

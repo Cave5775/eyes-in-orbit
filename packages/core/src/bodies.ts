@@ -1,6 +1,7 @@
 import type { FrameId, KeplerElements } from './types';
 import { DEG, J2000_MS, type Vec3 } from './math';
 import { moonStateEci, sunPositionEci } from './ephemeris';
+import { precessDir } from './precession';
 import type { Sample } from './types';
 
 export type BodyRotation =
@@ -56,15 +57,22 @@ export const SUN: Body = {
 };
 
 /**
- * The Earth relative to the Sun in the shared inertial axes: minus the Sun's geocentric position (`sunPositionEci`, the series
- * the scene draws the Sun and the light with), so every other planet hopped into EARTH:inertial is placed against the SAME Sun
- * the scene draws, not against the rougher mean-element orbit in `EARTH.orbit` (kept as the documented fallback elements).
+ * The Earth relative to the Sun in the Sun's inertial axes (J2000, like every heliocentric state; the frame hop in frames.ts
+ * turns them into the axes of date of `EARTH:inertial`): minus the Sun's geocentric position (`sunPositionEci`, the series the
+ * scene draws the Sun and the light with, a series OF DATE) precessed to J2000, so every other planet hopped into EARTH:inertial
+ * is placed against the SAME Sun the scene draws, not against the rougher mean-element orbit in `EARTH.orbit` (kept as the
+ * documented fallback elements). The hop undoes the precession exactly, so the Earth's geocentric Sun vector stays
+ * `sunPositionEci`. The velocity is the rate of change of that J2000 vector (central difference of the precessed positions).
  */
 function earthInSunFrame(tMs: number): { r: Vec3; v: Vec3 } {
   const half = 30_000;
-  const p = sunPositionEci(tMs), a = sunPositionEci(tMs - half), b = sunPositionEci(tMs + half);
+  const at = (t: number): Vec3 => {
+    const p = sunPositionEci(t);
+    return precessDir([-p[0], -p[1], -p[2]], t, true);
+  };
+  const p = at(tMs), a = at(tMs - half), b = at(tMs + half);
   const span = (2 * half) / 1000;
-  return { r: [-p[0], -p[1], -p[2]], v: [-(b[0] - a[0]) / span, -(b[1] - a[1]) / span, -(b[2] - a[2]) / span] };
+  return { r: p, v: [(b[0] - a[0]) / span, (b[1] - a[1]) / span, (b[2] - a[2]) / span] };
 }
 
 export const EARTH: Body = {

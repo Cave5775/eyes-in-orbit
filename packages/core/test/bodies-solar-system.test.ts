@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   BodyProvider, BodyRegistry, DEFAULT_BODY_LIST, EntityGraph, bodyDepth, bodyEntityRecords, bodyOf, bodyPeriodSec, bodyStateEci,
   bodyStateInParent, compareHierarchy, convert, defaultBodies, entityRank, equatorToInertialMatrix, isBodyEntity, isOrbitable,
-  mulMV, providerFromSpec, setBodyStream, type Sample,
+  mulMV, precessDir, providerFromSpec, setBodyStream, type Sample,
 } from '../src';
 
 const DAY = 86400;
@@ -171,10 +171,12 @@ describe('body entities of the whole system', () => {
       expect(r0, m).toBeGreaterThanOrEqual(b.orbit!.a * (1 - b.orbit!.e) * 0.9999);
       expect(r0, m).toBeLessThanOrEqual(b.orbit!.a * (1 + b.orbit!.e) * 1.0001);
     }
-    // every planet is placed against the Sun the scene draws: planet minus Sun in EARTH:inertial is the planet's own heliocentric state
+    // every planet is placed against the Sun the scene draws: planet minus Sun in EARTH:inertial is the planet's own heliocentric
+    // state (J2000) precessed to the date, since EARTH:inertial is of date (the hop, docs/frames.md)
     for (const p of ['MARS', 'JUPITER', 'NEPTUNE', 'PLUTO']) {
       const rel = bodyStateEci(p, T).r.map((x, k) => x - bodyStateEci('SUN', T).r[k]);
-      expect(dist(rel, bodyStateInParent(defaultBodies.get(p), T, defaultBodies)!.r), p).toBeLessThan(1e-3);
+      const helio = precessDir(bodyStateInParent(defaultBodies.get(p), T, defaultBodies)!.r, T, false);
+      expect(dist(rel, helio), p).toBeLessThan(1e-3);
     }
     // Jupiter is between 4.9 and 5.5 AU from the Sun
     const j = bodyStateEci('JUPITER', T).r.map((x, k) => x - bodyStateEci('SUN', T).r[k]);
