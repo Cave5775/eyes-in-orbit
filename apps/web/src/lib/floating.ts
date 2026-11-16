@@ -129,24 +129,27 @@ export function nextZ(list: readonly FloatWindow[]): number {
 }
 
 /** Bring a window to the front. Returns the same array when it is already on top or not open. */
-export function focusFloatWindow(list: FloatWindow[], url: string, otherZ = 0): FloatWindow[] {
+export function focusFloatWindow(list: FloatWindow[], url: string): FloatWindow[] {
   const target = list.find((f) => f.url === url);
   if (!target) return list;
-  if (target.z > otherZ && list.every((f) => f.z <= target.z)) return list;
-  const z = Math.max(nextZ(list), otherZ + 1);
+  if (list.every((f) => f.z <= target.z)) return list;
+  const z = nextZ(list);
   return list.map((f) => (f.url === url ? { ...f, z } : f));
 }
 
+/** Room for one more stream window? */
+export const canOpenStream = (list: readonly FloatWindow[]): boolean => list.length < MAX_FLOATS;
+
 /**
- * Open a window for `url`. An already open stream is brought to the front instead. Beyond MAX_FLOATS (counting `reserved`
- * windows of another kind, the Sky view; `otherZ` is that window's z, so a new or raised stream goes above it) the list is returned unchanged, as it is for a URL that cannot be floated.
+ * Open a window for `url`. An already open stream is brought to the front instead. Beyond MAX_FLOATS the list is returned
+ * unchanged, as it is for a URL that cannot be floated.
  */
-export function openFloatWindow(list: FloatWindow[], url: string, title: string, vp: Viewport, reserved = 0, otherZ = 0): FloatWindow[] {
+export function openFloatWindow(list: FloatWindow[], url: string, title: string, vp: Viewport): FloatWindow[] {
   if (!isFloatableUrl(url)) return list;
-  if (list.some((f) => f.url === url)) return focusFloatWindow(list, url, otherZ);
-  if (list.length + reserved >= MAX_FLOATS) return list;
+  if (list.some((f) => f.url === url)) return focusFloatWindow(list, url);
+  if (!canOpenStream(list)) return list;
   const rect = defaultRect(vp, list.length);
-  return [...list, { url, title: title.slice(0, 200) || 'Live stream', ...rect, z: Math.max(nextZ(list), otherZ + 1) }];
+  return [...list, { url, title: title.slice(0, 200) || 'Live stream', ...rect, z: nextZ(list) }];
 }
 
 export function closeFloatWindow(list: FloatWindow[], url: string): FloatWindow[] {
@@ -172,11 +175,6 @@ export function toggleMinimized<T extends FloatWindow>(list: T[], url: string, f
   const next = force ?? !f.minimized;
   if (next === !!f.minimized) return list;
   return list.map((w) => (w.url === url ? { ...w, minimized: next } : w));
-}
-
-/** The same toggle for a single window (the Sky view). */
-export function toggleMinimizedOne<T extends FloatWindow>(f: T | null, force?: boolean): T | null {
-  return f ? toggleMinimized([f], f.url, force)[0] : f;
 }
 
 /** Parse persisted windows; anything malformed is dropped, the rest keep their order, at most MAX_FLOATS. */

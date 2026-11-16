@@ -1,38 +1,34 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MAX_FLOATS } from '../src/lib/floating';
+import { MAX_FLOATS, canOpenStream } from '../src/lib/floating';
 import { useStore } from '../src/state/store';
 
 const yt = (i: number) => `https://www.youtube.com/embed/vid${i}`;
 const st = () => useStore.getState();
 
-beforeEach(() => useStore.setState({ floats: [], sky: null }));
+beforeEach(() => useStore.setState({ floats: [] }));
 
-describe('floating windows in the store: streams and the Sky view share the z order and the cap', () => {
-  it('raising a stream puts it above the Sky window and raising the Sky window puts it above the streams', () => {
+describe('floating windows in the store: the stream windows share the z order and the cap', () => {
+  it('raising a stream puts it above the others, and a new stream opens above all', () => {
     expect(st().openFloat(yt(1), 'a')).toBe(true);
-    expect(st().openSky('obs-paranal', 'Sky')).toBe(true);
-    expect(st().sky!.z).toBeGreaterThan(st().floats[0].z);
-    st().focusFloat(yt(1));
-    expect(st().floats[0].z).toBeGreaterThan(st().sky!.z);
-    st().focusSky();
-    expect(st().sky!.z).toBeGreaterThan(st().floats[0].z);
-    // a new stream opens above the Sky window too
     expect(st().openFloat(yt(2), 'b')).toBe(true);
-    const b = st().floats.find((f) => f.url === yt(2))!;
-    expect(b.z).toBeGreaterThan(st().sky!.z);
+    const z = (u: string) => st().floats.find((f) => f.url === u)!.z;
+    expect(z(yt(2))).toBeGreaterThan(z(yt(1)));
+    st().focusFloat(yt(1));
+    expect(z(yt(1))).toBeGreaterThan(z(yt(2)));
+    expect(st().openFloat(yt(3), 'c')).toBe(true);
+    expect(z(yt(3))).toBeGreaterThan(z(yt(1)));
   });
 
-  it('openFloat refuses (false, nothing added) when the Sky window takes the last slot, and Sky is refused when streams fill it', () => {
-    for (let i = 0; i < MAX_FLOATS - 1; i++) expect(st().openFloat(yt(i), `s${i}`)).toBe(true);
-    expect(st().openSky('obs-rubin', 'Sky')).toBe(true);
+  it('openFloat refuses (false, nothing added) at the cap, and only raises a stream that is already open', () => {
+    for (let i = 0; i < MAX_FLOATS; i++) expect(st().openFloat(yt(i), `s${i}`)).toBe(true);
+    expect(canOpenStream(st().floats)).toBe(false);
     expect(st().openFloat(yt(99), 'late')).toBe(false);
-    expect(st().floats).toHaveLength(MAX_FLOATS - 1);
-    // an already open stream is only raised
+    expect(st().floats).toHaveLength(MAX_FLOATS);
     expect(st().openFloat(yt(0), 's0')).toBe(true);
-    st().closeSky();
+    expect(st().floats).toHaveLength(MAX_FLOATS);
+    st().closeFloat(yt(0));
+    expect(canOpenStream(st().floats)).toBe(true);
     expect(st().openFloat(yt(99), 'late')).toBe(true);
-    expect(st().openSky('obs-rubin', 'Sky')).toBe(false);
-    expect(st().sky).toBeNull();
   });
 
   it('openFloat refuses a URL that cannot be floated', () => {
@@ -42,20 +38,15 @@ describe('floating windows in the store: streams and the Sky view share the z or
 });
 
 describe('minimize in the store', () => {
-  it('toggles a stream window and the Sky window, keeps the rect, and the cap still counts them', () => {
+  it('toggles a stream window, keeps the rect, and the cap still counts it', () => {
     expect(st().openFloat(yt(1), 'a')).toBe(true);
     const rect = { x: st().floats[0].x, y: st().floats[0].y, w: st().floats[0].w };
     st().toggleFloatMinimized(yt(1));
     expect(st().floats[0].minimized).toBe(true);
     expect(st().floats[0]).toMatchObject(rect);
-    expect(st().openSky('obs-paranal', 'Sky')).toBe(true);
-    st().toggleSkyMinimized();
-    expect(st().sky!.minimized).toBe(true);
-    for (let i = 2; i < MAX_FLOATS; i++) expect(st().openFloat(yt(i), `s${i}`)).toBe(true);
+    for (let i = 2; i <= MAX_FLOATS; i++) expect(st().openFloat(yt(i), `s${i}`)).toBe(true);
     expect(st().openFloat(yt(99), 'late')).toBe(false);
     st().toggleFloatMinimized(yt(1));
-    st().toggleSkyMinimized();
     expect(st().floats[0].minimized).toBe(false);
-    expect(st().sky!.minimized).toBe(false);
   });
 });

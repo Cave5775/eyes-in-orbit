@@ -241,8 +241,8 @@ describe('the focus in the store: selectedId, frame, lock, follow', () => {
       .filter(([, text]) => re.test(text))
       .map(([f]) => f.replace('../src/ui/', ''))
       .sort();
-    // the routes: tree and list rows (EntityBrowser), breadcrumb (FrameBar), scene clicks and the popup (SceneView), DSN, detail
-    expect(calls(/selectObject/)).toEqual(['DetailPanel.tsx', 'DsnSection.tsx', 'EntityBrowser.tsx', 'FrameBar.tsx', 'ObservatoryPanel.tsx', 'SceneView.tsx']);
+    // the routes: tree and list rows (EntityBrowser), breadcrumb (FrameBar), scene clicks and the popup (SceneView), the body markers of the sky view (SkyMarkers), DSN, detail
+    expect(calls(/selectObject/)).toEqual(['DetailPanel.tsx', 'DsnSection.tsx', 'EntityBrowser.tsx', 'FrameBar.tsx', 'ObservatoryPanel.tsx', 'SceneView.tsx', 'SkyMarkers.tsx']);
     expect(calls(/s\.setFrame\b|getState\(\)\.setFrame\b/)).toEqual(['DetailPanel.tsx']); // (the scene's own ctl.setFrame is the mirror of the store)
     expect(calls(/s\.select\b|getState\(\)\.select\(|[{,]\s*select\s*[,}]/)).toEqual([]); // the old, differently-behaving entry point is gone
     expect(calls(/bodyTabs|role="tablist" aria-label="Body"/)).toEqual([]); // and so are the top-bar body tabs

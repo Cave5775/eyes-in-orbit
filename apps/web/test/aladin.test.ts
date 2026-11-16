@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ALADIN_URL, ALADIN_VERSION, MAX_FOV_DEG, createSkyView, loadAladin, resetAladinLoader, type AladinGlobal } from '../src/lib/aladin';
+import { ALADIN_URL, ALADIN_VERSION, MAX_FOV_DEG, aladinRotationDeg, createSkyView, liveSkyView, loadAladin, resetAladinLoader, resetLiveSkyView, type AladinGlobal } from '../src/lib/aladin';
 
 function fakeAladin() {
   const calls: unknown[][] = [];
@@ -9,13 +9,18 @@ function fakeAladin() {
     setFoV: (...a: number[]) => calls.push(['fov', ...a]),
     setImageSurvey: (...a: string[]) => calls.push(['survey', ...a]),
     getFoV: () => [12, 8],
+    getRaDec: () => [33, -44],
+    setRotation: (...a: number[]) => calls.push(['rot', ...a]),
+    getRotation: () => -30,
+    world2pix: (ra: number, dec: number) => [ra * 2, dec * 3],
+    pix2world: (x: number, y: number) => (x < 0 ? null : [x / 2, y / 3]),
     on: (...a: unknown[]) => { calls.push(['on', a[0]]); handlers[String(a[0])] = a[1] as (n: number) => void; },
   };
   const A: AladinGlobal = { init: Promise.resolve(), aladin: (_el, o) => { calls.push(['create', o]); return inst; } };
   return { A, calls, handlers };
 }
 
-afterEach(() => { resetAladinLoader(); vi.useRealTimers(); });
+afterEach(() => { resetAladinLoader(); resetLiveSkyView(); vi.useRealTimers(); });
 
 describe('aladin adapter', () => {
   it('pins an exact released version on the jsDelivr CDN', () => {
@@ -72,6 +77,46 @@ describe('aladin adapter', () => {
     expect(v.fov()).toBe(12);
   });
 
+  it('animateTo uses Aladin own animation (seconds) and stopAnimation stops it', () => {
+    const { A, calls } = fakeAladin();
+    const inst = A.aladin({} as HTMLElement, {});
+    const own = { ...inst, animateToRaDec: (...a: number[]) => calls.push(['anim', ...a]), stopAnimation: () => calls.push(['stop']) };
+    const v = createSkyView({ init: A.init, aladin: () => own }, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    calls.length = 0;
+    v.animateTo(130, 40, 400);
+    expect(calls).toEqual([['stop'], ['anim', 130, 40, 0.4]]);
+    v.stopAnimation();
+    expect(calls[calls.length - 1]).toEqual(['stop']);
+  });
+
+  it('animateTo without Aladin animation steps gotoRaDec along an eased great circle and ends exactly on the target', () => {
+    const { A, calls } = fakeAladin(); // getRaDec says (33, -44)
+    const v = createSkyView(A, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    let now = 0;
+    const frames: (() => void)[] = [];
+    vi.stubGlobal('performance', { now: () => now });
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => frames.push(cb));
+    vi.stubGlobal('cancelAnimationFrame', () => { frames.length = 0; });
+    try {
+      calls.length = 0;
+      v.animateTo(60, 10, 400);
+      expect(calls).toHaveLength(1); // the first step runs at once, at the start
+      expect(calls[0][1]).toBeCloseTo(33, 6);
+      now = 200; frames.shift()!();
+      expect(calls).toHaveLength(2);
+      expect(calls[1][1]).toBeGreaterThan(33); expect(calls[1][1]).toBeLessThan(60);
+      now = 400; frames.shift()!();
+      expect(calls[calls.length - 1]).toEqual(['goto', 60, 10]);
+      expect(frames).toHaveLength(0);
+      // a new call replaces a running one
+      now = 0; v.animateTo(1, 1, 400);
+      v.stopAnimation();
+      expect(frames).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('createSkyView caps the field of view at MAX_FOV_DEG (the TAN projection stretches without bound)', () => {
     const { A, calls, handlers } = fakeAladin();
     createSkyView(A, {} as HTMLElement, { survey: 'CDS/P/DSS2/color', raDeg: 0, decDeg: 0, fovDeg: 30 });
@@ -80,5 +125,129 @@ describe('aladin adapter', () => {
     expect(calls).toEqual([]);
     handlers.zoomChanged(170);
     expect(calls).toEqual([['fov', MAX_FOV_DEG]]);
+  });
+
+  it('the field limit is Aladin own 150 degrees and also caps the start field; a bad one starts at 60', () => {
+    expect(MAX_FOV_DEG).toBe(150);
+    const { A, calls } = fakeAladin();
+    createSkyView(A, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 400 });
+    expect((calls[0][1] as { fov: number }).fov).toBe(MAX_FOV_DEG);
+    calls.length = 0;
+    createSkyView(A, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: NaN });
+    expect((calls[0][1] as { fov: number }).fov).toBe(60);
+  });
+
+  it('a create that throws partway empties the host before the error goes on, so a retry starts clean', () => {
+    let cleared = 0;
+    const el = { replaceChildren: () => { cleared++; } } as unknown as HTMLElement;
+    const A: AladinGlobal = { init: Promise.resolve(), aladin: () => { throw new Error('no WebGL2'); } };
+    expect(() => createSkyView(A, el, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 })).toThrow(/WebGL2/);
+    expect(cleared).toBe(1);
+  });
+
+  describe('setActive parks the render loop', () => {
+    /** Aladin's loop: the real callback does a frame and re-arms itself with whatever view.redrawClbk is then (as view.redraw does) */
+    function loopWorld() {
+      const queue: ((t: number) => void)[] = [];
+      let frames = 0;
+      const view: { redrawClbk?: (t: number) => void; prevTime?: number; requestRedraw: () => void } = { requestRedraw: () => { redraws++; } };
+      let redraws = 0;
+      view.redrawClbk = () => { frames++; queue.push(view.redrawClbk!); };
+      queue.push(view.redrawClbk); // the loop is running
+      vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => queue.push(cb));
+      vi.stubGlobal('performance', { now: () => 1234 });
+      const run = (n: number) => { for (let i = 0; i < n; i++) { const q = queue.splice(0); for (const cb of q) cb(i); } };
+      const { A } = fakeAladin();
+      const inst = A.aladin({} as HTMLElement, {});
+      const v = createSkyView({ init: A.init, aladin: () => ({ ...inst, view }) }, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 });
+      return { v, run, frames: () => frames, redraws: () => redraws, queued: () => queue.length, view };
+    }
+
+    it('keeps the loop running by default, stops re-arming when parked, and starts it again once', () => {
+      const w = loopWorld();
+      try {
+        w.run(3);
+        expect(w.frames()).toBe(3);
+        expect(w.v.setActive(false)).toBe(true);
+        w.run(5); // one queued frame may still run, then the loop is not re-armed
+        const parked = w.frames();
+        expect(parked).toBeLessThanOrEqual(4);
+        w.run(5);
+        expect(w.frames()).toBe(parked);
+        expect(w.queued()).toBe(0);
+        w.v.setActive(true);
+        w.v.setActive(true); // a second call must not start a second loop
+        expect(w.view.prevTime).toBe(1234);
+        expect(w.redraws()).toBe(1);
+        w.run(4);
+        expect(w.frames()).toBe(parked + 4);
+        expect(w.queued()).toBe(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('parking and resuming before the queued frame has run starts no second loop', () => {
+      const w = loopWorld();
+      try {
+        w.v.setActive(false);
+        w.v.setActive(true);
+        w.run(5);
+        expect(w.frames()).toBe(5);
+        expect(w.queued()).toBe(1);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('a build without the loop callback cannot be parked and is left running', () => {
+      const { A } = fakeAladin();
+      const v = createSkyView(A, {} as HTMLElement, { survey: 's', raDeg: 0, decDeg: 0, fovDeg: 30 });
+      expect(v.setActive(false)).toBe(false);
+    });
+  });
+
+  it('setPose aims, sets the horizontal field (clamped) and rotates by minus the position angle', () => {
+    const { A, calls } = fakeAladin();
+    const v = createSkyView(A, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    calls.length = 0;
+    v.setPose({ raDeg: 120, decDeg: -10, hFovDeg: 80, rotationDeg: 25 });
+    expect(calls).toEqual([['goto', 120, -10], ['fov', 80], ['rot', -25]]);
+    calls.length = 0;
+    v.setPose({ raDeg: 1, decDeg: 2, hFovDeg: 400, rotationDeg: 0 });
+    expect(calls).toEqual([['goto', 1, 2], ['fov', MAX_FOV_DEG], ['rot', 1e-6]]);
+  });
+
+  it('aladinRotationDeg flips the sign, never sends zero and survives junk', () => {
+    expect(aladinRotationDeg(30)).toBe(-30);
+    expect(aladinRotationDeg(-170)).toBe(170);
+    expect(aladinRotationDeg(0)).toBe(1e-6);
+    expect(aladinRotationDeg(Number.NaN)).toBe(1e-6);
+  });
+
+  it('reads the centre, the rotation and the projection back, and has no rotation when the build lacks it', () => {
+    const { A } = fakeAladin();
+    const v = createSkyView(A, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    expect(v.center()).toEqual({ raDeg: 33, decDeg: -44 });
+    expect(v.rotation()).toBe(-30);
+    expect(v.world2pix(10, 20)).toEqual([20, 60]);
+    expect(v.pix2world(20, 60)).toEqual([10, 20]);
+    expect(v.pix2world(-1, 0)).toBeNull();
+    const bare: AladinGlobal = { aladin: () => ({ gotoRaDec() {}, setFoV() {}, getFoV: () => 7, setImageSurvey() {}, on() {} }) };
+    const b = createSkyView(bare, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    expect(b.rotation()).toBeNull();
+    expect(b.world2pix(1, 2)).toBeNull();
+    expect(b.center()).toBeNull();
+    expect(b.fov()).toBe(7);
+    expect(() => b.setPose({ raDeg: 1, decDeg: 2, hFovDeg: 3, rotationDeg: 4 })).not.toThrow();
+  });
+
+  it('keeps the created view reachable for an overlay that projects sky positions', () => {
+    expect(liveSkyView()).toBeNull();
+    const { A } = fakeAladin();
+    const v = createSkyView(A, {} as HTMLElement, { survey: 'x', raDeg: 0, decDeg: 0, fovDeg: 30 });
+    expect(liveSkyView()).toBe(v);
+    resetLiveSkyView();
+    expect(liveSkyView()).toBeNull();
   });
 });

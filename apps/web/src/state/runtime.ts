@@ -1,4 +1,5 @@
 import { Clock, EntityGraph, type EntityRecord } from '@eio/core';
+import type { V3 } from '../lib/camera';
 
 /** Shared simulation clock: live / paused / scrubbed. Everything evaluates providers at `clock.now()`. */
 export const clock = new Clock();
@@ -29,10 +30,18 @@ export interface CameraCommands {
   toggleSurface(): void;
   /** fly to the selected object's 3D model and follow it */
   viewModel(id: string): void;
-  /** first-person view: stand the camera at the observatory `id` and look outward (Esc and `leaveFirstPerson` leave it) */
-  lookFrom(id: string): void;
+  /** first-person view: stand the camera at the observatory `id` and look outward (Esc and `leaveFirstPerson` leave it). False when it has no position. */
+  lookFrom(id: string): boolean;
   /** leave the first-person view only (Esc and the Leave button): the globe view you had comes back, the selection stays */
   leaveFirstPerson(): void;
+  /** where the first-person camera looks (see `SceneController.firstPersonPose`); null when the view is off */
+  firstPersonPose(): { dir: V3; up: V3; vFovDeg: number; aspect: number; settled: boolean } | null;
+  /** point the first-person camera and set its vertical field of view (clamped); no-op outside that view */
+  setFirstPersonLook(dir: V3, vFovDeg: number): void;
+  /** stop / restart drawing the scene while the Sky view covers it; `leaveFirstPerson` always restarts it */
+  setPaused(on: boolean): void;
+  /** hold the first-person view while the Sky view is entering or on: a selection neither ends it nor flies the camera; releasing leaves a consistent state (`SceneController.setFirstPersonHold`) */
+  setFirstPersonHold(on: boolean): void;
 }
 
 /** Make sure the record has a live provider on the main thread (the scene does this too; panels must not race it). */

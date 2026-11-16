@@ -15,7 +15,8 @@ import { EARTH_CENTRE, centreLabel, distanceFromCentre, isEarthCentre, type Cent
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, shouldAutoSurface } from '../lib/surface';
-import { FP_FOV_START, firstPersonStart, focusEndsFirstPerson, selectionEndsFirstPerson, type FirstPersonSaved } from '../lib/first-person';
+import { FP_FOV_START, clampFov, clampFpEl, firstPersonLookDir, firstPersonStart, focusActionInFirstPerson, releaseHold, selectionEndsFirstPerson, type FirstPersonSaved } from '../lib/first-person';
+import { dirToAzEl } from '../lib/sky-pose';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
 import { NO_CTX, NO_QUERY, classify, isDrawn, queryActive, type Class, type Ctx, type Query } from '../lib/query';
 import { OccluderSet } from '../lib/occlusion';
@@ -269,6 +270,11 @@ export class SceneController {
   private surfaceOn = false;
   /** first-person view: the observatory the camera stands at and the camera it replaced (restored on leaving) */
   private fp: { id: string; prev: FirstPersonSaved } | null = null;
+  /** drawing is stopped (the Sky view covers the scene): no animation loop, and the ResizeObserver does not redraw */
+  private paused = false;
+  /** the Sky view holds the first-person view (see `setFirstPersonHold`) and the last camera request it kept back */
+  private fpHold = false;
+  private fpPending: FocusRequest | null = null;
   private surfaceSrc: SurfaceSource | null = null;
   /** the user's remembered choice: false after they switched the surface view off, which stops it coming on by itself */
   private surfaceAuto = loadSurfacePref();
@@ -557,7 +563,7 @@ export class SceneController {
     const sameFocus = focus.size === old.focus.size && [...focus].every((id) => old.focus.has(id));
     const selChanged = v.selectedId !== this.selectedId;
     // the camera stands at an observatory that is no longer the selection: the first-person view ends and the camera is restored
-    if (selChanged && this.fp && selectionEndsFirstPerson(this.fp.id, v.selectedId)) this.leaveFirstPerson();
+    if (selChanged && this.fp && selectionEndsFirstPerson(this.fp.id, v.selectedId, this.fpHold)) this.leaveFirstPerson();
     if (!selChanged && sameFocus && v.query === this.query && v.text === (old.text ?? null) && v.highlight === this.highlight) return;
     this.query = v.query;
     this.highlight = v.highlight;
@@ -701,7 +707,12 @@ export class SceneController {
    */
   focus(req: FocusRequest): void {
     if (this.fp) {
-      if (!focusEndsFirstPerson(this.fp.id, req)) return; // the observatory we stand at, again: nothing to do
+      const act = focusActionInFirstPerson(this.fp.id, req, this.fpHold);
+      if (act === 'ignore') return; // the observatory we stand at, again: nothing to do
+      if (act === 'defer') { // held by the Sky view: nothing flies now, the last request runs when the hold is released
+        this.fpPending = req;
+        return;
+      }
       this.leaveFirstPerson(); // another object, a ground point or the home view: the camera is restored first
     }
     this.groundLock = null;
@@ -814,11 +825,79 @@ export class SceneController {
     return true;
   }
 
-  /** End the first-person view (no-op when off): the field of view and the previous distance, azimuth and elevation come back, in the globe view. */
+  /**
+   * Stop or restart drawing (the Sky view covers the scene completely while it is on). Paused: no animation loop and the resize
+   * observer does not redraw; the camera, the clock and everything else keep their state. Leaving the first-person view always restarts it.
+   */
+  setPaused(on: boolean): void {
+    if (this.disposed || on === this.paused) return;
+    this.paused = on;
+    if (on) {
+      this.renderer.setAnimationLoop(null);
+    } else {
+      this.lastFrame = performance.now();
+      this.renderer.setAnimationLoop(() => this.frame());
+    }
+  }
+
+  get isPaused(): boolean {
+    return this.paused;
+  }
+
+  /**
+   * Where the first-person camera looks, for a sky viewer: `dir` the unit look direction and `up` the local vertical, both in the
+   * Earth-inertial axes of the scene (equator and equinox of date, see docs/frames.md), the field of view (vertical) and the aspect,
+   * and `settled` (the 1.5 s blend into the view has ended, so the camera really looks along `dir`). `dir` is the direction the view
+   * ends at, so it is already right while the blend is still flying. Null when the first-person view is off or has not drawn a frame yet.
+   */
+  firstPersonPose(): { dir: V3; up: V3; vFovDeg: number; aspect: number; settled: boolean } | null {
+    const f = this.rig.frame;
+    if (!this.fp || !f) return null;
+    return { dir: firstPersonLookDir(f, this.rig.az, clampFpEl(this.rig.el)), up: [f.u[0], f.u[1], f.u[2]], vFovDeg: this.camera.fov, aspect: this.camera.aspect, settled: !this.rig.flying };
+  }
+
+  /** Point the first-person camera along `dir` (Earth-inertial, any length) with vertical field of view `vFovDeg`; elevation and field are clamped as for dragging and the wheel. No-op outside the first-person view. */
+  setFirstPersonLook(dir: V3, vFovDeg: number): void {
+    const f = this.rig.frame;
+    if (!this.fp || !f) return;
+    const a = dirToAzEl(f, dir);
+    this.rig.az = a.az;
+    this.rig.el = clampFpEl(a.el);
+    this.camera.fov = clampFov(vFovDeg);
+    this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * HOLD the first-person view while the Sky view is entering or on: a selection no longer ends it and a camera request (the fly-to
+   * of a selection) is kept for later instead of running, so a body marked on the sky map can be selected while the view stays
+   * where it is. Releasing (`false`, also when the first-person view ends by any route) leaves a consistent state, see
+   * `releaseHold` (lib/first-person.ts): still standing at the selected observatory: nothing; another selection: the view ends and
+   * the camera goes to that selection as a plain selection would have. No effect outside the first-person view.
+   */
+  setFirstPersonHold(on: boolean): void {
+    if (on) {
+      if (this.fp) this.fpHold = true;
+      return;
+    }
+    if (!this.fpHold) return;
+    const pending = this.fpPending;
+    this.fpHold = false;
+    this.fpPending = null;
+    if (!this.fp) return;
+    const r = releaseHold(this.fp.id, this.selectedId, pending);
+    if (!r.leave) return;
+    this.leaveFirstPerson();
+    if (r.focus) this.focus(r.focus);
+  }
+
+  /** End the first-person view (no-op when off): the field of view and the previous distance, azimuth and elevation come back, in the globe view. Always restarts drawing if it was paused. */
   leaveFirstPerson(): void {
+    this.setPaused(false);
     const fp = this.fp;
     if (!fp) return;
     this.fp = null;
+    this.fpHold = false;
+    this.fpPending = null;
     this.camera.fov = fp.prev.fov || FP_FOV_START;
     this.camera.updateProjectionMatrix();
     this.rig.target.copy(this.camera.position); // an unfollowed globe view stays centred where we stood
@@ -1623,7 +1702,7 @@ export class SceneController {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    if (!this.disposed && this.started) this.draw(performance.now());
+    if (!this.disposed && this.started && !this.paused) this.draw(performance.now());
   }
 
   // ------------------------------------------------------------------ frame loop

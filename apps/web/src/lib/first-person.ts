@@ -98,7 +98,42 @@ export function focusEndsFirstPerson(standingAt: string, req: { id?: string }): 
   return req.id !== standingAt;
 }
 
-/** Does a new selection end it? Only the observatory itself (or nothing yet changed) keeps it. */
-export function selectionEndsFirstPerson(standingAt: string, selectedId: string | null): boolean {
-  return selectedId !== standingAt;
+/**
+ * Does a new selection end it? Only the observatory itself (or nothing yet changed) keeps it. While the view is HELD (the Sky
+ * view marks bodies on its map and selects them without leaving: `held`), no selection ends it.
+ */
+export function selectionEndsFirstPerson(standingAt: string, selectedId: string | null, held = false): boolean {
+  return !held && selectedId !== standingAt;
+}
+
+/** What the controller does with a camera request while it stands at an observatory. */
+export type FocusAction = 'ignore' | 'defer' | 'leave';
+
+/**
+ * The first-person HOLD (docs/frames.md, "Sky annotations"): while the Sky view is entering or on, the camera stays at the
+ * observatory whatever is selected. A request for the observatory itself is ignored as always; any other is DEFERRED while held
+ * (the controller keeps the last one, nothing flies), and otherwise ends the view as before.
+ */
+export function focusActionInFirstPerson(standingAt: string, req: { id?: string }, held: boolean): FocusAction {
+  if (!focusEndsFirstPerson(standingAt, req)) return 'ignore';
+  return held ? 'defer' : 'leave';
+}
+
+/** What releasing the hold does: end the first-person view or not, and the camera request to run after leaving. */
+export interface HoldRelease<R> {
+  leave: boolean;
+  focus: R | { id: string; nonce: number } | null;
+}
+
+/**
+ * Releasing the hold (the Sky view is left, or Esc or Back): the state must end up as if the selections had been made without
+ * it. Still standing at the observatory when it is the selection: nothing changes (the usual leave then returns to the Earth
+ * view you had). Otherwise the first-person view ends and the camera goes to the CURRENT selection: the deferred request when
+ * it is for that selection (it keeps its nonce), else a plain request for it (nonce 0: no automatic surface view); with nothing
+ * selected only a deferred request that names no entity (the home view, a ground point) is replayed.
+ */
+export function releaseHold<R extends { id?: string; nonce: number }>(standingAt: string, selectedId: string | null, pending: R | null): HoldRelease<R> {
+  if (!selectionEndsFirstPerson(standingAt, selectedId)) return { leave: false, focus: null };
+  if (selectedId === null) return { leave: true, focus: pending && pending.id === undefined ? pending : null };
+  return { leave: true, focus: pending && pending.id === selectedId ? pending : { id: selectedId, nonce: 0 } };
 }

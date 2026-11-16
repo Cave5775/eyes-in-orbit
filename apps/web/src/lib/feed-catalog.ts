@@ -134,7 +134,7 @@ export const FEED_CATALOG: Record<string, FeedInfo> = {
 export const SKY_IMAGERY_ID = 'sky-imagery';
 export const SKY_IMAGERY: FeedInfo = {
   name: 'Sky imagery (HiPS)',
-  provides: 'The Sky view window: the Aladin Lite library (cdn.jsdelivr.net, loaded on first use) and the survey tiles (HiPS) from IRSA, ESA, CASDA or CDS servers, whichever answers first. Fetched by your browser, not by the server; nothing is requested until a Sky view is opened.',
+  provides: 'The Sky view: the Aladin Lite library (cdn.jsdelivr.net, loaded on first use) and the survey tiles (HiPS) from IRSA, ESA, CASDA or CDS servers, whichever answers first. Fetched by your browser, not by the server; nothing is requested until a Sky view is started.',
   source: 'CDS Aladin Lite; IRSA, ESA, CASDA and CDS HiPS servers',
   link: 'https://aladin.cds.unistra.fr/AladinLite/',
 };

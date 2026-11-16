@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MIN_ALT_KM, altitudeOf, basisFromUp, ellipsoidUp, surfaceRadius, type V3 } from '../src/lib/camera';
 import {
   FP_EYE_KM, FP_FOV_MAX, FP_FOV_MIN, FP_FOV_START, FP_MAX_EL, clampFov, clampFpEl, compassDeg, firstPersonDrag, firstPersonEye, firstPersonLookDir,
-  firstPersonReadout, firstPersonStart, focusEndsFirstPerson, selectionEndsFirstPerson, zoomFov,
+  firstPersonReadout, firstPersonStart, focusActionInFirstPerson, focusEndsFirstPerson, releaseHold, selectionEndsFirstPerson, zoomFov,
 } from '../src/lib/first-person';
 
 const at = (lat: number, lon: number, alt: number): V3 => {
@@ -145,5 +145,42 @@ describe('what ends the first-person view', () => {
     expect(selectionEndsFirstPerson('obs-maunakea', 'obs-maunakea')).toBe(false);
     expect(selectionEndsFirstPerson('obs-maunakea', 'iss')).toBe(true);
     expect(selectionEndsFirstPerson('obs-maunakea', null)).toBe(true);
+  });
+});
+
+describe('the hold (the Sky view keeps the first-person view while bodies are selected on its map)', () => {
+  it('while held no selection ends the view; not held it is as before', () => {
+    expect(selectionEndsFirstPerson('obs-maunakea', 'body-mars', true)).toBe(false);
+    expect(selectionEndsFirstPerson('obs-maunakea', null, true)).toBe(false);
+    expect(selectionEndsFirstPerson('obs-maunakea', 'body-mars', false)).toBe(true);
+    expect(selectionEndsFirstPerson('obs-maunakea', 'body-mars')).toBe(true);
+  });
+
+  it('a request for the observatory is ignored, any other is deferred while held and leaves otherwise', () => {
+    expect(focusActionInFirstPerson('obs-maunakea', { id: 'obs-maunakea' }, true)).toBe('ignore');
+    expect(focusActionInFirstPerson('obs-maunakea', { id: 'obs-maunakea' }, false)).toBe('ignore');
+    expect(focusActionInFirstPerson('obs-maunakea', { id: 'body-mars' }, true)).toBe('defer');
+    expect(focusActionInFirstPerson('obs-maunakea', {}, true)).toBe('defer');
+    expect(focusActionInFirstPerson('obs-maunakea', { id: 'body-mars' }, false)).toBe('leave');
+    expect(focusActionInFirstPerson('obs-maunakea', {}, false)).toBe('leave');
+  });
+
+  it('releasing with the observatory still selected changes nothing (the usual leave restores the view you had)', () => {
+    expect(releaseHold('obs-maunakea', 'obs-maunakea', null)).toEqual({ leave: false, focus: null });
+    expect(releaseHold('obs-maunakea', 'obs-maunakea', { id: 'body-mars', nonce: 4 })).toEqual({ leave: false, focus: null });
+  });
+
+  it('releasing with a body selected leaves and goes to it, with the deferred request when it is for that body', () => {
+    expect(releaseHold('obs-maunakea', 'body-mars', { id: 'body-mars', nonce: 7 })).toEqual({ leave: true, focus: { id: 'body-mars', nonce: 7 } });
+    // the deferred request is for an earlier selection: the CURRENT one wins
+    expect(releaseHold('obs-maunakea', 'body-venus', { id: 'body-mars', nonce: 7 })).toEqual({ leave: true, focus: { id: 'body-venus', nonce: 0 } });
+    // selected without a fly request (fly: false): a plain request for it
+    expect(releaseHold('obs-maunakea', 'body-moon', null)).toEqual({ leave: true, focus: { id: 'body-moon', nonce: 0 } });
+  });
+
+  it('releasing with nothing selected leaves, replaying only a deferred request that names no entity', () => {
+    expect(releaseHold('obs-maunakea', null, null)).toEqual({ leave: true, focus: null });
+    expect(releaseHold('obs-maunakea', null, { id: 'body-mars', nonce: 3 })).toEqual({ leave: true, focus: null });
+    expect(releaseHold('obs-maunakea', null, { nonce: 3 })).toEqual({ leave: true, focus: { nonce: 3 } });
   });
 });

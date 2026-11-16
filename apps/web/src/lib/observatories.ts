@@ -1,5 +1,5 @@
 import { observatoryOf, type EntityRecord, type ObservatoryMeta } from '@eio/core';
-import { zenithRaDec } from './sky-frame';
+import { precessToJ2000, zenithRaDec } from './sky-frame';
 
 /**
  * HiPS surveys the Sky view offers. Ids and `urls` come from each survey's CDS MocServer record
@@ -77,10 +77,11 @@ export interface SkyTarget {
   tracksZenith: boolean;
 }
 
-/** Where the view is centred: a ground site's zenith at `tMs`, a space telescope's default target (said so in the note). */
+/** Where the view is centred, J2000 RA/Dec (what Aladin and the HiPS surveys use): a ground site's zenith at `tMs` (of date, precessed to J2000), a space telescope's default target (said so in the note). */
 export function skyTarget(row: Pick<ObservatoryRow, 'meta' | 'latDeg' | 'lonDeg'>, tMs: number): SkyTarget {
   if (row.meta.site === 'ground' && row.latDeg !== undefined && row.lonDeg !== undefined) {
-    const z = zenithRaDec(tMs, row.latDeg, row.lonDeg);
+    const of = zenithRaDec(tMs, row.latDeg, row.lonDeg);
+    const z = precessToJ2000(of.raDeg, of.decDeg, tMs);
     return { ...z, tracksZenith: true, note: `Centred on the zenith (RA ${(z.raDeg / 15).toFixed(2)} h, Dec ${z.decDeg.toFixed(1)}°); follows sim time` };
   }
   return {

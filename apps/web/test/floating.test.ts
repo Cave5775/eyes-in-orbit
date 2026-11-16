@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  FLOAT_HEAD_PX, MAX_FLOATS, MINI_W, shownRect, dragMiniRect, toggleMinimized, toggleMinimizedOne, MIN_FLOAT_W, closeFloatWindow, defaultRect, dragRect, fitRect, focusFloatWindow, frameHeight,
+  FLOAT_HEAD_PX, MAX_FLOATS, MINI_W, shownRect, dragMiniRect, toggleMinimized, MIN_FLOAT_W, closeFloatWindow, defaultRect, dragRect, fitRect, focusFloatWindow, frameHeight,
   isFloatableUrl, loadFloats, openFloatWindow, parseFloats, resizeRect, saveFloats, setFloatRect, totalHeight, type FloatWindow,
   type StorageLike,
 } from '../src/lib/floating';
@@ -253,7 +253,6 @@ describe('minimized windows', () => {
     expect(toggleMinimized(list, C)).toBe(list);
     expect(toggleMinimized(on, A, true)).toBe(on);
     expect(toggleMinimized(list, A, false)).toBe(list);
-    expect(toggleMinimizedOne(null)).toBeNull();
   });
 
   it('shownRect is the full rect or a MINI_W x title-bar tab at the same corner, inside the viewport', () => {
