@@ -1731,7 +1731,9 @@ export class SceneController {
     const s = sunDirectionEci(t);
     this.sun.set(s[0], s[1], s[2]);
 
-    if (this.propagator.dirty) this.propagator.dirty = false;
+    // the worker samples the satellites at ~30 Hz: carry them to this frame's time, as the followed anchor is
+    this.propagator.dirty = false;
+    this.propagator.advance(t);
     this.updateDyn(t);
     this.updateHighlights(t);
     this.updateOverlays(t, wall);
