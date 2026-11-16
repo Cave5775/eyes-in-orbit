@@ -856,6 +856,7 @@ video.stream-frame { background: #000; object-fit: contain; }
 .sky-archive-thumb:hover, .sky-archive-thumb:focus-visible { border-color: var(--ink); }
 .sky-archive-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .sky-archive-cap { font-size: 9.5px; line-height: 1.3; color: var(--ink-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.sky-archive-more { display: block; margin: 0 0 6px; font-size: 10.5px; }
 .sky-archive-link { font-size: 10.5px; color: var(--ink-2); }
 .sky-lightbox { position: absolute; inset: 0; z-index: 7; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.88); }
 .sky-lightbox figure { margin: 0; max-width: calc(100% - 120px); max-height: calc(100% - 24px); display: flex; flex-direction: column; align-items: center; gap: 6px; }

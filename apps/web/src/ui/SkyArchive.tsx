@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ArchiveImagesResult } from '@eio/core';
 import { api } from '../api/client';
-import { cardBody, cardTitle, cardView, captionOf, createArchiveCache, stepIndex } from '../lib/archive-card';
+import { MORE_STEP, THUMBS_FIRST, cardBody, cardTitle, cardView, captionOf, createArchiveCache, stepIndex } from '../lib/archive-card';
 import { useStore } from '../state/store';
 import { useView } from '../state/view';
 
@@ -23,23 +23,23 @@ export function SkyArchive() {
   const bodyName = useStore((s) => (s.selectedId ? s.entities.get(s.selectedId)?.name : undefined));
   const obsName = useStore((s) => (obsId ? s.entities.get(obsId)?.name : undefined));
   const active = (phase === 'entering' || phase === 'on') && !!obsId && !!body && !!selectedId;
-  const [result, setResult] = useState<ArchiveImagesResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState(true);
-  const [box, setBox] = useState(-1);
-  const boxRef = useRef(-1);
-  boxRef.current = box;
-
   const key = active ? `${obsId}|${body}` : '';
+  // every piece of state carries the key it belongs to: for the render after a selection change the old body's answer, lightbox and count are ignored
+  const [res, setRes] = useState<{ key: string; result: ArchiveImagesResult | null; error: string | null }>({ key: '', result: null, error: null });
+  const [open, setOpen] = useState(true);
+  const [boxS, setBoxS] = useState({ key: '', i: -1 });
+  const [moreS, setMoreS] = useState({ key: '', n: THUMBS_FIRST });
+  const result = res.key === key ? res.result : null;
+  const error = res.key === key ? res.error : null;
+  const box = boxS.key === key ? boxS.i : -1;
+  const shownCount = moreS.key === key ? moreS.n : THUMBS_FIRST;
+  const setBox = (u: number | ((i: number) => number)): void => setBoxS((b) => ({ key, i: typeof u === 'function' ? u(b.key === key ? b.i : -1) : u }));
   useEffect(() => {
-    setResult(null);
-    setError(null);
-    setBox(-1);
     if (!key) return;
     let cancelled = false;
     cache.get(obsId!, body!).then(
-      (r) => { if (!cancelled) setResult(r); },
-      (e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); },
+      (r) => { if (!cancelled) setRes({ key, result: r, error: null }); },
+      (e: unknown) => { if (!cancelled) setRes({ key, result: null, error: e instanceof Error ? e.message : String(e) }); },
     );
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -80,7 +80,7 @@ export function SkyArchive() {
             <p className={`sky-archive-note ${view.kind}`} role={view.kind === 'error' ? 'alert' : 'status'}>{view.text}</p>
             {view.kind === 'ok' && (
               <ul className="sky-archive-grid">
-                {view.images.map((img, i) => (
+                {view.images.slice(0, shownCount).map((img, i) => (
                   <li key={img.id}>
                     <button className="sky-archive-thumb" onClick={() => setBox(i)} title={captionOf(img)} aria-label={`Enlarge: ${captionOf(img)}`}>
                       <img src={img.thumbUrl} alt={captionOf(img)} loading="lazy" decoding="async" referrerPolicy="no-referrer" />
@@ -89,6 +89,9 @@ export function SkyArchive() {
                   </li>
                 ))}
               </ul>
+            )}
+            {view.kind === 'ok' && view.images.length > shownCount && (
+              <button className="key sky-archive-more" onClick={() => setMoreS({ key, n: shownCount + MORE_STEP })}>Show more ({view.images.length - shownCount} left)</button>
             )}
             {result?.archive && (
               <a className="sky-archive-link" href={result.archive.url} target="_blank" rel="noreferrer noopener">{result.archive.label}</a>

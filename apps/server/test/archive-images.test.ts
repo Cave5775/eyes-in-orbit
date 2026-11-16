@@ -13,7 +13,7 @@ import { sourceForUrl } from '../src/net/limits';
 import { Store } from '../src/store';
 
 const fx = (name: string): string => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
-// trimmed real Mast.Caom.Filtered answers (JUPITER, last years, 2026-11-16)
+// real Mast.Caom.Filtered answers captured 2026-11-16 with the shipped query (mastUrl: JUPITER, t_min >= MJD 59899, i.e. now minus 4 years), whole records deleted to ~60
 const HST = fx('mast-caom-hst-jupiter.json');
 const JWST = fx('mast-caom-jwst-jupiter.json');
 
@@ -65,18 +65,18 @@ describe('MAST request and response parsing', () => {
 
   it('parses the real HST fixture into preview rows', () => {
     const p = parseMast(HST);
-    expect(p.total).toBe(152);
-    expect(p.rows.length).toBeGreaterThan(40);
+    expect(p.total).toBe(56);
+    expect(p.rows.length).toBe(56);
     const r = p.rows[0];
-    expect(r.id).toBe('ie8d08wvq');
-    expect(r.thumbUrl).toBe(previewUrl('mast:HST/product/ie8d08wvq_flt.jpg'));
-    expect(r.thumbUrl).toBe('https://mast.stsci.edu/api/v0.1/Download/file?uri=mast%3AHST%2Fproduct%2Fie8d08wvq_flt.jpg');
-    expect(r.pageUrl).toBe(portalUrl('ie8d08wvq'));
+    expect(r.id).toBe('if9i06o0q');
+    expect(r.thumbUrl).toBe(previewUrl('mast:HST/product/if9i06o0q_flt.jpg'));
+    expect(r.thumbUrl).toBe('https://mast.stsci.edu/api/v0.1/Download/file?uri=mast%3AHST%2Fproduct%2Fif9i06o0q_flt.jpg');
+    expect(r.pageUrl).toBe(portalUrl('if9i06o0q'));
     expect(r.instrument).toBe('WFC3/UVIS');
-    expect(r.filters).toBe('F225W');
-    expect(r.exposureS).toBe(40);
-    expect(r.program).toBe('16053');
-    expect(new Date(r.tMs).toISOString().slice(0, 10)).toBe('2020-07-24');
+    expect(r.filters).toBe('F502N');
+    expect(r.exposureS).toBe(4);
+    expect(r.program).toBe('17495');
+    expect(new Date(r.tMs).toISOString().slice(0, 10)).toBe('2023-12-10');
   });
 
   it('rejects a wrong shape, a non-COMPLETE status and non-JSON', () => {
@@ -148,7 +148,7 @@ describe('ArchiveImagesService', () => {
     expect(a.observatoryId).toBe('sat-20580');
     expect(a.body).toBe('JUPITER');
     expect(a.images.length).toBeGreaterThan(0);
-    expect(a.total).toBe(152);
+    expect(a.total).toBe(56);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const b = await svc.get(hubble, 'jupiter');
     expect(b.fromCache).toBe(true);
@@ -219,6 +219,30 @@ describe('ArchiveImagesService', () => {
     fetchMock.mockImplementation(async () => new Response('down', { status: 503 }));
     const again = await svc.get(hubble, 'JUPITER');
     expect(again.images).toEqual(first.images);
+  });
+
+  it('with the gate closed serves the stale list and sends no request (the gate is not bypassed by a cached row)', async () => {
+    const { svc, fetchMock, store } = setup();
+    await svc.get(hubble, 'JUPITER');
+    const key = 'archive-images:v1:HST:JUPITER:4y';
+    store.set(key, store.get(key)!.value, TTL_MS, Date.now() - TTL_MS - 1000);
+    fetchMock.mockImplementation(async () => new Response('slow down', { status: 429 }));
+    await svc.get(hubble, 'JUPITER'); // stale: refresh fails, gate closes
+    const calls = fetchMock.mock.calls.length;
+    const again = await svc.get(hubble, 'JUPITER');
+    expect(fetchMock.mock.calls.length).toBe(calls);
+    expect(again.status).toBe('ok');
+    expect(again.images.length).toBeGreaterThan(0);
+    expect(again.fromCache).toBe(true);
+    expect(again.limitedUntil).toBeGreaterThan(Date.parse('2026-11-16T12:00:00Z'));
+    expect(again.reason).toMatch(/next attempt/);
+  });
+
+  it('OFFLINE never closes the failure gate', async () => {
+    const store = new Store(':memory:');
+    const svc = new ArchiveImagesService({ store, http: new Http(store, { offline: true }) });
+    await svc.get(hubble, 'JUPITER');
+    expect(readBackoff(store, 'archive-images:mast')).toBeUndefined();
   });
 
   it('OFFLINE with nothing cached is an error answer, not a thrown one', async () => {

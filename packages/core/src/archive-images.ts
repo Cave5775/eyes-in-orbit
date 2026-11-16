@@ -8,9 +8,12 @@ import { HUBBLE_NORAD } from './observatory';
 export interface ArchiveImage {
   /** archive observation id (MAST `obs_id`) */
   id: string;
-  /** a preview jpeg, small enough for a thumbnail grid; the browser loads it straight from the archive */
+  /**
+   * the preview jpeg the archive offers (MAST has one size only, "Preview-Full": measured 19 to 102 kB per file, about 2000 px,
+   * and no thumbnail product), loaded by the browser straight from the archive; the card limits how many it shows at once
+   */
   thumbUrl: string;
-  /** the same preview at the size the archive keeps (the lightbox) */
+  /** the same file (the lightbox) */
   fullUrl: string;
   /** the observation in the archive's own search page */
   pageUrl: string;

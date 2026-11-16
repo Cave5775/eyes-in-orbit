@@ -1,6 +1,6 @@
 import type { ArchiveImage, ArchiveImagesResult, EntityRecord } from '@eio/core';
 import { describe, expect, it, vi } from 'vitest';
-import { captionOf, cardBody, cardTitle, cardView, createArchiveCache, dateOf, stepIndex } from '../src/lib/archive-card';
+import { MORE_STEP, THUMBS_FIRST, captionOf, cardBody, cardTitle, cardView, createArchiveCache, dateOf, stepIndex } from '../src/lib/archive-card';
 import { createMockApi } from '../src/mock/mock-api';
 
 const body = (id: string, kind: string): Pick<EntityRecord, 'kind' | 'provider'> => ({ kind, provider: { type: 'body', bodyId: id } } as never);
@@ -56,6 +56,13 @@ describe('card text', () => {
     expect(stepIndex(0, 3, -1)).toBe(2);
     expect(stepIndex(-1, 3, 1)).toBe(-1);
     expect(stepIndex(0, 0, 1)).toBe(-1);
+  });
+});
+
+describe('thumbnail budget', () => {
+  it('shows a few previews first (MAST has no smaller product than the ~100 kB one) and more on request', () => {
+    expect(THUMBS_FIRST).toBeLessThan(24);
+    expect(THUMBS_FIRST + 2 * MORE_STEP).toBeGreaterThanOrEqual(24);
   });
 });
 

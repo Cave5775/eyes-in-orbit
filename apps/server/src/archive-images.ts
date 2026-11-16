@@ -64,20 +64,26 @@ export class ArchiveImagesService {
     const source = 'archive-images:mast';
     const key = `archive-images:${CACHE_VERSION}:${collection}:${target}:${WINDOW_YEARS}y`;
     const gate = readBackoff(store, source);
-    if (isBackedOff(gate, t) && !store.get(key)) {
+    if (isBackedOff(gate, t)) {
+      // the source is being left alone: no request; a cached list, even a stale one, is still served (with the gate's time)
       const until = new Date(gate.notBefore).toISOString().slice(11, 16);
-      return { ...base, status: 'error', reason: `${gate.message} (next attempt ${until}Z)`, limitedUntil: gate.notBefore };
+      const reason = `${gate.message} (next attempt ${until}Z)`;
+      const row = store.get<MastParsed>(key);
+      if (row) return { ...archiveAnswer({ ...base, fetchedAt: row.fetchedAt }, spec, target, row.value), fromCache: true, reason, limitedUntil: gate.notBefore };
+      return { ...base, status: 'error', reason, limitedUntil: gate.notBefore };
     }
+    // OFFLINE=1 is a choice, not a failure of the source: it never closes the gate
+    const fail = (e: unknown): void => { if (!http.offline) recordFailure(store, source, e, t); };
     try {
       const since = t - WINDOW_YEARS * 365.25 * 86_400_000;
       const r = await http.cachedFetch<MastParsed>(key, mastUrl(collection, target, since), TTL_MS, parseMast, undefined, { source: 'mast', mode: 'demand' });
       if (r.stale && r.error) {
-        if (r.limitedUntil === undefined) recordFailure(store, source, new Error(r.error), t);
+        if (r.limitedUntil === undefined) fail(new Error(r.error));
       } else if (!r.fromCache) clearBackoff(store, source);
       return { ...archiveAnswer({ ...base, fetchedAt: r.fetchedAt }, spec, target, r.value), ...(r.fromCache ? { fromCache: true } : {}) };
     } catch (err) {
       if (err instanceof LimitedError) return { ...base, status: 'error', reason: `Request limit: ${err.message}`, limitedUntil: err.retryAt };
-      recordFailure(store, source, err, t);
+      fail(err);
       return { ...base, status: 'error', reason: (err instanceof Error ? err.message : String(err)).slice(0, 300) };
     }
   }

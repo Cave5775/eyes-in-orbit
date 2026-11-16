@@ -13,6 +13,10 @@ export function cardBody(rec: Pick<EntityRecord, 'kind' | 'provider'> | undefine
   return rec.kind === 'star' || rec.kind === 'planet' || rec.kind === 'dwarf_planet' || id === 'MOON' ? id : null;
 }
 
+/** MAST has one preview size (19 to 102 kB measured, about 2000 px): the card loads this many at first and this many more per click, so opening it never fetches all 24 at once. */
+export const THUMBS_FIRST = 8;
+export const MORE_STEP = 8;
+
 export const cardTitle = (bodyName: string, observatoryName: string): string => `${bodyName} by ${observatoryName}`;
 
 export type CardView =
