@@ -156,6 +156,8 @@ export interface SkyView {
   center(): { raDeg: number; decDeg: number } | null;
   /** centre, field of view and rotation in one call (the sign convention of Aladin's rotation stays in this module) */
   setPose(p: SkyViewPose): void;
+  /** move the centre and the rotation only (the field of view stays: Follow re-aims with it several times a second) */
+  aim(raDeg: number, decDeg: number, rotationDeg: number): void;
   /** the rotation Aladin reports, in ITS convention (degrees); null when the build has no rotation */
   rotation(): number | null;
   /** CSS pixel (x right, y down, origin the top left of the Aladin element) of a J2000 position; null when it has none */
@@ -315,6 +317,10 @@ function buildSkyView(A: AladinGlobal, el: HTMLElement, init: SkyViewInit): SkyV
       a.gotoRaDec(p.raDeg, p.decDeg);
       view.setFov(p.hFovDeg);
       a.setRotation?.(aladinRotationDeg(p.rotationDeg));
+    },
+    aim: (ra, dec, rotationDeg) => {
+      a.gotoRaDec(ra, dec);
+      a.setRotation?.(aladinRotationDeg(rotationDeg));
     },
     rotation: () => {
       const r = a.getRotation?.();

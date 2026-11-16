@@ -3,6 +3,7 @@ import { createSkyView, loadAladin, type SkyView, type SkyViewPose } from '../li
 import { RequestTokens } from '../lib/sky-mode';
 import { mirrors } from '../lib/hips-mirror';
 import { surveyOf } from '../lib/observatories';
+import { chooseSurvey, type SurveyPlan } from '../lib/survey-fallback';
 import { curtainEasing, curtainKeyframes, scanKeyframes, TRANSITION_MS, type SkyTransitionId } from '../lib/sky-transition';
 
 /** The elements the driver works on (rendered by SkyOverlay). */
@@ -23,6 +24,10 @@ function timeScale(): number {
 }
 
 const NO_SURVEY = (id: string) => `${surveyOf(id)?.label ?? id} is unavailable right now: none of its servers answered. Try another survey.`;
+const NONE_ANSWER = 'No sky survey server answers right now (the survey servers or the network are down)';
+
+/** What `prepare` ended up with: the survey in use, the one asked for first, and the surveys ahead of the used one that had no server. */
+export interface PrepareResult { used: string; requested: string; unavailable: string[] }
 
 /**
  * The imperative half of the Sky view: Aladin Lite (created once, then kept for the session: Aladin has no destroy) and the
@@ -46,17 +51,22 @@ export class SkyDriver {
   }
 
   /**
-   * Load Aladin Lite and a server for `surveyId`, then create the view (once) or point the existing one at the survey. `pose` is
+   * Load Aladin Lite and a server for the first survey of `target` that has one (a survey id, or a plan: the observatory's own
+   * surveys in order, then all-sky fallbacks; lib/survey-fallback.ts), then create the view (once) or point the existing one at
+   * that survey. Rejects only when no survey of the plan has a server, or Aladin does not load. `pose` is
    * asked for when the view is created, so it starts where the camera will end up and its first tiles load during the camera blend.
    * A pose of `null` (the camera has not drawn a frame yet) aims nothing: a NEW view is created at a placeholder (the caller aims
    * it when a pose exists), an existing one stays where it is. Does nothing, and resolves, when a later `prepare`, `useSurvey` or
-   * `invalidate` has taken over while it was waiting.
+   * `invalidate` has taken over while it was waiting (then it resolves null).
    */
-  async prepare(surveyId: string, pose: () => SkyViewPose | null): Promise<void> {
+  async prepare(target: string | SurveyPlan, pose: () => SkyViewPose | null): Promise<PrepareResult | null> {
     const token = this.tokens.take();
-    // both start at once: the library and the survey server are independent, and either failing ends the attempt
-    const [url, A] = await Promise.all([this.mirrorOf(surveyId), loadAladin()]);
-    if (!this.tokens.current(token)) return;
+    const plan: SurveyPlan = typeof target === 'string' ? { own: [target], fallbacks: [] } : target;
+    // both start at once: the library and the survey servers are independent, and either failing ends the attempt
+    const [choice, A] = await Promise.all([chooseSurvey(plan, (id) => this.tryMirror(id)), loadAladin()]);
+    if (!this.tokens.current(token)) return null;
+    if (!choice) throw new Error(plan.own.length + plan.fallbacks.length === 1 ? NO_SURVEY(plan.own[0] ?? plan.fallbacks[0]) : NONE_ANSWER);
+    const surveyId = choice.id, url = choice.value;
     const p = pose();
     if (!this.v) {
       const at = p ?? { raDeg: 0, decDeg: 0, hFovDeg: 60, rotationDeg: 0 };
@@ -68,6 +78,7 @@ export class SkyDriver {
     }
     if (p) this.v.setPose(p);
     this.v.setActive(this.active);
+    return { used: choice.id, requested: choice.requested, unavailable: choice.unavailable };
   }
 
   /** Run Aladin's render loop (a sky view starts) or park it (nothing is shown: a hidden view costs main-thread time every frame otherwise, see lib/aladin.ts). */
@@ -90,6 +101,12 @@ export class SkyDriver {
     this.surveyId = surveyId;
   }
 
+  /** The working server of a survey, or null (an unknown id, or no server answers). */
+  private async tryMirror(surveyId: string): Promise<string | null> {
+    const s = surveyOf(surveyId);
+    return s ? mirrors.pick(s.id, s.urls) : null;
+  }
+
   private async mirrorOf(surveyId: string): Promise<string> {
     const s = surveyOf(surveyId) ?? surveyOf(DEFAULT_HIPS_SURVEY);
     if (!s) throw new Error(NO_SURVEY(surveyId));
@@ -100,6 +117,36 @@ export class SkyDriver {
 
   aim(p: SkyViewPose): void {
     this.v?.setPose(p);
+  }
+
+  /**
+   * Tell `cb` when the person moves or zooms the view themselves: a drag (a press that travels more than 4 px) or the wheel, seen
+   * in the capture phase on the Aladin host (nothing is stopped). Returns the unsubscribe function.
+   */
+  watchUser(cb: (kind: 'drag' | 'zoom') => void): () => void {
+    const host = this.els.host;
+    let down: { x: number; y: number } | null = null;
+    const onDown = (e: PointerEvent) => { down = { x: e.clientX, y: e.clientY }; };
+    const onMove = (e: PointerEvent) => {
+      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) {
+        down = null;
+        cb('drag');
+      }
+    };
+    const onUp = () => { down = null; };
+    const onWheel = () => cb('zoom');
+    host.addEventListener('pointerdown', onDown, true);
+    host.addEventListener('pointermove', onMove, true);
+    host.addEventListener('pointerup', onUp, true);
+    host.addEventListener('pointercancel', onUp, true);
+    host.addEventListener('wheel', onWheel, { capture: true, passive: true });
+    return () => {
+      host.removeEventListener('pointerdown', onDown, true);
+      host.removeEventListener('pointermove', onMove, true);
+      host.removeEventListener('pointerup', onUp, true);
+      host.removeEventListener('pointercancel', onUp, true);
+      host.removeEventListener('wheel', onWheel, true);
+    };
   }
 
   /** True while a curtain animation is running. */

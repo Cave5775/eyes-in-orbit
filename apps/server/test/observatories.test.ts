@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GROUND_OBSERVATORIES, HUBBLE_NORAD, observatoryOf, type Omm } from '@eio/core';
+import { FERMI_NORAD, GROUND_OBSERVATORIES, HUBBLE_NORAD, XMM_NORAD, observatoryOf, type Omm } from '@eio/core';
 import { satelliteEntity } from '../src/connectors/celestrak';
 import { DSN_STATIONS, DSN_STATION_OBSERVATORY, DSN_TARGETS, probeEntity } from '../src/connectors/dsn-targets';
 import { groundObservatoryEntity } from '../src/connectors/observatories';
@@ -13,16 +13,22 @@ const omm = (norad: number, name: string): Omm => ({
 describe('observatory entities', () => {
   it('marks Hubble (NORAD 20580) as a space observatory and no other satellite', () => {
     const hst = satelliteEntity(omm(HUBBLE_NORAD, 'HST'), 'active');
-    expect(observatoryOf(hst)).toMatchObject({ site: 'space', survey: 'CDS/P/DSS2/color' });
+    expect(observatoryOf(hst)).toMatchObject({ site: 'space', surveys: ['CDS/P/HST/color', 'ESAVO/P/HST/WFC3'] });
     expect(hst.id).toBe('sat-20580');
     expect(observatoryOf(satelliteEntity(omm(25545, 'SOMETHING'), 'active'))).toBeNull();
   });
 
-  it('marks JWST, TESS and Chandra probes as space observatories, other probes not', () => {
-    for (const code of ['JWST', 'TESS', 'CHDR']) expect(observatoryOf(probeEntity(code))?.site, code).toBe('space');
+  it('marks XMM-Newton (NORAD 25989) and Fermi (33053) as space observatories', () => {
+    expect(observatoryOf(satelliteEntity(omm(XMM_NORAD, 'XMM-NEWTON'), 'active'))).toMatchObject({ site: 'space', bands: ['x-ray'], surveys: ['xcatdb/P/XMM/PN/color', 'ESDC/P/XMM/EPIC-RGB'] });
+    expect(observatoryOf(satelliteEntity(omm(FERMI_NORAD, 'FERMI'), 'active'))).toMatchObject({ site: 'space', surveys: ['CDS/P/Fermi/color'] });
+  });
+
+  it('marks JWST, TESS, Chandra and Euclid probes as space observatories, other probes not', () => {
+    for (const code of ['JWST', 'TESS', 'CHDR', 'EUCL']) expect(observatoryOf(probeEntity(code))?.site, code).toBe('space');
     expect(observatoryOf(probeEntity('CHDR'))?.bands).toEqual(['x-ray']);
     expect(observatoryOf(probeEntity('VGR1'))).toBeNull();
-    expect(Object.keys(DSN_TARGETS).filter((c) => observatoryOf(probeEntity(c)))).toEqual(['JWST', 'TESS', 'CHDR']);
+    expect(Object.keys(DSN_TARGETS).filter((c) => observatoryOf(probeEntity(c)))).toEqual(['JWST', 'TESS', 'CHDR', 'EUCL']);
+    expect(DSN_TARGETS.EUCL.horizons).toBe('-680');
   });
 
   it('builds the ground sites as geodetic ground_station entities in the observatory group', () => {
@@ -35,6 +41,6 @@ describe('observatory entities', () => {
 
   it('lists the three DSN complexes as radio observatories without sky imagery', () => {
     expect(DSN_STATIONS).toHaveLength(3);
-    expect(DSN_STATION_OBSERVATORY).toEqual({ site: 'ground', bands: ['radio'], survey: null });
+    expect(DSN_STATION_OBSERVATORY).toEqual({ site: 'ground', bands: ['radio'], surveys: [] });
   });
 });

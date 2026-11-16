@@ -1,5 +1,5 @@
 import type { FrameId } from '@eio/core';
-import { observatoryAttrs, type ObservatoryMeta } from '@eio/core';
+import { SPACE_OBSERVATORY_META, observatoryAttrs, type ObservatoryMeta } from '@eio/core';
 import type { NewEntity } from '../hub';
 
 /**
@@ -57,9 +57,6 @@ function marsOrbiter(t: Pick<DsnTarget, 'name' | 'horizons'>, stepMin: number): 
   };
 }
 
-/** JWST: infrared telescope (the Sky view starts from the 2MASS infrared survey). */
-const SPACE_IR: ObservatoryMeta = { site: 'space', bands: ['infrared'], survey: 'CDS/P/2MASS/color' };
-
 /**
  * DSN spacecraft code -> display name and JPL Horizons id (unknown codes are skipped).
  * Targets orbiting a body other than Earth that is close enough to matter are fetched centred on that body
@@ -70,7 +67,7 @@ const SPACE_IR: ObservatoryMeta = { site: 'space', bands: ['infrared'], survey: 
 export const DSN_TARGETS: Record<string, DsnTarget> = {
   VGR1: { name: 'Voyager 1', horizons: '-31' },
   VGR2: { name: 'Voyager 2', horizons: '-32' },
-  JWST: { name: 'James Webb Space Telescope', horizons: '-170', attrs: observatoryAttrs(SPACE_IR) },
+  JWST: { name: 'James Webb Space Telescope', horizons: '-170', attrs: observatoryAttrs(SPACE_OBSERVATORY_META.jwst) },
   M20: { name: 'Mars 2020 Perseverance', horizons: '-168' },
   MSL: { name: 'Mars Science Laboratory Curiosity', horizons: '-76' },
   // Mars orbiters: Mars-centred like LRO (a 2 h orbit cannot be resolved in 30 min Earth-centred steps)
@@ -95,12 +92,15 @@ export const DSN_TARGETS: Record<string, DsnTarget> = {
   BEPI: { name: 'BepiColombo', horizons: '-121' },
   STA: { name: 'STEREO-A', horizons: '-234' },
   SOHO: { name: 'SOHO', horizons: '-21' },
-  TESS: { name: 'TESS', horizons: '-95', attrs: observatoryAttrs({ site: 'space', bands: ['optical', 'near-infrared'], survey: 'CDS/P/DSS2/color' }) },
-  CHDR: { name: 'Chandra X-ray Observatory', horizons: '-151', attrs: observatoryAttrs({ site: 'space', bands: ['x-ray'], survey: 'CDS/P/RASS' }) },
+  TESS: { name: 'TESS', horizons: '-95', attrs: observatoryAttrs(SPACE_OBSERVATORY_META.tess) },
+  CHDR: { name: 'Chandra X-ray Observatory', horizons: '-151', attrs: observatoryAttrs(SPACE_OBSERVATORY_META.chandra) },
+  // Euclid (Sun-Earth L2, Horizons -680 "Euclid (spacecraft)", 2023-092A). ESA tracks it with ESTRACK, so the DSN feed may never list it;
+  // the code is only the entity key (`dsn-EUCL`), the position comes from Horizons like JWST.
+  EUCL: { name: 'Euclid', horizons: '-680', attrs: observatoryAttrs(SPACE_OBSERVATORY_META.euclid) },
 };
 
 /** The three DSN complexes are listed as observatories (radio) without sky imagery. */
-export const DSN_STATION_OBSERVATORY: ObservatoryMeta = { site: 'ground', bands: ['radio'], survey: null };
+export const DSN_STATION_OBSERVATORY: ObservatoryMeta = { site: 'ground', bands: ['radio'], surveys: [] };
 
 export const DSN_STATIONS = [
   { id: 'dsn-goldstone', name: 'Goldstone Deep Space Communications Complex', complex: 'Goldstone', latDeg: 35.4267, lonDeg: -116.89, altKm: 1.0 },

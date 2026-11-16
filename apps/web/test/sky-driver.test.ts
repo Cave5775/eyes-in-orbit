@@ -10,6 +10,7 @@ const view = {
 const actives: boolean[] = [];
 const created: unknown[][] = [];
 let gate: Record<string, () => void> = {};
+const dead = new Set<string>(); // surveys with no server
 
 vi.mock('../src/lib/aladin', () => ({
   loadAladin: () => Promise.resolve({}),
@@ -17,7 +18,7 @@ vi.mock('../src/lib/aladin', () => ({
 }));
 vi.mock('../src/lib/hips-mirror', () => ({
   // each survey id waits until the test opens its gate, so the order of the answers is the test's
-  mirrors: { pick: (id: string) => new Promise<string>((res) => { gate[id] = () => res(`https://mirror/${id}`); }) },
+  mirrors: { pick: (id: string) => (dead.has(id) ? Promise.resolve(null) : new Promise<string>((res) => { gate[id] = () => res(`https://mirror/${id}`); })) },
 }));
 
 import { SkyDriver } from '../src/ui/sky-driver';
@@ -34,6 +35,7 @@ beforeEach(() => {
   created.length = 0;
   actives.length = 0;
   gate = {};
+  dead.clear();
 });
 
 describe('SkyDriver.prepare', () => {
@@ -153,5 +155,50 @@ describe('SkyDriver.useSurvey', () => {
     d.invalidate();
     gate[TWOMASS](); await u;
     expect(calls).toEqual([]);
+  });
+});
+
+describe('SkyDriver.prepare with a survey plan', () => {
+  const plan = { own: ['CDS/P/HST/color', 'ESAVO/P/HST/WFC3'], fallbacks: [DSS, TWOMASS] };
+
+  it('enters with the first fallback when every own survey is down, and says what was skipped', async () => {
+    dead.add('CDS/P/HST/color').add('ESAVO/P/HST/WFC3');
+    const d = new SkyDriver(els);
+    const p = d.prepare(plan, () => POSE);
+    await tick(); await tick();
+    gate[DSS]();
+    const r = await p;
+    expect(r).toEqual({ used: DSS, requested: 'CDS/P/HST/color', unavailable: ['CDS/P/HST/color', 'ESAVO/P/HST/WFC3'] });
+    expect(created[0][0]).toMatchObject({ survey: `https://mirror/${DSS}` });
+  });
+
+  it('uses the observatory\'s own survey when it answers, with no note to show', async () => {
+    dead.add('ESAVO/P/HST/WFC3');
+    const d = new SkyDriver(els);
+    const p = d.prepare(plan, () => POSE);
+    await tick();
+    gate['CDS/P/HST/color']();
+    expect(await p).toEqual({ used: 'CDS/P/HST/color', requested: 'CDS/P/HST/color', unavailable: [] });
+  });
+
+  it('fails only when no survey of the plan answers', async () => {
+    for (const id of [...plan.own, ...plan.fallbacks]) dead.add(id);
+    const d = new SkyDriver(els);
+    await expect(d.prepare(plan, () => POSE)).rejects.toThrow(/No sky survey server answers/);
+    expect(created).toEqual([]);
+  });
+
+  it('the survey picker still works after a fallback entry: a down survey rejects with a message and leaves the view alone', async () => {
+    dead.add('CDS/P/HST/color').add('ESAVO/P/HST/WFC3');
+    const d = new SkyDriver(els);
+    const p = d.prepare(plan, () => POSE);
+    await tick(); await tick();
+    gate[DSS](); await p;
+    calls.length = 0;
+    await expect(d.useSurvey('CDS/P/HST/color')).rejects.toThrow(/Hubble colour is unavailable right now/);
+    expect(calls).toEqual([]);
+    const u = d.useSurvey(TWOMASS);
+    await tick(); gate[TWOMASS](); await u;
+    expect(calls).toEqual([['setSurvey', `https://mirror/${TWOMASS}`]]);
   });
 });
