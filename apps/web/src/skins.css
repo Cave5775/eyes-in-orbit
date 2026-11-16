@@ -157,18 +157,162 @@
 [data-skin='mission'] .kv dt, [data-skin='mission'] .ds-kv dt { color: var(--ink-2); }
 [data-skin='mission'] .section-title { border-bottom: 1px solid var(--rule); margin: 0 12px; padding: 14px 0 4px; }
 
-/* the scene as a drawing sheet: a ruler along the top edge and registration marks in the corners (decoration only) */
+/* ---- the console: an early-1960s control desk, built only from CSS (no image, no shader, no script) ----
+   Hammertone enamel frame (--fr) around the navy panels; chamfered panel corners with screws; engraved label plates;
+   bakelite push-keys that light like lamps when engaged; nixie-tube windows for the clock and countdowns; the 3D view
+   sits in a CRT bezel with scanlines, a vignette, a corner glare and a slow roll bar. Everything is static paint except
+   the roll bar and the warm-up, which are transform / opacity animations under prefers-reduced-motion: no-preference. */
+:root[data-skin='mission'] {
+  --fr: #1a242b;
+  --fr-hi: #33434d;
+  --fr-lo: #0a1015;
+  --brass: #c9a35a;
+  --nixie: #ffb067;
+  --nixie-glow: rgba(255, 140, 50, 0.55);
+  --ch: 10px; /* chamfer */
+  --g: 2px; /* frame showing between panels */
+  /* hammertone: two layers of near-invisible dots */
+  --speckle:
+    radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.05) 0 1px, transparent 1.5px) 0 0 / 7px 7px,
+    radial-gradient(circle at 70% 75%, rgba(0, 0, 0, 0.28) 0 1px, transparent 1.5px) 0 0 / 5px 5px;
+  --brushed: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0 1px, rgba(0, 0, 0, 0.05) 1px 2px);
+  --screw:
+    radial-gradient(circle at 36% 34%, #8d9aa3 0 1px, transparent 2px),
+    radial-gradient(circle, #46535c 0 3px, #11181d 3.6px, transparent 4.2px);
+}
+[data-skin='mission'] .app { background: var(--fr) var(--speckle); }
+
+/* panels: chamfered corners, a bevelled edge, four screws */
+[data-skin='mission'] .panel,
+[data-skin='mission'] .topbar,
+[data-skin='mission'] .bottom,
+[data-skin='mission'] .ticker {
+  clip-path: polygon(calc(var(--g) + var(--ch)) var(--g), calc(100% - var(--g) - var(--ch)) var(--g), calc(100% - var(--g)) calc(var(--g) + var(--ch)), calc(100% - var(--g)) calc(100% - var(--g) - var(--ch)), calc(100% - var(--g) - var(--ch)) calc(100% - var(--g)), calc(var(--g) + var(--ch)) calc(100% - var(--g)), var(--g) calc(100% - var(--g) - var(--ch)), var(--g) calc(var(--g) + var(--ch)));
+}
+[data-skin='mission'] .topbar { --ch: 8px; }
+/* the top bar hosts the View / Data streams popovers, which hang below it: its clip keeps the top chamfers and lets the bottom run on */
+[data-skin='mission'] .topbar { position: relative; z-index: 30; clip-path: polygon(calc(var(--g) + var(--ch)) var(--g), calc(100% - var(--g) - var(--ch)) var(--g), calc(100% - var(--g)) calc(var(--g) + var(--ch)), calc(100% - var(--g)) 900px, var(--g) 900px, var(--g) calc(var(--g) + var(--ch))); }
+[data-skin='mission'] .ticker { --ch: 7px; }
+[data-skin='mission'] .panel { position: relative; box-shadow: inset 0 0 0 1px var(--fr-hi), inset 0 2px 0 rgba(255, 255, 255, 0.04); border: 0; }
+[data-skin='mission'] .bottom { position: relative; box-shadow: inset 0 0 0 1px var(--fr-hi); border-top: 0; }
+[data-skin='mission'] .panel::after, [data-skin='mission'] .bottom::after {
+  content: ''; position: absolute; inset: 0; z-index: 3; pointer-events: none; opacity: 0.9;
+  background: var(--screw) left 6px top 6px / 9px 9px no-repeat, var(--screw) right 6px top 6px / 9px 9px no-repeat,
+    var(--screw) left 6px bottom 6px / 9px 9px no-repeat, var(--screw) right 6px bottom 6px / 9px 9px no-repeat;
+}
+
+/* engraved label plates for panel heads: brushed metal, a brass edge, text cut into it */
+[data-skin='mission'] .panel-head {
+  background:
+    linear-gradient(var(--sig), var(--sig)) left center / 5px 18px no-repeat,
+    var(--brushed),
+    linear-gradient(180deg, #16263a, #0c1828 70%, #08111d);
+  border-bottom: 3px double var(--rule-2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), inset 0 -1px 0 var(--brass);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 -1px 0 rgba(255, 255, 255, 0.1);
+  padding-left: 22px; padding-right: 20px;
+}
+[data-skin='mission'] .panel-head > .mono { text-shadow: none; }
+[data-skin='mission'] .topbar {
+  background: var(--brushed), linear-gradient(180deg, #14263b, #091524);
+  border-bottom: 1px solid var(--brass); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  padding-left: 20px; padding-right: 18px;
+}
+[data-skin='mission'] .ds-status { border-bottom: 1px solid var(--brass); }
+[data-skin='mission'] .ticker { background: var(--brushed), #08111d; border-top: 0; }
+/* the ticker label is a right-pointing flag */
+[data-skin='mission'] .ticker-label { clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 50%, calc(100% - 9px) 100%, 0 100%); padding-right: 18px; padding-left: 16px; }
+/* the brand: a notched cream plate */
+[data-skin='mission'] .brand {
+  background: linear-gradient(180deg, #fbf3dc, #e3d6b4);
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px); padding: 3px 12px 3px 8px;
+}
+
+@media (max-width: 1100px) {
+  [data-skin='mission'] .topbar { padding-left: 10px; padding-right: 8px; gap: 6px; }
+  [data-skin='mission'] .utc-time { padding: 0 4px; font-stretch: 70%; box-shadow: inset 0 2px 6px #000, 0 0 0 1px var(--brass); }
+  [data-skin='mission'] .brand { padding-right: 6px; }
+}
+/* nixie tubes: a black recessed window, orange glow digits, a fine wire mesh and a glass glint */
+[data-skin='mission'] :is(.utc-time, .cd, .countdown) {
+  font-variant-numeric: tabular-nums; color: var(--nixie); font-weight: 500;
+  text-shadow: 0 0 3px var(--nixie-glow), 0 0 10px var(--nixie-glow), 0 0 22px rgba(255, 110, 20, 0.28);
+}
+[data-skin='mission'] :is(.utc-time, .countdown) {
+  padding: 1px 9px; border-radius: 4px; box-shadow: inset 0 2px 6px #000, 0 0 0 1px var(--brass), 0 0 0 3px var(--fr-lo);
+  background:
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.35) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), transparent 42%),
+    #0a0503;
+}
+[data-skin='mission'] .countdown { display: inline-block; max-width: calc(100% - 28px); margin: 12px 14px 4px; padding: 0 10px; font-size: 24px; box-shadow: inset 0 2px 6px #000, 0 0 0 1px var(--brass); }
+
+/* keys: bakelite push-buttons. A lit key is a lamp: warm lens glow, text cut dark into it */
+[data-skin='mission'] :is(.btn, .key) {
+  background: linear-gradient(180deg, #2a3947, #162230 55%, #101a26);
+  border-color: #4a6078 #2a3b4d #1a2531 #3a5068;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 2px 0 #04080d;
+  text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.8);
+}
+[data-skin='mission'] :is(.btn, .key):hover:not(:disabled) { background: linear-gradient(180deg, #34475a, #1c2d3f 55%, #152233); }
+[data-skin='mission'] :is(.btn, .key):active:not(:disabled) { transform: translateY(2px); box-shadow: inset 0 2px 4px #000; }
+[data-skin='mission'] :is(.btn.active, .key.on, .chip.on, .seg-btn.on) {
+  background: radial-gradient(ellipse at 50% 30%, #ff8a4f, var(--sig) 60%, #c1431a);
+  text-shadow: none; border-color: #ffb08a #b8421a #8a2f10 #e8693a;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 0 12px rgba(242, 98, 42, 0.55), 0 2px 0 #04080d;
+}
+[data-skin='mission'] .key.on.live { background: #0d1d17; box-shadow: inset 0 0 8px rgba(88, 194, 139, 0.35), 0 0 8px rgba(88, 194, 139, 0.25); text-shadow: 0 0 6px rgba(88, 194, 139, 0.8); }
+[data-skin='mission'] .key.on.warn { box-shadow: 0 0 12px rgba(224, 164, 58, 0.5), 0 2px 0 #04080d; }
+[data-skin='mission'] .chip { background: linear-gradient(180deg, #172433, #0e1824); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08); }
+[data-skin='mission'] .seg { box-shadow: inset 0 2px 4px #000; background: #070d15; }
+[data-skin='mission'] .seg-btn.on { box-shadow: 0 0 10px rgba(242, 98, 42, 0.5); }
+
+/* toggle switches: a brass-ringed slot with a lever knob */
+[data-skin='mission'] .switch { box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--brass); }
+[data-skin='mission'] .switch::after { background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(0, 0, 0, 0.25)); box-shadow: 0 1px 2px #000; }
+[data-skin='mission'] .switch:checked { box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.5), 0 0 8px rgba(242, 98, 42, 0.6), 0 0 0 1px var(--brass); }
+
+/* indicator lamps: a glass dome with a highlight inside a dark bezel */
+[data-skin='mission'] :is(.dot, .live-dot) {
+  background-image: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.75) 0 12%, transparent 48%);
+  box-shadow: 0 0 0 1px #000, 0 0 0 2px var(--fr-hi);
+}
+[data-skin='mission'] .dot.ok { box-shadow: 0 0 0 1px #000, 0 0 0 2px var(--fr-hi), 0 0 8px var(--ok); }
+[data-skin='mission'] .live-btn.live .live-dot { box-shadow: 0 0 0 1px #000, 0 0 0 2px var(--fr-hi), 0 0 9px #ff3b30; }
+
+/* selected rows and cards: a lit strip */
+[data-skin='mission'] .row.sel { background: linear-gradient(90deg, rgba(242, 98, 42, 0.22), rgba(242, 98, 42, 0.04) 70%); box-shadow: inset 3px 0 0 var(--sig), inset 0 0 12px rgba(242, 98, 42, 0.12); }
+[data-skin='mission'] .card.sel { border-top-color: var(--sig); box-shadow: inset 0 3px 10px -4px rgba(242, 98, 42, 0.5); }
+[data-skin='mission'] .tab.on { text-shadow: 0 0 8px rgba(242, 98, 42, 0.6); }
+
+/* popovers and floating windows: a brass hairline */
+[data-skin='mission'] .popover, [data-skin='mission'] .float-win { box-shadow: 0 0 0 1px var(--brass), var(--shadow-pop); background-image: var(--brushed); }
+
+/* ---- the 3D view: CRT bezel, drawing-sheet ruler and registration marks, scanlines, vignette, glare, roll bar ---- */
+[data-skin='mission'] .scene { border-radius: 18px; }
 [data-skin='mission'] .scene::before {
-  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 10px; z-index: 2; pointer-events: none;
+  content: ''; position: absolute; inset: 0; z-index: 2; pointer-events: none; border-radius: 18px;
+  border: 5px solid #0b1118;
+  box-shadow: inset 0 0 0 1px #000, inset 0 0 60px 6px rgba(0, 0, 0, 0.7);
   background:
     repeating-linear-gradient(90deg, var(--mk) 0 1px, transparent 1px 60px) 0 0 / 100% 10px no-repeat,
-    repeating-linear-gradient(90deg, var(--mk) 0 1px, transparent 1px 12px) 0 0 / 100% 5px no-repeat;
+    repeating-linear-gradient(90deg, var(--mk) 0 1px, transparent 1px 12px) 0 0 / 100% 5px no-repeat,
+    linear-gradient(var(--mk), var(--mk)) left 8px top 14px / 14px 1px no-repeat, linear-gradient(var(--mk), var(--mk)) left 8px top 14px / 1px 14px no-repeat,
+    linear-gradient(var(--mk), var(--mk)) right 8px top 14px / 14px 1px no-repeat, linear-gradient(var(--mk), var(--mk)) right 8px top 14px / 1px 14px no-repeat,
+    linear-gradient(var(--mk), var(--mk)) left 8px bottom 8px / 14px 1px no-repeat, linear-gradient(var(--mk), var(--mk)) left 8px bottom 8px / 1px 14px no-repeat,
+    linear-gradient(var(--mk), var(--mk)) right 8px bottom 8px / 14px 1px no-repeat, linear-gradient(var(--mk), var(--mk)) right 8px bottom 8px / 1px 14px no-repeat,
+    radial-gradient(ellipse 80% 60% at 18% 8%, rgba(255, 255, 255, 0.05), transparent 60%),
+    radial-gradient(ellipse at center, transparent 62%, rgba(0, 0, 0, 0.45) 100%),
+    repeating-linear-gradient(180deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 3px);
 }
 [data-skin='mission'] .scene::after {
-  content: ''; position: absolute; inset: 14px 6px 6px; z-index: 2; pointer-events: none;
-  background:
-    linear-gradient(var(--mk), var(--mk)) 0 0 / 16px 1px no-repeat, linear-gradient(var(--mk), var(--mk)) 0 0 / 1px 16px no-repeat,
-    linear-gradient(var(--mk), var(--mk)) 100% 0 / 16px 1px no-repeat, linear-gradient(var(--mk), var(--mk)) 100% 0 / 1px 16px no-repeat,
-    linear-gradient(var(--mk), var(--mk)) 0 100% / 16px 1px no-repeat, linear-gradient(var(--mk), var(--mk)) 0 100% / 1px 16px no-repeat,
-    linear-gradient(var(--mk), var(--mk)) 100% 100% / 16px 1px no-repeat, linear-gradient(var(--mk), var(--mk)) 100% 100% / 1px 16px no-repeat;
+  content: ''; position: absolute; left: 5px; right: 5px; top: 0; height: 90px; z-index: 2; pointer-events: none; opacity: 0.5;
+  background: linear-gradient(180deg, transparent, rgba(79, 198, 184, 0.07) 60%, transparent);
+  transform: translateY(-100px);
 }
+@media (prefers-reduced-motion: no-preference) {
+  [data-skin='mission'] .scene::after { animation: skin-roll 9s linear infinite; will-change: transform; }
+  [data-skin='mission'] .scene::before { animation: skin-warm 0.9s ease-out; }
+}
+@keyframes skin-roll { to { transform: translateY(760px); } }
+@keyframes skin-warm { from { opacity: 0; } 40% { opacity: 0.2; } to { opacity: 1; } }

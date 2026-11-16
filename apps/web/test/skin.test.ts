@@ -98,3 +98,27 @@ describe('skins.css', () => {
     }
   });
 });
+
+describe('skins.css motion and decoration', () => {
+  const guard = /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*?\r?\n\}/g;
+  it('runs every animation of the console skin only under prefers-reduced-motion: no-preference', () => {
+    const guarded = (skinsCss.match(guard) ?? []).join('\n');
+    expect(guarded).toContain('skin-roll');
+    expect(guarded).toContain('skin-warm');
+    // `animation:` may only appear inside the guarded blocks (keyframes are defined outside, never applied)
+    const outside = skinsCss.replace(guard, '').replace(/@keyframes[^{]*\{(?:[^{}]|\{[^}]*\})*\}/g, '');
+    expect(outside).not.toMatch(/\banimation:/);
+  });
+  it('paints the console with CSS only: nothing fetched, no font files, no category colour touched', () => {
+    const mission = skinsCss.slice(skinsCss.indexOf('mission: navy and cream'));
+    expect(mission).not.toMatch(/url\(\s*['"]?https?:/);
+    expect(mission).not.toMatch(/@import|@font-face/);
+    expect(mission).not.toMatch(/--c-[a-z-]+:/);
+  });
+  it('scopes every rule of the console section to the mission skin', () => {
+    const consoleCss = skinsCss.slice(skinsCss.indexOf('the console: an early-1960s'));
+    const selectors = consoleCss.split(/\r?\n/).filter((l) => /^[^\s@}/].*\{\s*$/.test(l) || /^\[data-skin.*\{.*\}\s*$/.test(l));
+    expect(selectors.length).toBeGreaterThan(10);
+    for (const l of selectors) expect(l, l).toMatch(/data-skin='mission'|^:root/);
+  });
+});
