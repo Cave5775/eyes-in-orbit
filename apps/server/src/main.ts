@@ -10,6 +10,7 @@ import { loadConfig, loadDotEnv } from './config';
 import { Scheduler, type Connector } from './connector';
 import { Credentials } from './credentials';
 import { DescribeService } from './describe/service';
+import { ArchiveImagesService } from './archive-images';
 import { bodies } from './connectors/bodies';
 import { celestrak } from './connectors/celestrak';
 import { dsn } from './connectors/dsn';
@@ -60,7 +61,7 @@ async function main(): Promise<void> {
       ids.forEach((id) => void scheduler.refresh(id));
       describe.syncHealth();
     },
-  }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline, limiter: http.limiter }), describe);
+  }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline, limiter: http.limiter }), describe, new ArchiveImagesService({ store, http }));
   await registerStream(app, hub);
 
   await app.listen({ port: config.port, host: config.host });

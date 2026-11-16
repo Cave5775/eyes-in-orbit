@@ -18,4 +18,5 @@ export * from './launch-group';
 export * from './parent';
 export * from './describe';
 export * from './observatory';
+export * from './archive-images';
 export * from './match';

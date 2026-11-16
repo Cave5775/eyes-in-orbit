@@ -5,6 +5,7 @@ import { syncLaunchEntities } from './connectors/launchlibrary';
 import { CredentialError, type Credentials } from './credentials';
 import { LimitedError } from './net/limiter';
 import type { DescribeService } from './describe/service';
+import type { ArchiveImagesService } from './archive-images';
 import type { Http } from './http';
 import { parseTile, type ImageryCache } from './imagery';
 import type { Hub } from './hub';
@@ -40,7 +41,7 @@ export interface CredentialsApi {
   onChanged(connectors: string[]): void;
 }
 
-export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store, creds?: CredentialsApi, imagery?: ImageryCache, describe?: DescribeService): void {
+export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: Store, creds?: CredentialsApi, imagery?: ImageryCache, describe?: DescribeService, archiveImages?: ArchiveImagesService): void {
   // full-text index of the catalogue (FTS5, in memory), kept in line with the hub; answers /api/match and /api/counts
   const index = new SearchIndex((id) => hub.graph.get(id));
   index.rebuild(hub.graph.all());
@@ -95,6 +96,17 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
       const rec = hub.graph.get(req.params.entityId);
       if (!rec) return reply.code(404).send({ error: `unknown entity ${req.params.entityId}` });
       return describe.describe(rec);
+    });
+  }
+
+  // images of a body taken by one observatory, from that observatory's public archive (MAST for Hubble and JWST), cached
+  if (archiveImages) {
+    app.get<{ Querystring: { observatory?: string; body?: string } }>('/api/archive-images', async (req, reply) => {
+      const { observatory, body } = req.query;
+      if (!observatory || !body || !/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(body)) return reply.code(400).send({ error: 'observatory=<entity id> and body=<body id, e.g. JUPITER> are required' });
+      const rec = hub.graph.get(observatory);
+      if (!rec) return reply.code(404).send({ error: `unknown entity ${observatory}` });
+      return archiveImages.get(rec, body);
     });
   }
 
