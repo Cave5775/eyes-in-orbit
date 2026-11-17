@@ -12,6 +12,9 @@ export interface CacheRow<T = unknown> {
   ttlMs: number;
 }
 
+/** LIKE pattern (use with `ESCAPE '\\'`) matching keys that start with `prefix`. */
+const likePrefix = (prefix: string): string => `${prefix.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
 /** SQLite key/value cache with per-row TTL (`kv`: key, value json, fetchedAt, ttl). */
 export class Store {
   private db: Database;
@@ -36,10 +39,9 @@ export class Store {
       .run(key, JSON.stringify(value), fetchedAt, ttlMs);
   }
 
-  /** Rows whose key starts with `prefix` (no SQL wildcards are expected in prefixes). */
+  /** Rows whose key starts with `prefix` (LIKE wildcards in the prefix are escaped). */
   list<T = unknown>(prefix: string): { key: string; row: CacheRow<T> }[] {
-    const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
-    const rows = this.db.prepare("SELECT key, value, fetchedAt, ttl FROM kv WHERE key LIKE ? ESCAPE '\\'").all(`${escaped}%`) as
+    const rows = this.db.prepare("SELECT key, value, fetchedAt, ttl FROM kv WHERE key LIKE ? ESCAPE '\\'").all(likePrefix(prefix)) as
       { key: string; value: string; fetchedAt: number; ttl: number }[];
     return rows.map((r) => ({ key: r.key, row: { value: JSON.parse(r.value) as T, fetchedAt: r.fetchedAt, ttlMs: r.ttl } }));
   }
@@ -48,9 +50,14 @@ export class Store {
     this.db.prepare('DELETE FROM kv WHERE key = ?').run(key);
   }
 
-  /** Drop rows that have been stale for longer than `maxAgeMs` past their TTL. */
-  prune(maxAgeMs: number, now = Date.now()): number {
-    return Number(this.db.prepare('DELETE FROM kv WHERE fetchedAt + ttl < ?').run(now - maxAgeMs).changes);
+  /**
+   * Drop rows that have been stale for longer than `maxAgeMs` past their TTL, except rows whose key starts with one of
+   * `keepPrefixes` (kept at any age, e.g. the last good download of a source that may stay unreachable for weeks).
+   */
+  prune(maxAgeMs: number, now = Date.now(), keepPrefixes: readonly string[] = []): number {
+    const keep = keepPrefixes.map(() => " AND key NOT LIKE ? ESCAPE '\\'").join('');
+    const sql = `DELETE FROM kv WHERE fetchedAt + ttl < ?${keep}`;
+    return Number(this.db.prepare(sql).run(now - maxAgeMs, ...keepPrefixes.map(likePrefix)).changes);
   }
 
   close(): void {

@@ -1,5 +1,3 @@
-import { readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
 import { FERMI_NORAD, HUBBLE_NORAD, SPACE_OBSERVATORY_META, XMM_NORAD, observatoryAttrs, type Omm, type StreamLink } from '@eio/core';
 import { clearBackoff, isBackedOff, isBlockError, isConnectError, readBackoff, recordFailure } from '../backoff';
 import type { Connector, ConnectorContext } from '../connector';
@@ -134,40 +132,15 @@ export function normalizeCelestrak(groups: Partial<Record<SatGroup, Omm[]>>): Ne
   return [...byNorad.values()];
 }
 
-/**
- * A group file saved by hand (`data/celestrak/<group>.json`, the same JSON `gp.php?GROUP=<group>&FORMAT=json` returns).
- * The escape hatch when CelesTrak blocks this IP and nothing is cached yet.
- */
-export function loadGroupFile(dir: string, group: SatGroup): Omm[] | undefined {
-  try {
-    return parseOmmJson(readFileSync(join(dir, `${group}.json`), 'utf8'));
-  } catch {
-    return undefined;
-  }
-}
-
-type Source = 'live' | 'cache' | 'file';
-
-/** Like `loadGroupFile`, with the time the file was saved so it can be compared with the cache. */
-export function loadGroupFileStamped(dir: string, group: SatGroup): { omms: Omm[]; savedAt: number } | undefined {
-  try {
-    const path = join(dir, `${group}.json`);
-    const omms = parseOmmJson(readFileSync(path, 'utf8'));
-    return { omms, savedAt: statSync(path).mtimeMs };
-  } catch {
-    return undefined;
-  }
-}
+/** Key prefix of the per-group cache rows (`celestrak:<group>`); the startup prune keeps rows under it at any age. */
+export const CELESTRAK_CACHE_PREFIX = 'celestrak:';
 
 /**
- * Everything that does not touch the network: the SQLite entry of any age or the saved file (`npm run celestrak:seed`,
- * or by hand), whichever is newer, so a file seeded on another network beats an old cache entry.
+ * Everything that does not touch the network: the last good download of a group, a SQLite cache row of any age (the
+ * startup prune skips `celestrak:*`), served whenever CelesTrak cannot be reached.
  */
-function localGroup(ctx: ConnectorContext, group: SatGroup): { omms: Omm[]; source: Source } | undefined {
-  const cached = ctx.store.get<Omm[]>(`celestrak:${group}`);
-  const file = loadGroupFileStamped(join(ctx.config.dataDir, 'celestrak'), group);
-  if (cached && (!file || cached.fetchedAt >= file.savedAt)) return { omms: cached.value, source: 'cache' };
-  return file && { omms: file.omms, source: 'file' };
+function localGroup(ctx: ConnectorContext, group: SatGroup): Omm[] | undefined {
+  return ctx.store.get<Omm[]>(`${CELESTRAK_CACHE_PREFIX}${group}`)?.value;
 }
 
 const hhmm = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
@@ -190,19 +163,19 @@ export function createCelestrak(): Connector {
       /** set by the first block or connect error (or a stored connect-error gate): the rest of the run stays off the network */
       let halt: string | undefined;
       for (const group of FETCH_ORDER) {
-        const source = `celestrak:${group}`;
+        const source = `${CELESTRAK_CACHE_PREFIX}${group}`;
         if (halt) {
           // one shared gate: no request, no failure counted for this group, one line in total
           const local = localGroup(ctx, group);
-          if (local) groups[group] = local.omms;
-          skipped.push(`${group} (${local ? (local.source === 'file' ? 'data file' : 'cache') : 'no data'})`);
+          if (local) groups[group] = local;
+          skipped.push(`${group} (${local ? 'cache' : 'no data'})`);
           continue;
         }
         const gate = readBackoff(ctx.store, source);
-        const give = (local: { omms: Omm[]; source: Source } | undefined, why: string): void => {
+        const give = (local: Omm[] | undefined, why: string): void => {
           if (local) {
-            groups[group] = local.omms;
-            degraded.push(`${group}: ${why}, using ${local.source === 'file' ? 'data file' : 'cache'}`);
+            groups[group] = local;
+            degraded.push(`${group}: ${why}, using cache`);
           } else failures.push(`${group}: ${why}`);
         };
         if (isBackedOff(gate)) {
@@ -224,16 +197,16 @@ export function createCelestrak(): Connector {
             // the request limiter refused the download (cap or block): not a failure of the source, so no backoff gate; the rest of the run stays off the network
             retryAt = Math.min(retryAt, res.limitedUntil);
             const local = localGroup(ctx, group);
-            if (local) groups[group] = local.omms;
-            degraded.push(`${group}: ${res.error ?? 'rate limited'}, using ${local?.source === 'file' ? 'data file' : 'cache'}`);
+            if (local) groups[group] = local;
+            degraded.push(`${group}: ${res.error ?? 'rate limited'}, using cache`);
             halt = `${group} is rate limited`;
           } else if (res.stale) {
-            // cachedFetch fell back to an old entry because the download failed; a newer saved file beats it
+            // cachedFetch fell back to an old entry because the download failed
             const next = recordFailure(ctx.store, source, res.error ?? 'download failed');
             retryAt = Math.min(retryAt, next.notBefore);
             const local = localGroup(ctx, group);
-            if (local) groups[group] = local.omms;
-            degraded.push(`${group}: ${res.error ?? 'download failed'}, using ${local?.source === 'file' ? 'data file' : 'cache'}`);
+            if (local) groups[group] = local;
+            degraded.push(`${group}: ${res.error ?? 'download failed'}, using cache`);
             if (isBlockError(res.error ?? '')) halt = `${group} failed`;
           } else clearBackoff(ctx.store, source);
         } catch (err) {

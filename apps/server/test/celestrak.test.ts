@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { launchIdFromCospar } from '@eio/core';
 import { backoffKey, readBackoff } from '../src/backoff';
-import { AMATEUR_GROUP, DEBRIS_GROUPS, NAV_GROUPS, createCelestrak, loadGroupFile, normalizeCelestrak, parseOmmJson, satKind } from '../src/connectors/celestrak';
+import { AMATEUR_GROUP, DEBRIS_GROUPS, NAV_GROUPS, createCelestrak, normalizeCelestrak, parseOmmJson, satKind } from '../src/connectors/celestrak';
 import { Store } from '../src/store';
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
@@ -44,15 +44,6 @@ describe('celestrak normalize', () => {
     const omm = { ...groups().starlink[0], NORAD_CAT_ID: 99999, OBJECT_NAME: 'STARLINK-1234' };
     const e = normalizeCelestrak({ active: [omm] })[0];
     expect(e).toMatchObject({ id: 'sat-99999', group: 'starlink', render: { colorKey: 'starlink' } });
-  });
-
-  it('reads group files and ignores missing or broken ones', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'eio-celestrak-'));
-    expect(loadGroupFile(dir, 'starlink')).toBeUndefined();
-    writeFileSync(join(dir, 'starlink.json'), 'GP data has not updated');
-    expect(loadGroupFile(dir, 'starlink')).toBeUndefined();
-    writeFileSync(join(dir, 'starlink.json'), fixture('celestrak-starlink.json'));
-    expect(loadGroupFile(dir, 'starlink')!.length).toBeGreaterThan(0);
   });
 
   it('builds sgp4 entities with aliases and render keys', () => {
@@ -280,32 +271,18 @@ describe('celestrak connector run', () => {
     expect(ctx.health.note).toMatch(/starlink: waiting until \d\d:\d\dZ \(HTTP 403\), using cache/);
   });
 
-  it('falls back to data/celestrak/<group>.json when CelesTrak fails and nothing is cached', async () => {
-    const ctx = fakeCtx();
-    ctx.cachedFetch = (async (key: string) => {
-      if (key === 'celestrak:starlink') throw new Error('HTTP 403 for https://celestrak.org/x');
-      return { value: parseOmmJson(body(key.replace('celestrak:', ''))), fromCache: false, stale: false };
-    }) as never;
-    mkdirSync(join(ctx.config.dataDir, 'celestrak'));
-    writeFileSync(join(ctx.config.dataDir, 'celestrak', 'starlink.json'), fixture('celestrak-starlink.json'));
-    await fast.run!(ctx as never);
-    expect(ctx.upserted.some((e) => e.id === 'sat-44714' && e.group === 'starlink')).toBe(true);
-    expect(ctx.health.note).toMatch(/starlink: HTTP 403.*using data file/);
-  });
-
-  it('falls back to data/celestrak/<group>.json for a navigation group and keeps its colour', async () => {
+  it('falls back to an expired cache row for a navigation group when CelesTrak fails, and keeps its colour', async () => {
     const ctx = fakeCtx();
     ctx.cachedFetch = (async (key: string) => {
       if (key === 'celestrak:gps-ops') throw new Error('HTTP 403 for https://celestrak.org/x');
       return { value: parseOmmJson(body(key.replace('celestrak:', ''))), fromCache: false, stale: false };
     }) as never;
-    mkdirSync(join(ctx.config.dataDir, 'celestrak'));
-    writeFileSync(join(ctx.config.dataDir, 'celestrak', 'gps-ops.json'), fixture('celestrak-gps-ops.json'));
+    ctx.store.set('celestrak:gps-ops', parseOmmJson(fixture('celestrak-gps-ops.json')), 1, 0); // long expired
     const upserted: { id: string; group?: string; render?: { colorKey?: string } }[] = [];
     ctx.hub.upsert = ((...r: typeof upserted) => (upserted.push(...r), r.length)) as never;
     await fast.run!(ctx as never);
     expect(upserted.find((e) => e.id === 'sat-27663')).toMatchObject({ group: 'gps-ops', render: { colorKey: 'navigation' } });
-    expect(ctx.health.note).toMatch(/gps-ops: HTTP 403.*using data file/);
+    expect(ctx.health.note).toMatch(/gps-ops: HTTP 403.*using cache/);
   });
 
   it('clears the gate once a download works again', async () => {
@@ -365,15 +342,14 @@ describe('celestrak connector run', () => {
     expect(readBackoff(ctx.store, 'celestrak:starlink')).toBeUndefined();
   });
 
-  it('stays off the network in later runs while a connect-error gate is stored, using data files for the skipped groups', async () => {
+  it('stays off the network in later runs while a connect-error gate is stored, using the stale cache rows for the skipped groups', async () => {
     const ctx = fakeCtx();
     ctx.store.set(backoffKey('celestrak:stations'), { failures: 1, notBefore: Date.now() + 3600_000, message: 'fetch failed (UND_ERR_CONNECT_TIMEOUT)' }, 1e9);
-    mkdirSync(join(ctx.config.dataDir, 'celestrak'));
-    writeFileSync(join(ctx.config.dataDir, 'celestrak', 'starlink.json'), fixture('celestrak-starlink.json'));
+    ctx.store.set('celestrak:starlink', parseOmmJson(fixture('celestrak-starlink.json')), 1, 0); // long expired
     await fast.run!(ctx as never);
     expect(ctx.calls).toEqual([]);
     expect(ctx.upserted.some((e) => e.group === 'starlink')).toBe(true);
-    expect(ctx.health.note).toMatch(/stations: waiting until \d\d:\d\dZ.*skipped 10 groups.*starlink \(data file\)/);
+    expect(ctx.health.note).toMatch(/stations: waiting until \d\d:\d\dZ.*skipped 10 groups.*starlink \(cache\)/);
   });
 
   it('a stored 403 gate on one group does not stop the groups after it', async () => {
