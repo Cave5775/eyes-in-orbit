@@ -1,4 +1,4 @@
-import type { Sample } from '@eio/core';
+import { streamToFrameAxes, type Sample } from '@eio/core';
 import type { Connector } from '../connector';
 import { LimitedError } from '../net/limiter';
 import { DEFAULT_HORIZONS, DSN_TARGETS, horizonsSpecOf, probeEntity, probeId, type HorizonsSpec } from './dsn-targets';
@@ -24,6 +24,7 @@ export const HORIZONS_PAST_DAYS = DEFAULT_HORIZONS.pastDays;
 export const HORIZONS_FUTURE_DAYS = DEFAULT_HORIZONS.futureDays;
 /** Part of the cache key (together with target, centre, step and window): bump on any change of what is requested or how it is read. */
 const CACHE_VERSION = 'v2';
+// (the cache holds the parsed ICRF vectors; the axes of the frame are applied after the read, see `streamToFrameAxes`)
 
 /** Cache key of one target's ephemeris: includes centre, step and window so a changed request never reuses older data. */
 export function horizonsCacheKey(horizonsId: string, spec: HorizonsSpec = DEFAULT_HORIZONS): string {
@@ -86,7 +87,7 @@ export const horizons: Connector = {
         const spec = horizonsSpecOf(target);
         const res = await ctx.cachedFetch(horizonsCacheKey(target.horizons, spec), horizonsUrl(target.horizons, Date.now(), spec), TTL_MS, parseHorizonsVectors, undefined, { source: 'horizons', mode: 'poll' });
         const prev = ctx.hub.graph.get(probeId(code)) ?? probeEntity(code);
-        ctx.hub.upsert({ ...prev, bodyId: spec.bodyId, provider: { type: 'sampled', frame: spec.frame, samples: res.value } });
+        ctx.hub.upsert({ ...prev, bodyId: spec.bodyId, provider: { type: 'sampled', frame: spec.frame, samples: streamToFrameAxes(spec.frame, res.value) } });
         n++;
         if (res.fromCache) cached++;
       } catch (err) {

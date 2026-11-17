@@ -66,6 +66,16 @@ describe('body orientation of a mapped sphere', () => {
   });
 });
 
+describe('the Moon mesh is in the axes of date', () => {
+  it('its pole and prime meridian are the J2000 IAU ones precessed to the date, as for a J2000-group body (the hop rotates its position the same way)', () => {
+    const want = poleDirection(MOON), got = poleDirection(MOON, T0), pre = precessDir(want, T0, false);
+    for (let i = 0; i < 3; i++) expect(got[i]).toBeCloseTo(pre[i], 12);
+    // a body with the Moon's IAU rotation but a J2000 frame (the precession applied by body-map) gives the same matrix as the Moon
+    const moon = bodyFixedToInertial(MOON, T0), asJ2000Body = bodyFixedToInertial({ ...MOON, id: 'X' }, T0);
+    for (let i = 0; i < 9; i++) expect(moon[i]).toBeCloseTo(asJ2000Body[i], 12);
+  });
+});
+
 describe('createMapSphere (the layout of the map on the sphere)', () => {
   const g = createMapSphere(100, 64, 32);
   const pos = g.getAttribute('position'), uv = g.getAttribute('uv');
