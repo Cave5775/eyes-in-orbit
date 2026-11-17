@@ -53,8 +53,9 @@ function bodyAngularRate(body: Body): number {
 /**
  * The axes of a body's `<BODY>:inertial` frame: the mean equator and equinox OF DATE for the Earth (SGP4/TEME, the Sun and
  * Moon series, the Earth rotation) and the Moon (its series is of date), J2000 (ICRF) for everything else: the Sun's frame
- * (Horizons heliocentric data), the planets, dwarf planets, their moons (offsets from their planet's J2000 pole) and every
- * Horizons stream. `convert` rotates by the precession of the date where a hop crosses from one to the other, so a planet is
+ * (Horizons heliocentric data), the planets, dwarf planets, their moons (offsets from their planet's J2000 pole) and the
+ * Horizons streams in those frames (a stream in `EARTH:inertial` or `MOON:inertial` is precessed to the axes of date at ingest,
+ * `streamToFrameAxes`). `convert` rotates by the precession of the date where a hop crosses from one to the other, so a planet is
  * drawn from the SAME of-date Earth that the Sun and Moon are, and `EARTH:inertial` stays consistently of date.
  */
 export type FrameEpoch = 'date' | 'j2000';
@@ -70,7 +71,8 @@ export function frameEpoch(bodyId: string): FrameEpoch {
  * array). Without it the samples would be written into the frame of date unrotated, off by the precession of the geocentric
  * distance (0.0066 rad in 2026: Juno 6e6 km from Jupiter). Called once at ingest (the `horizons` connector), so the provider, the
  * paths and the listed-parent window all read the same samples; the Hermite interpolation then runs between rotated positions with
- * rotated velocities (the turning of the axes is not added, as in the hop; the interpolation error is about 1 km at a 30 min step).
+ * rotated velocities (the turning of the axes is not added, as in the hop; omega x r, 7.7e-12 rad/s times the distance: about 1 km
+ * within a 30 min step near the Earth, up to ~30 km for the Voyagers at 2e10 km, invisible at that range).
  */
 export function streamToFrameAxes(frame: FrameId, samples: Sample[]): Sample[] {
   if (frameEpoch(parseFrame(frame).bodyId) !== 'date') return samples;
