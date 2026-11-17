@@ -51,6 +51,14 @@ export const targetRows = (t: Pick<BodyTarget, 'stepMin' | 'pastDays' | 'futureD
 export const MOON_STEPS_PER_REV = 24;
 /** each side of a moon's window: this many steps (401 rows ~ 110 kB per response, 8.3 revolutions each side) */
 export const MOON_WINDOW_STEPS = 200;
+/**
+ * Moons that need more steps per revolution than `MOON_STEPS_PER_REV`. Himalia, Phoebe (orbits of 11 and 13 million km around a
+ * body of 85 and 106 km radius) and Hyperion (1.5 million km, 135 km) need the Hermite error under the body radius, which 24 steps
+ * do not give (140 km for Himalia): 48, 48 and 36 steps per revolution cut it to under 10 km. Nereid's orbit has e = 0.751: at periapsis it moves
+ * about 10.6 times faster than the mean motion, so 24 steps per revolution would sweep nearly 3 rad per step there and a cubic
+ * Hermite segment would be useless. 240 steps per revolution keep that at 0.28 rad (the window is then +-0.8 revolutions).
+ */
+export const MOON_STEPS_OVERRIDE: Readonly<Record<string, number>> = { NEREID: 240, HIMALIA: 48, PHOEBE: 48, HYPERION: 36 };
 
 const SUN_CENTRE = '500@10';
 const dayMin = (d: number): number => d * 1440;
@@ -70,7 +78,7 @@ function planetTarget(bodyId: string, horizons: string, stepDays: number, halfWi
 export function moonTarget(bodyId: string, horizons: string, planetNaif: string, registry: BodyRegistry = defaultBodies): BodyTarget {
   const body = registry.get(bodyId);
   const periodMin = (bodyPeriodSec(body, registry) as number) / 60;
-  const stepMin = Math.max(5, Math.round(periodMin / MOON_STEPS_PER_REV / 5) * 5);
+  const stepMin = Math.max(5, Math.round(periodMin / (MOON_STEPS_OVERRIDE[bodyId] ?? MOON_STEPS_PER_REV) / 5) * 5);
   const days = (MOON_WINDOW_STEPS * stepMin) / 1440;
   return {
     bodyId, horizons, center: `500@${planetNaif}`, frame: `${body.parentId}:inertial` as FrameId,
@@ -113,6 +121,12 @@ export function buildBodyTargets(registry: BodyRegistry = defaultBodies): BodyTa
     ['RHEA', '605', '699'], ['TITAN', '606', '699'], ['IAPETUS', '608', '699'],
     ['MIRANDA', '705', '799'], ['ARIEL', '701', '799'], ['UMBRIEL', '702', '799'], ['TITANIA', '703', '799'], ['OBERON', '704', '799'],
     ['TRITON', '801', '899'], ['CHARON', '901', '999'],
+    // smaller moons (all Horizons ids checked 2026-11-17 except Hydra, which shares Nix's PLU060 ephemeris)
+    ['AMALTHEA', '505', '599'], ['THEBE', '514', '599'], ['HIMALIA', '506', '599'],
+    ['HYPERION', '607', '699'], ['PHOEBE', '609', '699'], ['JANUS', '610', '699'], ['EPIMETHEUS', '611', '699'],
+    ['PUCK', '715', '799'],
+    ['NEREID', '802', '899'], ['DESPINA', '805', '899'], ['GALATEA', '806', '899'], ['LARISSA', '807', '899'], ['PROTEUS', '808', '899'],
+    ['NIX', '902', '999'], ['HYDRA', '903', '999'],
   ];
   return [...planets, ...moons.map(([id, cmd, planet]) => moonTarget(id, cmd, planet, registry))];
 }
@@ -149,7 +163,7 @@ export function bodyUrl(t: BodyTarget, nowMs: number): string {
 
 
 /**
- * The body registry's real data stream: JPL Horizons vector tables for the planets, dwarf planets and major moons (32
+ * The body registry's real data stream: JPL Horizons vector tables for the planets, dwarf planets and moons (47
  * targets, `BODY_TARGETS`). Offline first: the `bodies` connector registers every body with the analytic fallback; this
  * one REPLACES only the provider of the same `body-*` entity: `{type:'body', bodyId, ephemeris:{frame, samples}}`, so the id,
  * kind, parent and hierarchy stay. The provider keeps type `body` on purpose (all the web's body handling, `bodyOf`,

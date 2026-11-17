@@ -208,6 +208,64 @@ export const OBERON = moon('OBERON', 'Oberon', 'URANUS', 583_500, 0.0014, 0.07, 
 export const TRITON = moon('TRITON', 'Triton', 'NEPTUNE', 354_759, 0.000016, 156.885, 1353.4, 1427.6, linear(299.36, 41.17, 296.53, -61.2572637));
 export const CHARON = moon('CHARON', 'Charon', 'PLUTO', 19_591, 0.0002, 0, 606, 105.88, linear(132.993, -6.163, 122.695, 56.3625225));
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The smaller moons (added 2026-11-17). Sources, read 2026-11-17:
+//  - a, e, i (to the parent's equator, or the local Laplace plane for Phoebe), and for the two ecliptic-frame irregulars also
+//    the node, argument of periapsis and mean anomaly: JPL SSD "Planetary Satellite Mean Elements"
+//    (ssd.jpl.nasa.gov/sats/elem, epoch 2000-01-01.5 TDB; JUP365, SAT441/SAT415, URA182, NEP098, JUP347, NEP105, PLU060
+//    fits). Regular moons keep the convention above (node, periapsis and phase 0: arbitrary position along the orbit).
+//    Janus and Epimetheus, co-orbital, therefore start on top of each other in the fallback.
+//  - mean radius and GM: JPL SSD "Planetary Satellite Physical Parameters" (ssd.jpl.nasa.gov/sats/phys_par). The GMs of the
+//    inner Neptune moons (Despina, Galatea, Larissa, Proteus) are barely larger than their own uncertainty (NEP097), and
+//    Nereid's (NEP101) is listed as 0.00000: Nereid and Puck, whose GM no source gives, carry GM 0 ("not determined"; the
+//    entity shows it and the sphere-of-influence test skips it). Puck's radius, 77 km, is NAIF pck00011.tpc BODY715_RADII
+//    (the SSD page has no Puck row).
+//  - rotation: IAU WGCCRE 2015 (Archinal et al. 2018) constant terms, each pole, W0 and rate read from NAIF pck00011.tpc
+//    (BODY<naif>_POLE_RA, _POLE_DEC, _PM; secular pole drift of Amalthea, Thebe, Janus, Epimetheus and the libration terms
+//    left out as for the older moons). The report gives none for Himalia, Hyperion (chaotic rotation), Nereid (not
+//    synchronous), Nix and Hydra (chaotic): NO_ROTATION. Triaxial radii of the drawn ones are in apps/web/src/lib/body-shape.ts.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** A moon of an irregular orbit given in the ecliptic of J2000 (SSD frame `ecliptic`): all six elements, angles in degrees. */
+function eclipticMoon(id: string, name: string, parentId: string, a: number, e: number, iDeg: number, nodeDeg: number, argpDeg: number, maDeg: number, radiusKm: number, gm: number, rotation: BodyRotation = NO_ROTATION, epochMs = J2000_MS): Body {
+  return {
+    id, name, parentId, radiusKm, flattening: 0, gm, rotation,
+    orbit: { a, e, i: iDeg * DEG, raan: nodeDeg * DEG, argp: argpDeg * DEG, m0: maDeg * DEG, epochMs }, orbitPlane: 'ecliptic', approx: true,
+  };
+}
+
+export const AMALTHEA = moon('AMALTHEA', 'Amalthea', 'JUPITER', 181_400, 0.003, 0.4, 83.5, 0.16456, linear(268.05, 64.49, 231.67, 722.6314560));
+export const THEBE = moon('THEBE', 'Thebe', 'JUPITER', 221_900, 0.018, 1.1, 49.3, 0.03015, linear(268.05, 64.49, 8.56, 533.7004100));
+/**
+ * Himalia's node regresses 1.2 deg a year (SSD P node 297 y), so J2000 elements put the fallback plane 14 deg off by 2026: it
+ * takes osculating elements at 2026-11-17 00:00 TDB instead (Horizons EPHEM_TYPE=ELEMENTS, CENTER 500@599, REF_PLANE=ECLIPTIC:
+ * EC .15861, IN 28.611, OM 34.270, W 52.928, MA 79.412, A 11,435,220 km).
+ */
+export const HIMALIA = eclipticMoon('HIMALIA', 'Himalia', 'JUPITER', 11_435_220, 0.15861, 28.611, 34.270, 52.928, 79.412, 85, 0.15155, NO_ROTATION, Date.UTC(2026, 10, 17));
+
+export const HYPERION = moon('HYPERION', 'Hyperion', 'SATURN', 1_481_500, 0.105, 0.6, 135, 0.37049, NO_ROTATION);
+/**
+ * Phoebe is retrograde and its orbit is 22 deg off Saturn's equator, so it takes osculating elements in the ecliptic of J2000
+ * (Horizons EPHEM_TYPE=ELEMENTS, CENTER 500@699, REF_PLANE=ECLIPTIC, 2000-01-01 12:00 TDB, fetched 2026-11-17: EC .16541, IN 173.259,
+ * OM 263.199, W 353.730, MA 58.649, A 12,943,785 km), because the SSD i = 175.2 is to Saturn's Laplace plane, not the equator.
+ * Janus and Epimetheus take the same Horizons elements (a 152,034 / 152,073 km osculating; the equator-plane convention gave both
+ * the same phase), so they start apart offline.
+ */
+export const PHOEBE = eclipticMoon('PHOEBE', 'Phoebe', 'SATURN', 12_943_785, 0.16541, 173.259, 263.199, 353.730, 58.649, 106.5, 0.55479, linear(356.90, 77.80, 178.58, 931.639));
+export const JANUS = eclipticMoon('JANUS', 'Janus', 'SATURN', 152_034, 0.0061666, 27.984, 169.849, 163.908, 79.741, 89.2, 0.12662, linear(40.58, 83.52, 58.83, 518.2359876));
+export const EPIMETHEUS = eclipticMoon('EPIMETHEUS', 'Epimetheus', 'SATURN', 152_073, 0.0060324, 27.738, 169.874, 230.587, 198.165, 58.2, 0.03514, linear(40.58, 83.52, 293.87, 518.4907239));
+
+export const PUCK = moon('PUCK', 'Puck', 'URANUS', 86_004, 0.0, 0.3, 77, 0, linear(257.31, -15.18, 91.24, -472.5450690));
+
+export const NEREID = eclipticMoon('NEREID', 'Nereid', 'NEPTUNE', 5_513_900, 0.751, 5.1, 319.5, 296.8, 318.5, 170, 0);
+export const DESPINA = moon('DESPINA', 'Despina', 'NEPTUNE', 52_600, 0.001, 0.0, 74, 0.11673, linear(299.36, 43.45, 306.51, 1075.7341562));
+export const GALATEA = moon('GALATEA', 'Galatea', 'NEPTUNE', 62_000, 0.001, 0.0, 79, 0.18990, linear(299.36, 43.43, 258.09, 839.6597686));
+export const LARISSA = moon('LARISSA', 'Larissa', 'NEPTUNE', 73_600, 0.001, 0.2, 96, 0.25484, linear(299.36, 43.41, 179.41, 649.0534470));
+export const PROTEUS = moon('PROTEUS', 'Proteus', 'NEPTUNE', 117_700, 0.001, 0.6, 208, 2.58342, linear(299.27, 42.91, 93.38, 320.7654228));
+
+export const NIX = moon('NIX', 'Nix', 'PLUTO', 49_300, 0.015, 0.0, 18.0, 0.0015, NO_ROTATION);
+export const HYDRA = moon('HYDRA', 'Hydra', 'PLUTO', 65_200, 0.009, 0.3, 18.5, 0.0020, NO_ROTATION);
+
 /** Every body of the default registry: the original four first (their entity ranks and ids are fixed), then the rest. */
 export const DEFAULT_BODY_LIST: Body[] = [
   SUN, EARTH, MOON, MARS,
@@ -218,6 +276,12 @@ export const DEFAULT_BODY_LIST: Body[] = [
   MIMAS, ENCELADUS, TETHYS, DIONE, RHEA, TITAN, IAPETUS,
   MIRANDA, ARIEL, UMBRIEL, TITANIA, OBERON,
   TRITON, CHARON,
+  // appended, not grouped: entityRank uses the registry index, so the ranks of the bodies above stay fixed
+  AMALTHEA, THEBE, HIMALIA,
+  HYPERION, PHOEBE, JANUS, EPIMETHEUS,
+  PUCK,
+  NEREID, DESPINA, GALATEA, LARISSA, PROTEUS,
+  NIX, HYDRA,
 ];
 
 /** The original four-body registry (Sun, Earth, Moon, Mars): for tests that predate the rest of the solar system. */

@@ -25,7 +25,7 @@ import { BODY_MIN_HIT_PX, GROUP_DISC_PX, bodyDiscRadiusPx } from './pick';
 
 /**
  * Cone slots in the point shader (one vec4 + one float + one vec2 each). The cones are made from the same body list as the
- * occluders (`SceneBody` in lib/occlusion.ts, `CelestialLayer.bodies()`), but not "the first bodies in the list": with 35 bodies
+ * occluders (`SceneBody` in lib/occlusion.ts, `CelestialLayer.bodies()`), but not "the first bodies in the list": with 50 bodies
  * that would starve Jupiter and Saturn. The rule, applied every frame by `discGroups`:
  *  - a body is a candidate when its disc radius is at most `maxDiscPx` (`GROUP_DISC_PX`) and the camera is outside it; a larger
  *    disc is drawn apart and needs no cone, a body the camera is inside has none;
