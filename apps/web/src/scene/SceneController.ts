@@ -36,7 +36,7 @@ import { CelestialLayer } from './celestial';
 import { EarthDetail, type DetailStats } from './earth-detail';
 import { EntityOverlay } from './overlays';
 import { PathOverlay, TraverseOverlay, type PathStatus } from './PathOverlay';
-import { closeUpDirection, closeUpDistance, reachFrom, traverseFixed } from '../lib/traverse';
+import { closeUpDirection, closeUpDistance, localAngles, reachFrom, siteBasis, traverseFixed } from '../lib/traverse';
 import { nearestOnPath, type PathHit } from '../lib/path-pick';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
@@ -249,6 +249,7 @@ export class SceneController {
   /** the traverses the page has fetched (`setTraverse`), and the line of the selected rover's one (scene/PathOverlay.ts) */
   private traverses = new Map<string, RoverTraverse>();
   private traverseOverlay: TraverseOverlay | null = null;
+  private selectedAtWall = 0;
   private hadPathLabels = false;
   // object labels (lib/labels.ts)
   private labelsOn = true;
@@ -572,6 +573,7 @@ export class SceneController {
     this.query = v.query;
     this.highlight = v.highlight;
     this.ctx = { focus, text: v.text };
+    if (selChanged) this.selectedAtWall = performance.now();
     this.selectedId = v.selectedId;
     this.refreshOrbitLines(); // a hidden group keeps no orbit line
     this.applyAppearance();
@@ -1065,7 +1067,14 @@ export class SceneController {
       reach = reachFrom(p.fixed, p.count, here);
     }
     this.focus({ id, nonce: 0 });
-    this.rig.flyTo({ dist: closeUpDistance(reach, this.camera.fov, this.camera.aspect, FIT_MARGIN), az: Math.atan2(dir[1], dir[0]), el: Math.asin(Math.max(-1, Math.min(1, dir[2]))) });
+    // the offset is kept in the site's own east/north/up, which the planet's rotation turns: the camera keeps its side and height
+    const local = () => {
+      const r = this.recs.get(id);
+      return r?.provider?.type === 'geodetic' ? siteBasis(r.bodyId, r.provider.latDeg, r.provider.lonDeg, clock.now()) : null;
+    };
+    const basis = local();
+    const a = basis ? localAngles(dir, basis) : { az: Math.atan2(dir[1], dir[0]), el: Math.asin(Math.max(-1, Math.min(1, dir[2]))) };
+    this.rig.flyTo({ dist: closeUpDistance(reach, this.camera.fov, this.camera.aspect, FIT_MARGIN), az: a.az, el: a.el, ...(basis ? { local } : {}) });
     this.cb.onFollowChange?.(true);
     return true;
   }
@@ -1544,9 +1553,13 @@ export class SceneController {
 
   /** The page fetched (or lost) a rover's traverse: draw it when that rover is selected. */
   setTraverse(entityId: string, traverse: RoverTraverse | null): void {
+    const first = !!traverse && !this.traverses.has(entityId);
     if (traverse) this.traverses.set(entityId, traverse);
     else this.traverses.delete(entityId);
     this.syncTraverse();
+    // the first answer for the selected rover arrives after the selection's own fit: while the camera is in the Close-up (or the
+    // selection is a moment old) refit once to hold the traverse
+    if (first && entityId === this.selectedId && this.traverseOverlay && (this.rig.offsetFrame || performance.now() - this.selectedAtWall < 8000)) this.viewSurface(entityId);
   }
 
   /** The traverse line exists exactly while its rover is selected and its points are known (a surface-fixed object has no other path). */

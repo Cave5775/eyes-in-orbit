@@ -1,4 +1,4 @@
-import { convert, defaultBodies, surfaceShape, type FrameId, type StateVector, type Vec3 } from '@eio/core';
+import { convert, defaultBodies, enuBasis, surfaceShape, type FrameId, type StateVector, type Vec3 } from '@eio/core';
 import { fitDistanceClamped, MIN_TARGET_DIST_KM, type V3 } from './camera';
 
 /**
@@ -116,3 +116,45 @@ export function closeUpDirection(up: V3, sun: V3): V3 {
 export function closeUpDistance(reachKm: number, fovDeg: number, aspect: number, margin: number): number {
   return Math.max(CLOSE_UP_DIST_KM, fitDistanceClamped(reachKm, fovDeg, aspect, margin, MIN_TARGET_DIST_KM));
 }
+
+// ------------------------------------------------------------------------------------------ the site's local frame
+
+/** East, north and up of a site, as unit vectors in the Earth-inertial scene frame at one moment. */
+export interface LocalBasis {
+  e: V3;
+  n: V3;
+  u: V3;
+}
+
+/**
+ * The local east/north/up of a surface site in the scene's Earth-inertial axes at `tMs` (the body's rotation turns it: Mars
+ * 14.6 degrees an hour). The Close-up keeps its camera offset in this frame, so it keeps looking at the site from the same
+ * side and height while the planet turns. Null when the body has no state then.
+ */
+export function siteBasis(bodyId: string, latDeg: number, lonDeg: number, tMs: number): LocalBasis | null {
+  const a = bodyAxes(bodyId, tMs);
+  if (!a) return null;
+  const b = enuBasis(latDeg * DEG, lonDeg * DEG);
+  const w = (v: Vec3): V3 => [
+    v[0] * a.ex[0] + v[1] * a.ey[0] + v[2] * a.ez[0],
+    v[0] * a.ex[1] + v[1] * a.ey[1] + v[2] * a.ez[1],
+    v[0] * a.ex[2] + v[1] * a.ey[2] + v[2] * a.ez[2],
+  ];
+  return { e: w(b.e), n: w(b.n), u: w(b.u) };
+}
+
+/** Unit vector from the site to a camera at azimuth `az` (from east toward north) and elevation `el` over the local horizon. */
+export function localOffsetDir(b: LocalBasis, az: number, el: number): V3 {
+  const ce = Math.cos(el), se = Math.sin(el), ca = Math.cos(az), sa = Math.sin(az);
+  return [0, 1, 2].map((i) => ce * (ca * b.e[i] + sa * b.n[i]) + se * b.u[i]) as V3;
+}
+
+/** The inverse: azimuth and elevation of the direction `dir` in the local frame. */
+export function localAngles(dir: V3, b: LocalBasis): { az: number; el: number } {
+  const d = norm(dir);
+  const x = d[0] * b.e[0] + d[1] * b.e[1] + d[2] * b.e[2], y = d[0] * b.n[0] + d[1] * b.n[1] + d[2] * b.n[2], z = d[0] * b.u[0] + d[1] * b.u[1] + d[2] * b.u[2];
+  return { az: Math.atan2(y, x), el: Math.asin(Math.max(-1, Math.min(1, z))) };
+}
+
+/** Wait before the next ask for a traverse that is not there yet (404 until the server's first poll): 5 s, 15 s, 60 s, then every 5 min. */
+export const traverseRetryMs = (attempt: number): number => [5_000, 15_000, 60_000][attempt] ?? 300_000;

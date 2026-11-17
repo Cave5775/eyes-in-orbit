@@ -24,6 +24,8 @@ export const MMGIS_URL: Record<NonNullable<SurfaceSite['live']>, string> = {
 };
 const REFRESH_MS = 6 * 3600_000;
 const TTL_MS = 6 * 3600_000;
+/** `Cache-Control: max-age` of `GET /api/traverse/:id`, seconds: the poll interval */
+export const TRAVERSE_MAX_AGE_S = REFRESH_MS / 1000;
 /** Part of the cache key: bump on any change of what is read from the file. */
 const CACHE_VERSION = 'v2';
 const cacheKey = (code: string): string => `surface-sites:${CACHE_VERSION}:${code}`;

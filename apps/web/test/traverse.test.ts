@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { convert, defaultBodies, geodeticToFixed, surfaceShape, type FrameId } from '@eio/core';
-import { CLOSE_UP_DIST_KM, CLOSE_UP_ELEVATION, TRAVERSE_LIFT_KM, bodyAxes, closeUpDirection, closeUpDistance, reachFrom, traverseFixed, traverseWorld } from '../src/lib/traverse';
+import { CLOSE_UP_DIST_KM, CLOSE_UP_ELEVATION, TRAVERSE_LIFT_KM, bodyAxes, closeUpDirection, closeUpDistance, localAngles, localOffsetDir, reachFrom, siteBasis, traverseFixed, traverseRetryMs, traverseWorld } from '../src/lib/traverse';
 
 const T = Date.UTC(2026, 10, 17, 12);
 const M20: [number, number, number][] = [[18.444627, 77.450886, 13], [18.43559, 77.287, 2009], [18.435594, 77.233223, 2022]];
@@ -98,5 +98,56 @@ describe('Close-up of a surface object', () => {
     const wide = closeUpDistance(12.6, 45, 1.6, 1.3);
     expect(wide).toBeGreaterThan(20);
     expect(wide).toBeLessThan(80);
+  });
+});
+
+describe('the Close-up offset lives in the site frame, so it turns with the planet', () => {
+  const lat = 18.44, lon = 77.45;
+  const upAt = (t: number): number[] => {
+    const s = convert({ frame: 'MARS:fixed' as FrameId, r: [0, 0, 0] }, 'EARTH:inertial' as FrameId, t).r;
+    const fixed = new Float64Array(3);
+    traverseFixed([[lat, lon]], 'MARS', fixed, 0);
+    const p = convert({ frame: 'MARS:fixed' as FrameId, r: [fixed[0], fixed[1], fixed[2]] }, 'EARTH:inertial' as FrameId, t).r;
+    const d = [p[0] - s[0], p[1] - s[1], p[2] - s[2]];
+    const l = len(d);
+    return d.map((v) => v / l);
+  };
+
+  it('siteBasis is orthonormal and its up is the true local vertical at any time', () => {
+    for (const h of [0, 1, 3, 6, 12]) {
+      const t = T + h * 3600_000;
+      const b = siteBasis('MARS', lat, lon, t)!;
+      expect(dot(b.e, b.n)).toBeCloseTo(0, 8);
+      expect(dot(b.e, b.u)).toBeCloseTo(0, 8);
+      const up = upAt(t);
+      expect(dot(b.u, up)).toBeCloseTo(1, 7);
+    }
+  });
+
+  it('a camera at 45 degrees stays at 45 degrees over the local horizon for hours, while the same world direction would sink below it', () => {
+    const b0 = siteBasis('MARS', lat, lon, T)!;
+    const world = localOffsetDir(b0, 0.7, CLOSE_UP_ELEVATION); // what a fixed inertial offset would keep
+    let drift = 0;
+    for (const h of [1, 3, 6, 9]) {
+      const t = T + h * 3600_000;
+      const up = upAt(t);
+      const local = localOffsetDir(siteBasis('MARS', lat, lon, t)!, 0.7, CLOSE_UP_ELEVATION);
+      expect(Math.asin(dot(local, up))).toBeCloseTo(CLOSE_UP_ELEVATION, 6);
+      drift = Math.max(drift, Math.abs(Math.asin(dot(world, up)) - CLOSE_UP_ELEVATION));
+    }
+    expect(drift).toBeGreaterThan(0.3); // a fixed inertial offset would have left the 45 degrees by tens of degrees
+  });
+
+  it('localAngles inverts localOffsetDir', () => {
+    const b = siteBasis('MARS', lat, lon, T)!;
+    const a = localAngles(localOffsetDir(b, -2.1, 0.5), b);
+    expect(a.az).toBeCloseTo(-2.1, 8);
+    expect(a.el).toBeCloseTo(0.5, 8);
+  });
+});
+
+describe('traverse retry schedule', () => {
+  it('5 s, 15 s, 60 s, then every 5 min', () => {
+    expect([0, 1, 2, 3, 4, 50].map(traverseRetryMs)).toEqual([5000, 15000, 60000, 300000, 300000, 300000]);
   });
 });

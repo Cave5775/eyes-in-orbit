@@ -281,7 +281,10 @@ describe('surface-sites connector', () => {
     const ok = await app.inject({ url: '/api/traverse/dsn-M20' });
     expect(ok.statusCode).toBe(200);
     expect(ok.json()).toMatchObject({ entityId: 'dsn-M20', bodyId: 'MARS', points: t.points });
-    expect((await app.inject({ url: '/api/traverse/site-apollo-11' })).statusCode).toBe(404);
+    expect(ok.headers['cache-control']).toBe('max-age=21600');
+    expect((await app.inject({ url: '/api/traverse/site-apollo-11' })).statusCode).toBe(404); // a site with no live layer
+    expect((await app.inject({ url: '/api/traverse/nope' })).statusCode).toBe(404); // unknown
+    expect((await app.inject({ url: '/api/traverse/dsn-MSL' })).statusCode).toBe(200);
     await app.close();
   });
 

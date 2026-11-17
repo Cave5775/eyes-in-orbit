@@ -15,6 +15,7 @@ import { SceneController, type PathLabel, type SceneStats } from '../scene/Scene
 import { usePanels } from '../state/panels';
 import { api } from '../api/client';
 import { hasTraverse } from '@eio/core';
+import { traverseRetryMs } from '../lib/traverse';
 import { clock, runtime, type CameraCommands } from '../state/runtime';
 import { jumpToSimTime } from '../state/seek';
 import { leaveSkyView } from '../state/sky-flow';
@@ -88,8 +89,17 @@ export function SceneView() {
   useEffect(() => {
     if (!selectedId || !hasTraverse(selectedId)) return;
     let live = true;
-    void api.traverse(selectedId).then((t) => { if (live && t) scene.current?.setTraverse(selectedId, t); }).catch(() => {});
-    return () => { live = false; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // the server answers 404 until its first poll has stored the traverse: ask again while the rover stays selected (5 s, 15 s, 60 s, then every 5 min)
+    const ask = (attempt: number) => {
+      void api.traverse(selectedId).catch(() => null).then((t) => {
+        if (!live) return;
+        if (t) scene.current?.setTraverse(selectedId, t);
+        else timer = setTimeout(() => ask(attempt + 1), traverseRetryMs(attempt));
+      });
+    };
+    ask(0);
+    return () => { live = false; clearTimeout(timer); };
   }, [selectedId]);
 
   useEffect(() => {

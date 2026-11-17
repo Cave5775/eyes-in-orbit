@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { localAngles, localOffsetDir, type LocalBasis } from '../lib/traverse';
 import { FP_LOOK_KM, clampFpEl, firstPersonDrag, firstPersonEye, firstPersonLookDir, zoomFov } from '../lib/first-person';
 import {
   MAX_DIST_KM, MIN_ALT_KM, advanceSurfaceFrame, altitudeOf, blendPosition, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceFrame, type V3,
@@ -11,6 +12,12 @@ export interface FlyOptions {
   az: number;
   el: number;
   durationMs?: number;
+  /**
+   * Globe mode: `az` and `el` are measured in this local east/north/up frame (a surface site's, which the planet's rotation turns)
+   * instead of the world axes, re-read every frame while following, so the camera keeps its side and height over the site. Any
+   * later fly-to without it (and a mode switch) goes back to world angles.
+   */
+  local?: () => LocalBasis | null;
 }
 
 export type RigMode = 'globe' | 'surface' | 'firstPerson';
@@ -49,6 +56,8 @@ export class OrbitRig {
   onGroundPan?: (eastKm: number, northKm: number, frame: SurfaceFrame) => void;
   /** surface mode: the horizontal frame of the last update (null until the first update after entering the mode) */
   frame: SurfaceFrame | null = null;
+  /** the local frame the globe-mode angles are in (see `FlyOptions.local`); null: world axes */
+  offsetFrame: (() => LocalBasis | null) | null = null;
 
   private flight: { t0: number; dur: number; from: THREE.Vector3; fromDist: number; fromAz: number; fromEl: number; to: FlyOptions } | null = null;
   private blend: { t0: number; dur: number; pos: THREE.Vector3; up: THREE.Vector3; fresh: boolean } | null = null;
@@ -129,11 +138,20 @@ export class OrbitRig {
       this.dist = to.dist;
       this.az = to.az;
       this.el = to.el;
+      this.offsetFrame = to.local ?? null;
       this.flight = null;
       this.pan.set(0, 0, 0);
       return;
     }
-    this.flight = { t0: performance.now(), dur: to.durationMs ?? 1300, from: this.target.clone(), fromDist: this.dist, fromAz: this.az, fromEl: this.el, to };
+    // the angles the flight starts from, in the frame it ends in: a flight into a local frame starts from where the camera is now
+    let fromAz = this.az, fromEl = this.el;
+    const basis = to.local?.() ?? null;
+    if (basis) {
+      const d = this.camera.position.clone().sub(this.target);
+      if (d.lengthSq() > 0) ({ az: fromAz, el: fromEl } = localAngles([d.x, d.y, d.z], basis));
+    }
+    this.offsetFrame = basis ? to.local! : null;
+    this.flight = { t0: performance.now(), dur: to.durationMs ?? 1300, from: this.target.clone(), fromDist: this.dist, fromAz, fromEl, to };
     this.pan.set(0, 0, 0);
   }
 
@@ -156,6 +174,7 @@ export class OrbitRig {
     this.pan.set(0, 0, 0);
     this.mode = mode;
     this.frame = null;
+    this.offsetFrame = null;
   }
 
   /** Advance one frame. `anchor` is the live world position being followed, or null for the free target. */
@@ -199,8 +218,14 @@ export class OrbitRig {
       );
       this.natUp.set(u[0], u[1], u[2]);
     } else {
-      const ce = Math.cos(this.el);
-      this.natOffset.set(this.dist * ce * Math.cos(this.az), this.dist * ce * Math.sin(this.az), this.dist * Math.sin(this.el));
+      const local = this.offsetFrame?.() ?? null;
+      if (local) {
+        const d = localOffsetDir(local, this.az, this.el);
+        this.natOffset.set(this.dist * d[0], this.dist * d[1], this.dist * d[2]);
+      } else {
+        const ce = Math.cos(this.el);
+        this.natOffset.set(this.dist * ce * Math.cos(this.az), this.dist * ce * Math.sin(this.az), this.dist * Math.sin(this.el));
+      }
       this.natUp.set(0, 0, 1);
     }
 
