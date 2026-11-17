@@ -113,19 +113,16 @@ describe('the HUD distance is from the frame centre, not from the camera target'
   });
 });
 
-describe('an object that stands still on the Earth moves in any other frame', () => {
+describe('an object that stands still on the Earth has no path in any frame', () => {
   const gs = byId.get('dsn-madrid')!;
   const g = sceneGraph();
   const lk = graphLookup(g);
-  it('has no path in the Earth frame and a window of its own in a framed one', () => {
+  it('has no path in any frame: a surface-fixed object never draws an orbit-like curve', () => {
     expect(planPathWindow(gs.provider, NOW, {})).toBeNull();
-    const plan = planPathWindow(gs.provider, NOW, { framed: true });
-    expect(plan).not.toBeNull();
-    expect(plan!.t0).toBeLessThan(NOW);
-    expect(plan!.t1).toBeGreaterThan(NOW);
+    expect(planPathWindow({ type: 'geodetic', bodyId: 'MARS', latDeg: 18, lonDeg: 77, altKm: 0 }, NOW, {})).toBeNull();
   });
-  it('is sampled as r - c(t_i) + c(ref) round the Moon, a curve of thousands of km', () => {
-    const plan = planPathWindow(gs.provider, NOW, { framed: true })!;
+  it('is still sampled as r - c(t_i) + c(ref) round the Moon when asked for a window explicitly (the sampler itself is frame-generic)', () => {
+    const plan = { t0: NOW - 3 * 3600_000, t1: NOW + 3 * 3600_000 };
     const buf = makePathBuffers();
     const res = samplePath(g, gs.id, plan, gs.provider, buf, frameSampler('body-moon', NOW, lk));
     expect(res.count).toBeGreaterThan(50);

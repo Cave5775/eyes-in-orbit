@@ -179,7 +179,7 @@ export function surfaceSiteRecord(s: SurfaceSite, updatedAt = 0): EntityRecord {
     group: s.dsn ? 'dsn' : SURFACE_GROUP,
     provider: { type: 'geodetic', bodyId: s.bodyId, latDeg: s.latDeg, lonDeg: s.lonDeg, altKm: 0 },
     links: { newsQuery: s.name },
-    render: { colorKey: drone ? 'aircraft' : rover ? 'rover' : 'probe', glyph: drone ? 'triangle' : rover ? 'diamond' : 'square', label: s.status === 'active' },
+    render: { colorKey: drone ? 'aircraft' : rover ? 'rover' : 'probe', glyph: drone ? 'triangle' : rover ? 'diamond' : 'square', label: true },
     attrs: surfaceSiteAttrs(s),
     updatedAt,
   };

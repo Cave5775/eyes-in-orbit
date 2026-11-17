@@ -10,7 +10,7 @@ import { DIM } from '../lib/dim';
 import { orbitPeriodSec } from '../lib/orbit';
 import { orbitLines, type OrbitRole } from '../lib/orbit-lines';
 import { focusTarget } from '../lib/focus-target';
-import { viewClass } from '../lib/view-class';
+import { isSurfaceFixed, viewClass } from '../lib/view-class';
 import { EARTH_CENTRE, centreLabel, distanceFromCentre, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
@@ -25,7 +25,7 @@ import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type
 import { discGroups, hiddenByDisc, type DiscGroup, type GroupStats } from '../lib/disc-hide';
 import { bodyInScope, focusBodyOf, inScope, inView, scopeBodies, type FocusCandidate, type ScopeMode } from '../lib/scope';
 import { SCOPE_CHUNK, markSpecials, scanScope, type ScopeScanInput } from '../lib/scope-scan';
-import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
+import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelHome, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
@@ -1486,7 +1486,7 @@ export class SceneController {
     this.overlayRoles = want;
 
     // trajectory path for a selected entity that has no SGP4 orbit of its own
-    const pathId = sel && !isSgp4(sel) && sel.provider && (sel.provider.type !== 'geodetic' || !isEarthCentre(this.frameCentre)) && !this.bodyIds.has(sel.id) ? sel.id : null;
+    const pathId = sel && !isSgp4(sel) && sel.provider && !isSurfaceFixed(sel) && !this.bodyIds.has(sel.id) ? sel.id : null;
     if (pathId !== this.pathOverlayId) {
       this.pathOverlay?.dispose();
       this.pathOverlay = null;
@@ -2242,7 +2242,7 @@ export class SceneController {
       if ((set.size.array as Float32Array)[c.i] <= 0) continue;
       const rel = set.pos.attr.array as Float32Array;
       if (c.id !== hov && this.discHiddenPoint(set, c.i, rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2])) continue; // its icon is not drawn over a small body's disc
-      this.projectLabel(rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2], c.id, c.text, c.id === hov ? 'hover' : c.feat ? 'featured' : 'satellite', 9);
+      this.projectLabel(rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2], c.id, c.text, c.id === hov ? 'hover' : c.feat ? 'featured' : 'satellite', 9, labelHome(this.recs.get(c.id)));
     }
     const n = plan.plan(w, h);
     cb(plan.out, n);
@@ -2250,12 +2250,12 @@ export class SceneController {
   }
 
   /** Add a label for the camera-relative point (x, y, z) unless it is out of view or behind a body. */
-  private projectLabel(x: number, y: number, z: number, id: string, text: string, cls: LabelClass, dx: number): void {
+  private projectLabel(x: number, y: number, z: number, id: string, text: string, cls: LabelClass, dx: number, home = ''): void {
     const m = this.labelM.elements;
     const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
     const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
     if (!inView(cx, cy, cw) || this.occ(x, y, z)) return;
-    this.labelPlan.add(id, text, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, dx);
+    this.labelPlan.add(id, text, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, dx, 1, 0, 0, '', home);
   }
 
   /** One body for the label pass (a bound arrow function: no closure per frame). Only bodies whose entity says `render.label`. */

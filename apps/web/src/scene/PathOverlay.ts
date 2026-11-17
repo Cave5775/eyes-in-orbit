@@ -105,7 +105,7 @@ export class PathOverlay {
     centre = frameForRec(centre, rec);
     const provider = graph.provider(rec.id);
     const key = rec.provider;
-    const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds, framed: !isEarthCentre(centre) });
+    const plan = planPathWindow(rec.provider, t, { validRange: provider?.validRange, trailSeconds: rec.render?.trailSeconds });
     if (!plan) return this.hide();
 
     // a path built while its centre had no position is empty (nothing can be drawn relative to nothing): rebuild it when the

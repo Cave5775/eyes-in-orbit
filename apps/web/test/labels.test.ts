@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BODY_FADE_FULL_PX, BODY_FADE_NONE_PX, BUCKETS, LABEL_CHAR_W, LABEL_H, LABEL_PAD_X, LabelPlanner, MAX_LABELS, apparentRadiusPx,
-  MAX_LABEL_CHARS, bodyLabelOpacity, labelText, labelWidth, selectNearest,
+  MAX_LABEL_CHARS, bodyLabelOpacity, labelHome, labelText, labelWidth, selectNearest,
 } from '../src/lib/labels';
 
 const VW = 1400, VH = 900;
@@ -201,5 +201,34 @@ describe('LabelPlanner', () => {
     p.begin();
     expect(p.plan(VW, VH)).toBe(0);
     expect(p.count).toBe(0);
+  });
+});
+
+describe('a surface-fixed object on its own body (rovers, landers, observatories)', () => {
+  const moon = { x: 500, y: 400, r: 80 };
+  const plan = (home: string, x = 520, y = 410) => {
+    const p = new LabelPlanner();
+    p.begin();
+    p.addDisc('body-moon', moon.x, moon.y, moon.r);
+    p.add('site-apollo-11', 'Apollo 11', 'featured', x, y, 9, 1, 0, 0, '', home);
+    p.plan(VW, VH);
+    return p.out.slice(0, p.count).map((l) => l.id);
+  };
+
+  it('its label stays on the disc of the body it stands on, the disc of any other larger body still hides it', () => {
+    expect(plan('')).toEqual([]); // an object that is not known to stand on the Moon is dropped over its disc
+    expect(plan('body-moon')).toEqual(['site-apollo-11']);
+    expect(plan('body-mars')).toEqual([]);
+  });
+
+  it('a site on a different body in front of the Moon is hidden by the Moon as before', () => {
+    expect(plan('body-mars', 500, 400)).toEqual([]);
+  });
+
+  it('labelHome: the body entity of a geodetic object, nothing for orbiters, bodies and unknown records', () => {
+    const geo = { bodyId: 'MARS', provider: { type: 'geodetic' as const, bodyId: 'MARS', latDeg: 0, lonDeg: 0, altKm: 0 } };
+    expect(labelHome(geo)).toBe('body-mars');
+    expect(labelHome({ bodyId: 'MARS', provider: { type: 'sampled' as const, frame: 'MARS:inertial' as const, samples: [] } })).toBe('');
+    expect(labelHome(undefined)).toBe('');
   });
 });
