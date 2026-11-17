@@ -14,6 +14,9 @@
  * not where it is today.
  */
 
+import { bodyEntityId, bodyOf, type EntityRecord } from '@eio/core';
+import { meshWanted } from './body-shape';
+
 /** How the map's columns relate to longitude. Only the first is used today; the others are for a source in another layout. */
 export type MapLayout =
   /** -180..180 east, prime meridian at the centre column, east to the right (also a west-positive axis drawn with east to the right) */
@@ -22,8 +25,6 @@ export type MapLayout =
   | 'zero-left-east'
   /** mirrored: west-positive increasing to the right, prime meridian at the centre (a view from inside; needs a flip) */
   | 'centred-west';
-
-import { meshWanted } from './body-shape';
 
 export interface BodyTexture {
   /** file in apps/web/public/textures */
@@ -81,6 +82,18 @@ export function textureU(eastLonDeg: number, layout: MapLayout = 'centred-east')
     case 'zero-left-east': return wrap(eastLonDeg / 360);
     case 'centred-west': return wrap(0.5 - eastLonDeg / 360);
   }
+}
+
+/**
+ * The body entity whose high-res tier a selection wants: the selected body itself, or the body a selected object sits on or
+ * orbits (`rec.bodyId`: Perseverance on Mars, an Apollo lander on the Moon, Huygens on Titan), so "render on select" holds for
+ * things on a body too. Null for no selection or an unknown id. Feeds `mapWanted`'s `selected`.
+ */
+export function selectedBodyEntityId(rec: Pick<EntityRecord, 'provider' | 'bodyId'> | null | undefined): string | null {
+  if (!rec) return null;
+  const own = bodyOf(rec);
+  const id = own ?? rec.bodyId;
+  return id ? bodyEntityId(id) : null;
 }
 
 /** The map of a registry body, or undefined (it keeps the procedural look). */

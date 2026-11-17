@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { bodyEntityRecords, defaultBodies, NO_ROTATION } from '@eio/core';
-import { BODY_TEXTURES, MAP_LOAD_PX, mapWanted, textureCredits, textureOf, textureU } from '../src/lib/body-textures';
+import { bodyEntityRecords, defaultBodies, NO_ROTATION, surfaceSiteRecords } from '@eio/core';
+import { BODY_TEXTURES, MAP_LOAD_PX, mapWanted, selectedBodyEntityId, textureCredits, textureOf, textureU } from '../src/lib/body-textures';
 import { refPositionEci, refRadiusKm } from '../src/lib/ref-body';
 import { CelestialLayer, createMapSphere, type MapEnv } from '../src/scene/celestial';
 import { createBodyMaterial, createMapMaterial } from '../src/scene/materials';
@@ -106,6 +106,23 @@ describe('mapWanted (load on select or on size)', () => {
   });
 });
 
+describe('selectedBodyEntityId (which body a selection wants loaded)', () => {
+  const recs = [...bodyEntityRecords(), ...surfaceSiteRecords()];
+  const rec = (id: string) => recs.find((r) => r.id === id);
+  it('a body wants itself, not its parent', () => {
+    expect(selectedBodyEntityId(rec('body-io'))).toBe('body-io');
+    expect(selectedBodyEntityId(rec('body-moon'))).toBe('body-moon');
+  });
+  it('an object on a body wants that body', () => {
+    expect(selectedBodyEntityId(rec('site-huygens'))).toBe('body-titan');
+    expect(selectedBodyEntityId(rec('dsn-M20'))).toBe('body-mars');
+  });
+  it('no selection or an unknown record wants nothing', () => {
+    expect(selectedBodyEntityId(null)).toBeNull();
+    expect(selectedBodyEntityId(undefined)).toBeNull();
+  });
+});
+
 describe('lazy loading of a body map in the celestial layer', () => {
   afterEach(() => vi.restoreAllMocks());
   const T0 = Date.UTC(2026, 9, 25, 12, 0, 0), FOV = 50, VP = 700;
@@ -165,6 +182,21 @@ describe('lazy loading of a body map in the celestial layer', () => {
     expect(io.material).not.toBe(tinted);
     layer.updateMeshes(FOV, VP, 'body-europa'); // another body selected: Io's disc is small, so it goes
     expect(io.material).toBe(tinted);
+  });
+
+  it('selecting a site on a far body loads the body map; deselecting frees it', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const urls: string[] = [];
+    const { layer, scene } = make((url, ok) => { urls.push(url); ok(tex()); }, ['body-titan']);
+    const titan = scene.children.find((o) => (o as THREE.Mesh).isMesh && Math.abs(((o as THREE.Mesh).geometry as THREE.SphereGeometry).parameters.radius - refRadiusKm('TITAN')) < 1e-6) as THREE.Mesh;
+    const tinted = titan.material as THREE.ShaderMaterial;
+    layer.update(T0, camAt('TITAN', MAP_LOAD_PX * 0.1));
+    const site = surfaceSiteRecords().find((r) => r.id === 'site-huygens');
+    layer.updateMeshes(FOV, VP, selectedBodyEntityId(site));
+    expect(urls).toEqual(['/textures/titan.jpg']);
+    expect(titan.material).not.toBe(tinted);
+    layer.updateMeshes(FOV, VP, selectedBodyEntityId(null));
+    expect(titan.material).toBe(tinted);
   });
 
   it('a missing file is asked for once and the body keeps its procedural look', () => {
