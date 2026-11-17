@@ -81,6 +81,11 @@ describe('bodyFacts', () => {
     expect(f[2].value).toMatch(/^27\.\d d$/);
     expect(f[3].value).toBe('Earth');
   });
+  it('a moon whose GM is not determined (Nereid, Puck) shows no GM row; a tiny GM keeps two significant digits', () => {
+    expect(bodyFacts(byId('body-nereid')).map((x) => x.label)).not.toContain('GM');
+    expect(bodyFacts(byId('body-puck')).map((x) => x.label)).not.toContain('GM');
+    expect(bodyFacts(byId('body-nix')).find((x) => x.label === 'GM')?.value).toBe('0.0015 km³/s²');
+  });
   it('the Sun has no period and no parent', () => {
     const f = bodyFacts(byId('body-sun'));
     expect(f.map((x) => x.label)).toEqual(['Radius', 'GM', 'Approximate']);

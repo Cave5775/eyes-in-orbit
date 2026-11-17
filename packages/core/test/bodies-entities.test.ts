@@ -66,7 +66,8 @@ describe('bodyEntityRecords', () => {
       expect(x.aliases.body).toBe(x.id.slice(5).toUpperCase());
       expect(x.provider).toEqual({ type: 'body', bodyId: x.aliases.body });
       expect(x.render).toMatchObject({ label: true, colorKey: 'body' });
-      expect(x.attrs).toMatchObject({ radiusKm: expect.any(Number), gm: expect.any(Number), approx: expect.any(Boolean) });
+      expect(x.attrs).toMatchObject({ radiusKm: expect.any(Number), approx: expect.any(Boolean) });
+      if (!['NEREID', 'PUCK'].includes(x.aliases.body)) expect(x.attrs).toMatchObject({ gm: expect.any(Number) }); // GM not determined: no gm attribute
       expect(x.updatedAt).toBe(0);
       expect(JSON.parse(JSON.stringify(x))).toEqual(x);
     }

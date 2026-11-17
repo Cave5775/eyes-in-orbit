@@ -34,7 +34,8 @@ export function bodyEntityRecords(registry: BodyRegistry = defaultBodies, update
     const period = bodyPeriodSec(b, registry);
     const aliases: Record<string, string> = { body: b.id };
     if (ALT_NAMES[b.id]) aliases.alt = ALT_NAMES[b.id];
-    const attrs: NonNullable<EntityRecord['attrs']> = { radiusKm: b.radiusKm, gm: b.gm };
+    const attrs: NonNullable<EntityRecord['attrs']> = { radiusKm: b.radiusKm };
+    if (b.gm > 0) attrs.gm = b.gm; // GM 0 = not determined (Nereid, Puck): no value rather than a 0
     if (period !== undefined) attrs.periodDays = period / 86400;
     attrs.approx = !!b.approx;
     const rec: EntityRecord = {

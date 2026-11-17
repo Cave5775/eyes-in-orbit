@@ -227,22 +227,33 @@ export const CHARON = moon('CHARON', 'Charon', 'PLUTO', 19_591, 0.0002, 0, 606, 
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** A moon of an irregular orbit given in the ecliptic of J2000 (SSD frame `ecliptic`): all six elements, angles in degrees. */
-function eclipticMoon(id: string, name: string, parentId: string, a: number, e: number, iDeg: number, nodeDeg: number, argpDeg: number, maDeg: number, radiusKm: number, gm: number): Body {
+function eclipticMoon(id: string, name: string, parentId: string, a: number, e: number, iDeg: number, nodeDeg: number, argpDeg: number, maDeg: number, radiusKm: number, gm: number, rotation: BodyRotation = NO_ROTATION, epochMs = J2000_MS): Body {
   return {
-    id, name, parentId, radiusKm, flattening: 0, gm, rotation: NO_ROTATION,
-    orbit: { a, e, i: iDeg * DEG, raan: nodeDeg * DEG, argp: argpDeg * DEG, m0: maDeg * DEG, epochMs: J2000_MS }, orbitPlane: 'ecliptic', approx: true,
+    id, name, parentId, radiusKm, flattening: 0, gm, rotation,
+    orbit: { a, e, i: iDeg * DEG, raan: nodeDeg * DEG, argp: argpDeg * DEG, m0: maDeg * DEG, epochMs }, orbitPlane: 'ecliptic', approx: true,
   };
 }
 
 export const AMALTHEA = moon('AMALTHEA', 'Amalthea', 'JUPITER', 181_400, 0.003, 0.4, 83.5, 0.16456, linear(268.05, 64.49, 231.67, 722.6314560));
 export const THEBE = moon('THEBE', 'Thebe', 'JUPITER', 221_900, 0.018, 1.1, 49.3, 0.03015, linear(268.05, 64.49, 8.56, 533.7004100));
-export const HIMALIA = eclipticMoon('HIMALIA', 'Himalia', 'JUPITER', 11_439_000, 0.160, 28.4, 64.2, 321.1, 78.3, 85, 0.15155);
+/**
+ * Himalia's node regresses 1.2 deg a year (SSD P node 297 y), so J2000 elements put the fallback plane 14 deg off by 2026: it
+ * takes osculating elements at 2026-11-17 00:00 TDB instead (Horizons EPHEM_TYPE=ELEMENTS, CENTER 500@599, REF_PLANE=ECLIPTIC:
+ * EC .15861, IN 28.611, OM 34.270, W 52.928, MA 79.412, A 11,435,220 km).
+ */
+export const HIMALIA = eclipticMoon('HIMALIA', 'Himalia', 'JUPITER', 11_435_220, 0.15861, 28.611, 34.270, 52.928, 79.412, 85, 0.15155, NO_ROTATION, Date.UTC(2026, 10, 17));
 
 export const HYPERION = moon('HYPERION', 'Hyperion', 'SATURN', 1_481_500, 0.105, 0.6, 135, 0.37049, NO_ROTATION);
-/** Phoebe is retrograde: the SSD inclination is 175.2 deg to Saturn's local Laplace plane, used here against the equator. */
-export const PHOEBE = moon('PHOEBE', 'Phoebe', 'SATURN', 12_929_400, 0.164, 175.2, 106.5, 0.55479, linear(356.90, 77.80, 178.58, 931.639));
-export const JANUS = moon('JANUS', 'Janus', 'SATURN', 151_500, 0.007, 0.2, 89.2, 0.12662, linear(40.58, 83.52, 58.83, 518.2359876));
-export const EPIMETHEUS = moon('EPIMETHEUS', 'Epimetheus', 'SATURN', 151_400, 0.020, 0.3, 58.2, 0.03514, linear(40.58, 83.52, 293.87, 518.4907239));
+/**
+ * Phoebe is retrograde and its orbit is 22 deg off Saturn's equator, so it takes osculating elements in the ecliptic of J2000
+ * (Horizons EPHEM_TYPE=ELEMENTS, CENTER 500@699, REF_PLANE=ECLIPTIC, 2000-01-01 12:00 TDB, fetched 2026-11-17: EC .16541, IN 173.259,
+ * OM 263.199, W 353.730, MA 58.649, A 12,943,785 km), because the SSD i = 175.2 is to Saturn's Laplace plane, not the equator.
+ * Janus and Epimetheus take the same Horizons elements (a 152,034 / 152,073 km osculating; the equator-plane convention gave both
+ * the same phase), so they start apart offline.
+ */
+export const PHOEBE = eclipticMoon('PHOEBE', 'Phoebe', 'SATURN', 12_943_785, 0.16541, 173.259, 263.199, 353.730, 58.649, 106.5, 0.55479, linear(356.90, 77.80, 178.58, 931.639));
+export const JANUS = eclipticMoon('JANUS', 'Janus', 'SATURN', 152_034, 0.0061666, 27.984, 169.849, 163.908, 79.741, 89.2, 0.12662, linear(40.58, 83.52, 58.83, 518.2359876));
+export const EPIMETHEUS = eclipticMoon('EPIMETHEUS', 'Epimetheus', 'SATURN', 152_073, 0.0060324, 27.738, 169.874, 230.587, 198.165, 58.2, 0.03514, linear(40.58, 83.52, 293.87, 518.4907239));
 
 export const PUCK = moon('PUCK', 'Puck', 'URANUS', 86_004, 0.0, 0.3, 77, 0, linear(257.31, -15.18, 91.24, -472.5450690));
 

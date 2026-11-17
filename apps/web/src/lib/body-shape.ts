@@ -62,7 +62,8 @@ export const BODY_SHAPES: Record<string, BodyShape> = {
   IAPETUS: { kind: 'ellipsoid', radiiKm: [745.7, 745.7, 712.1], source: NAIF },
   MIRANDA: { kind: 'ellipsoid', radiiKm: [240.4, 234.2, 232.9], source: NAIF },
   // smaller moons (2026-11-17): every NAIF triaxial entry with a rotation model, c / a under 0.975. Hyperion (180.1, 133.0, 102.7)
-  // has none (chaotic rotation, NO_ROTATION), so like Haumea it has no orientation and stays a sphere; Larissa's radii are equal.
+  // has none (chaotic rotation, NO_ROTATION), so like Haumea it has no orientation and stays a sphere. pck00011 gives Despina (74),
+  // Galatea (79) and Larissa (96, after a commented 104 / --- / 89 alternative) as equal radii: spheres, no entry.
   AMALTHEA: { kind: 'ellipsoid', radiiKm: [125, 73, 64], source: NAIF },
   THEBE: { kind: 'ellipsoid', radiiKm: [58, 49, 42], source: NAIF },
   PHOEBE: { kind: 'ellipsoid', radiiKm: [109.4, 108.5, 101.8], source: NAIF },

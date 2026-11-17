@@ -4,7 +4,7 @@ import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BodyProvider, BodyRegistry, bodyEntityRecords, bodyOf, entityRank, isBodyEntity, isOrbitable, bodyPeriodSec, bodyStateEci, bodyStateInParent, defaultBodies, precessDir, providerFromSpec,
-  setBodyStream, type Sample,
+  setBodyStream, DEG, type Sample,
 } from '@eio/core';
 import { registerApi } from '../src/api';
 import { loadConfig } from '../src/config';
@@ -165,7 +165,9 @@ describe('recorded Horizons responses (2026-10-29)', () => {
 
   it('parses the recorded tables of the smaller moons (2026-11-17, 1 d steps) and they sit where the registry orbit says, within 5 %', () => {
     const planetOf = (id: string) => defaultBodies.get(id).parentId!;
-    for (const id of ['hyperion', 'himalia', 'nereid', 'nix', 'puck', 'amalthea', 'phoebe', 'larissa', 'janus', 'thebe', 'epimetheus', 'proteus']) {
+    // Nix and Hydra are centred on Pluto (500@999), not the Pluto-Charon barycentre: Pluto wobbles about it by about 2100 km, which
+    // is 4 % of Nix's orbit radius, so their distances sit close to the 5 % margin and the margin cannot be tightened
+    for (const id of ['hyperion', 'himalia', 'nereid', 'nix', 'hydra', 'puck', 'amalthea', 'phoebe', 'larissa', 'despina', 'galatea', 'janus', 'thebe', 'epimetheus', 'proteus']) {
       const rows = parseHorizonsVectors(fixture(`horizons-body-${id}.json`));
       expect(rows, id).toHaveLength(4);
       expect(rows[1][0] - rows[0][0], id).toBe(86_400_000);
@@ -180,6 +182,45 @@ describe('recorded Horizons responses (2026-10-29)', () => {
     // Nereid is near apoapsis: slow and far, as e = 0.751 says
     const nereid = parseHorizonsVectors(fixture('horizons-body-nereid.json'));
     expect(norm(nereid[0], 4)).toBeLessThan(1.5);
+  });
+
+  it('the registry orbit plane of Phoebe, Himalia and Nereid matches the recorded orbit normal (r x v) within 3 degrees', () => {
+    const unit = (v: number[]) => v.map((x) => x / Math.hypot(...v));
+    const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const reg = new BodyRegistry();
+    for (const id of ['phoebe', 'himalia', 'nereid']) {
+      const row = parseHorizonsVectors(fixture(`horizons-body-${id}.json`))[0];
+      const real = unit(cross(row.slice(1, 4), row.slice(4, 7)));
+      const s = bodyStateInParent(reg.get(id.toUpperCase()), row[0], reg)!;
+      const model = unit(cross(s.r, s.v));
+      const deg = (Math.acos(Math.min(1, real[0] * model[0] + real[1] * model[1] + real[2] * model[2])) * 180) / Math.PI;
+      expect(deg, id).toBeLessThan(3);
+    }
+  });
+
+  it('Phoebe, Janus and Epimetheus (2000-01-01 12:00 TDB) and Himalia (2026-11-17 00:00 TDB) take the recorded Horizons osculating elements, ecliptic of J2000', () => {
+    const el = (id: string) => {
+      const j = JSON.parse(fixture(`horizons-elements-${id}.json`)).result as string;
+      const row = j.split('$$SOE')[1].split('$$EOE')[0].trim().split(String.fromCharCode(10))[0].split(',').map(Number);
+      // JDTDB, date (NaN), EC, QR, IN, OM, W, Tp, N, MA, TA, A
+      return { e: row[2], i: row[4], node: row[5], argp: row[6], ma: row[9], a: row[11] };
+    };
+    for (const id of ['phoebe', 'janus', 'epimetheus', 'himalia']) {
+      const w = el(id);
+      const o = defaultBodies.get(id.toUpperCase()).orbit!;
+      expect(defaultBodies.get(id.toUpperCase()).orbitPlane, id).toBe('ecliptic');
+      expect(o.a, id).toBeCloseTo(w.a, -1);
+      expect(o.e, id).toBeCloseTo(w.e, 3);
+      expect(o.i / DEG, id).toBeCloseTo(w.i, 2);
+      expect(o.raan / DEG, id).toBeCloseTo(w.node, 2);
+      expect(o.argp / DEG, id).toBeCloseTo(w.argp, 2);
+      expect(o.m0 / DEG, id).toBeCloseTo(w.ma, 2);
+    }
+    // the co-orbital pair no longer starts on top of each other
+    const reg = new BodyRegistry();
+    const t = Date.UTC(2000, 0, 1, 12);
+    const j = bodyStateInParent(reg.get('JANUS'), t, reg)!.r, e = bodyStateInParent(reg.get('EPIMETHEUS'), t, reg)!.r;
+    expect(dist(j, e)).toBeGreaterThan(1e5);
   });
 
   it('Hermite interpolation of every other Io row reproduces the skipped row (4 h steps: 3x coarser than the plan)', () => {

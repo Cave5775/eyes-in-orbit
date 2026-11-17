@@ -13,12 +13,12 @@ const PLANETS = ['MERCURY', 'VENUS', 'EARTH', 'MARS', 'JUPITER', 'SATURN', 'URAN
 const DWARFS = ['CERES', 'PLUTO', 'ERIS', 'HAUMEA', 'MAKEMAKE'];
 const MOONS: Record<string, string[]> = {
   EARTH: ['MOON'], MARS: ['PHOBOS', 'DEIMOS'], JUPITER: ['IO', 'EUROPA', 'GANYMEDE', 'CALLISTO', 'AMALTHEA', 'THEBE'],
-  SATURN: ['MIMAS', 'ENCELADUS', 'TETHYS', 'DIONE', 'RHEA', 'TITAN', 'IAPETUS', 'HYPERION', 'PHOEBE', 'JANUS', 'EPIMETHEUS'],
+  SATURN: ['MIMAS', 'ENCELADUS', 'TETHYS', 'DIONE', 'RHEA', 'TITAN', 'IAPETUS', 'HYPERION'],
   URANUS: ['MIRANDA', 'ARIEL', 'UMBRIEL', 'TITANIA', 'OBERON', 'PUCK'],
   NEPTUNE: ['TRITON', 'DESPINA', 'GALATEA', 'LARISSA', 'PROTEUS'], PLUTO: ['CHARON', 'NIX', 'HYDRA'],
 };
 /** Moons whose orbit is given in the ecliptic of J2000 (SSD frame `ecliptic`) with all six elements: far out, eccentric, no rotation model. */
-const ECLIPTIC_MOONS: Record<string, string> = { HIMALIA: 'JUPITER', NEREID: 'NEPTUNE' };
+const ECLIPTIC_MOONS: Record<string, string> = { HIMALIA: 'JUPITER', NEREID: 'NEPTUNE', PHOEBE: 'SATURN', JANUS: 'SATURN', EPIMETHEUS: 'SATURN' };
 /** Moons with no GM in any source (the SSD page lists Nereid as 0.00000, Puck has no row): GM 0 means "not determined". */
 const NO_GM = ['NEREID', 'PUCK'];
 /** The original 35 bodies in registry order: entityRank uses the index, so new bodies are only ever appended. */
@@ -52,7 +52,7 @@ describe('the solar system registry', () => {
         if (b.parentId !== 'SUN') {
           const p = defaultBodies.get(b.parentId!);
           expect(b.orbit!.a * (1 - b.orbit!.e), b.id).toBeGreaterThan(p.radiusKm);
-          expect(b.orbit!.a, b.id).toBeLessThan(b.id === 'PHOEBE' || ECLIPTIC_MOONS[b.id] ? 1.5e7 : 4e6);
+          expect(b.orbit!.a, b.id).toBeLessThan(ECLIPTIC_MOONS[b.id] && b.orbit!.a > 4e6 ? 1.5e7 : 4e6);
         }
       }
     }
@@ -117,8 +117,8 @@ describe('the solar system registry', () => {
     for (const id of ['VENUS', 'URANUS', 'MIRANDA', 'TRITON', 'PUCK']) expect((defaultBodies.get(id).rotation as { rateDegPerDay: number }).rateDegPerDay, id).toBeLessThan(0);
   });
 
-  it('keeps the ecliptic-frame irregulars (Himalia, Nereid) within a(1 -+ e) of their planet and at their SSD inclination to the ecliptic', () => {
-    const tilt = { HIMALIA: 28.4, NEREID: 5.1 };
+  it('keeps the ecliptic-frame irregulars (Himalia, Nereid, Phoebe, Janus, Epimetheus) within a(1 -+ e) of their planet and at their SSD inclination to the ecliptic', () => {
+    const tilt = { HIMALIA: 28.611, NEREID: 5.1, PHOEBE: 180 - 173.259, JANUS: 27.984, EPIMETHEUS: 27.738 };
     const ecl = eclipticToEquatorial([0, 0, 1]); // the ecliptic pole in the equatorial axes
     for (const m of Object.keys(ECLIPTIC_MOONS)) {
       const b = defaultBodies.get(m);
@@ -304,6 +304,10 @@ describe('constants verified against external sources (2026-10-29)', () => {
     expect(phys('PROTEUS')).toEqual([208, 2.58342]);
     expect(phys('NIX')).toEqual([18, 0.0015]);
     expect(phys('NEREID')).toEqual([170, 0]);
+    // GM 0 is "not determined": the entity carries no gm attribute at all
+    const recs = Object.fromEntries(bodyEntityRecords().map((x) => [x.id, x]));
+    for (const id of ['body-nereid', 'body-puck']) expect(recs[id].attrs, id).not.toHaveProperty('gm');
+    expect(recs['body-nix'].attrs).toHaveProperty('gm', 0.0015);
     expect(defaultBodies.get('PUCK').radiusKm).toBe(77); // pck00011 BODY715_RADII (the SSD page has no Puck row)
   });
 });
