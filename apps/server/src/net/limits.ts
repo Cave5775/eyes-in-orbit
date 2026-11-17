@@ -105,6 +105,13 @@ export const LIMITS: Record<string, SourceLimit> = {
     minSpacingMs: 1500, perHour: 60, demandPerHour: 40,
     blockOn: { 429: 15 * MIN, 503: 15 * MIN },
   },
+  // NASA MMGIS waypoint layers (apps/server/src/connectors/surface-sites.ts): two ~600 kB files every 6 h (cache TTL). A missing key answers 403 (S3 behind CloudFront), so 403 also blocks
+  mmgis: {
+    label: 'NASA MMGIS rover waypoints', policy: 'unpublished (NASA public data, https://github.com/NASA-AMMOS/MMGIS)',
+    minSpacingMs: 1500, perHour: 8,
+    blockOn: { 403: 6 * HOUR, 429: 3 * HOUR },
+    backoff: { baseMs: 30 * MIN, maxMs: 12 * HOUR },
+  },
   other: { label: 'Other hosts', policy: 'unpublished', minSpacingMs: 1000, perHour: 120 },
 };
 
@@ -126,6 +133,7 @@ export function sourceForUrl(url: string): string {
   if (is('esoc.esa.int')) return 'discos';
   if (is('gibs.earthdata.nasa.gov')) return 'gibs';
   if (is('mast.stsci.edu')) return 'mast';
+  if (is('mars.nasa.gov')) return 'mmgis';
   return 'other';
 }
 
@@ -133,5 +141,5 @@ export function sourceForUrl(url: string): string {
 export const FEED_SOURCE: Record<string, string> = {
   celestrak: 'celestrak', spacetrack: 'spacetrack:query', launchlibrary: 'll2', snapi: 'snapi', dsn: 'dsn',
   horizons: 'horizons', 'horizons-bodies': 'horizons', 'iss-rest': 'wheretheiss', 'iss-live': 'iss-live',
-  wikipedia: 'wikimedia', discos: 'discos',
+  wikipedia: 'wikimedia', discos: 'discos', 'surface-sites': 'mmgis',
 };

@@ -3,7 +3,7 @@ import { observatoryAttrs, type DsnLink, type DsnSnapshot } from '@eio/core';
 import type { Connector } from '../connector';
 import type { NewEntity } from '../hub';
 import { LimitedError } from '../net/limiter';
-import { DSN_STATIONS, DSN_STATION_OBSERVATORY, DSN_TARGETS, probeEntity, probeId } from './dsn-targets';
+import { DSN_STATIONS, DSN_STATION_OBSERVATORY, DSN_TARGETS, dsnCodes, probeEntity, probeId } from './dsn-targets';
 
 const POLL_MS = 5000;
 /** The second URL is tried only once the source has failed this many requests in a row (persisted by the limiter). */
@@ -149,7 +149,8 @@ export const dsn: Connector = {
     ctx.health.note = `${snapshot.links.length} dishes via ${workingUrl}`;
 
     const now = Date.now();
-    for (const code of Object.keys(DSN_TARGETS)) {
+    // the surface rovers (MSL, M20) are entities of the surface-site table; they only get the link attrs here
+    for (const code of dsnCodes()) {
       const prev = ctx.hub.graph.get(probeId(code));
       const attrs = probeAttrs(code, snapshot.links);
       const wasTracked = prev?.attrs?.dish != null, tracked = attrs.dish != null;

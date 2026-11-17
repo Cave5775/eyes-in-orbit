@@ -10,11 +10,13 @@ import { listedParent } from './listed-parent';
  *               It is a satellite OF THAT BODY: its view distance is measured from the primary, its category is satellites.
  * - `satellite` an Earth orbiter near the Earth: an Earth-bound satellite / station / capsule, or an Earth-bound probe that is
  *               closer than `NEAR_ORBIT_KM` (geocentric radius known).
+ * - `surface`   standing on a body other than the Earth: a `geodetic` provider whose `bodyId` is a registry body (the Moon, Mars,
+ *               Titan: a lander, rover or the Ingenuity helicopter, core `SURFACE_SITES`). Like an orbiter it is viewed from its body.
  * - `probe`     heliocentric or deep-space: the listed parent is the Sun, or an Earth-listed probe farther than `NEAR_ORBIT_KM` (Voyager,
- *               JWST at L2, New Horizons), and every rover or lander.
+ *               JWST at L2, New Horizons), and every rover or lander that is not on a body's surface (a lander with no position yet).
  * - `other`     anything else (launch vehicles, ground stations, pads, debris...).
  */
-export type ViewClass = 'body' | 'orbiter' | 'satellite' | 'probe' | 'other';
+export type ViewClass = 'body' | 'orbiter' | 'surface' | 'satellite' | 'probe' | 'other';
 
 /** Geocentric radius (km) under which an Earth-bound spacecraft is an Earth satellite; beyond it, a deep-space probe (L2 is 1.5e6 km). */
 export const NEAR_ORBIT_KM = 100_000;
@@ -27,6 +29,7 @@ type Rec = Pick<EntityRecord, 'kind' | 'bodyId'> & Partial<Pick<EntityRecord, 'p
 export function viewClass(rec: Rec, geocentricKm?: number): ViewClass {
   if (isBodyEntity(rec as EntityRecord)) return 'body';
   const k = rec.kind;
+  if (rec.provider?.type === 'geodetic' && rec.bodyId !== 'EARTH' && rec.bodyId !== 'SUN' && defaultBodies.has(rec.bodyId)) return 'surface';
   if (SURFACE_KINDS.has(k)) return 'probe';
   // the LISTED parent (lib/listed-parent.ts): a probe whose track is in the Sun's sphere is heliocentric whatever its feed's centre
   const bodyId = listedParent(rec);

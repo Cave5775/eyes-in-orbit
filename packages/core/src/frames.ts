@@ -311,8 +311,20 @@ export function enuBasis(lat: number, lon: number): { e: Vec3; n: Vec3; u: Vec3 
   };
 }
 
-/** Convenience: any state -> geodetic on the given body. */
+/**
+ * The reference shape a surface coordinate (latitude, longitude, height) of `body` refers to, ONE rule for placing a point and
+ * reading it back (`GeodeticProvider`, `stateToGeodetic`): the Earth is the WGS-84 ellipsoid (geodetic latitude); every other
+ * body is the sphere of its registry radius, so the latitude is planetocentric. That is what the scene draws (the Moon and Mars
+ * are spheres; the registry flattening of Mars, 1/169.8, is ignored by the map sphere) and what the sources of the surface
+ * sites publish (LROC, the NASA MMGIS rover layers: a sphere of 1737.4 km / 3396.19 km, planetocentric, east longitude), so a
+ * point at height 0 lies on the drawn surface to the metre.
+ */
+export function surfaceShape(body: Body): Body {
+  return body.id === 'EARTH' || body.flattening === 0 ? body : { ...body, flattening: 0 };
+}
+
+/** Convenience: any state -> geodetic on the given body (on its `surfaceShape`). */
 export function stateToGeodetic(s: StateVector, tMs: number, bodyId: string, bodies: BodyRegistry = defaultBodies): Geodetic {
   const fixed = convert(s, frameId(bodyId, 'fixed'), tMs, bodies);
-  return fixedToGeodetic(fixed.r, bodies.get(bodyId));
+  return fixedToGeodetic(fixed.r, surfaceShape(bodies.get(bodyId)));
 }

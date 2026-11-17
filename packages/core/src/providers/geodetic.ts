@@ -1,9 +1,12 @@
 import { BodyRegistry, defaultBodies } from '../bodies';
-import { geodeticToFixed } from '../frames';
+import { geodeticToFixed, surfaceShape } from '../frames';
 import { DEG } from '../math';
 import type { ProviderSpec, StateProvider, StateVector } from '../types';
 
-/** Fixed point on a body's surface (pads, ground stations, landed rovers/landers). */
+/**
+ * Fixed point on a body's surface (pads, ground stations, landed rovers/landers). The Earth's latitude is geodetic (WGS-84);
+ * on any other body it is planetocentric on the sphere of the registry radius (`surfaceShape`), east longitude, `altKm` above it.
+ */
 export class GeodeticProvider implements StateProvider {
   readonly type = 'geodetic';
 
@@ -18,7 +21,7 @@ export class GeodeticProvider implements StateProvider {
   stateAt(): StateVector {
     const r = geodeticToFixed(
       { lat: this.latDeg * DEG, lon: this.lonDeg * DEG, alt: this.altKm },
-      this.bodies.get(this.bodyId),
+      surfaceShape(this.bodies.get(this.bodyId)),
     );
     return { frame: `${this.bodyId}:fixed`, r, v: [0, 0, 0] };
   }

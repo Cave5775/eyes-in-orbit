@@ -773,10 +773,10 @@ export class SceneController {
     this.focusTracked(rec, req);
   }
 
-  /** The fly-to view of a tracked entity: an orbiter of another body is measured from its primary (lib/view-class.ts). */
+  /** The fly-to view of a tracked entity: an orbiter of another body, or a lander on one, is measured from that body (lib/view-class.ts). */
   private viewOf(rec: EntityRecord, p: THREE.Vector3): { dist: number; az: number; el: number } {
     const cls = viewClass(rec, p.length());
-    return cls === 'orbiter' ? viewFor(p, refDisplay(listedParent(rec), clock.now()).r) : viewFor(p);
+    return cls === 'orbiter' || cls === 'surface' ? viewFor(p, refDisplay(listedParent(rec), clock.now()).r) : viewFor(p);
   }
 
   private focusTracked(rec: EntityRecord, req?: FocusRequest): void {

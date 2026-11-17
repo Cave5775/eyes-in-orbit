@@ -1,5 +1,5 @@
 import type { FrameId } from '@eio/core';
-import { SPACE_OBSERVATORY_META, observatoryAttrs, type ObservatoryMeta } from '@eio/core';
+import { SPACE_OBSERVATORY_META, SURFACE_SITES, observatoryAttrs, type ObservatoryMeta } from '@eio/core';
 import type { NewEntity } from '../hub';
 
 /**
@@ -61,15 +61,15 @@ function marsOrbiter(t: Pick<DsnTarget, 'name' | 'horizons'>, stepMin: number): 
  * DSN spacecraft code -> display name and JPL Horizons id (unknown codes are skipped).
  * Targets orbiting a body other than Earth that is close enough to matter are fetched centred on that body
  * (LRO: Moon centre, 5 min steps; a 2 h lunar orbit sampled every 30 min and referred to the Earth is useless; the Mars
- * orbiters MRO, Odyssey, MAVEN, TGO and Mars Express: Mars centre, 5 or 10 min steps, `marsOrbiter`). Landers/rovers (MSL, M20)
- * stay on the default Earth-centred query.
+ * orbiters MRO, Odyssey, MAVEN, TGO and Mars Express: Mars centre, 5 or 10 min steps, `marsOrbiter`). The Mars rovers (MSL, M20) are NOT
+ * here: they stand on the surface of Mars, so they are the entities of the surface-site table (core `SURFACE_SITES`, ids `dsn-MSL` and
+ * `dsn-M20`) and their position is the latest NASA MMGIS waypoint (`mmgis-rovers`); the DSN connector only adds the link attributes
+ * (`DSN_SURFACE_CODES`). Horizons iterates this table, so a surface target here would be drawn as a free-floating point again.
  */
 export const DSN_TARGETS: Record<string, DsnTarget> = {
   VGR1: { name: 'Voyager 1', horizons: '-31' },
   VGR2: { name: 'Voyager 2', horizons: '-32' },
   JWST: { name: 'James Webb Space Telescope', horizons: '-170', attrs: observatoryAttrs(SPACE_OBSERVATORY_META.jwst) },
-  M20: { name: 'Mars 2020 Perseverance', horizons: '-168' },
-  MSL: { name: 'Mars Science Laboratory Curiosity', horizons: '-76' },
   // Mars orbiters: Mars-centred like LRO (a 2 h orbit cannot be resolved in 30 min Earth-centred steps)
   MRO: marsOrbiter({ name: 'Mars Reconnaissance Orbiter', horizons: '-74' }, 5), // 112 min
   ODY: marsOrbiter({ name: 'Mars Odyssey', horizons: '-53' }, 5), // 118 min
@@ -98,6 +98,12 @@ export const DSN_TARGETS: Record<string, DsnTarget> = {
   // the code is only the entity key (`dsn-EUCL`), the position comes from Horizons like JWST.
   EUCL: { name: 'Euclid', horizons: '-680', attrs: observatoryAttrs(SPACE_OBSERVATORY_META.euclid) },
 };
+
+/** DSN spacecraft codes of the targets that stand on a surface (`MSL`, `M20`): their entity is a surface site, the DSN feed adds attrs to it. */
+export const DSN_SURFACE_CODES: readonly string[] = SURFACE_SITES.flatMap((s) => (s.dsn ? [s.dsn] : []));
+
+/** Every DSN spacecraft code whose entity carries DSN link attrs: the Horizons targets and the surface rovers. */
+export const dsnCodes = (): string[] => [...Object.keys(DSN_TARGETS), ...DSN_SURFACE_CODES];
 
 /** The three DSN complexes are listed as observatories (radio) without sky imagery. */
 export const DSN_STATION_OBSERVATORY: ObservatoryMeta = { site: 'ground', bands: ['radio'], surveys: [] };
