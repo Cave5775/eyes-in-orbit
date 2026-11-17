@@ -20,8 +20,8 @@ export const bodyEntityId = (bodyId: string): string => `body-${bodyId.toLowerCa
  * other: `provider: { type: 'body', bodyId }` (state in `EARTH:inertial`, see `bodyStateEci`).
  *
  * - `kind`: `star` (no parent), `planet` (parent is the root), `dwarf_planet` (parent is the root, `Body.dwarf`: Ceres, Pluto,
- *   Eris, Haumea, Makemake), `moon` (deeper). The default registry has 35 bodies: Sun, Earth, Moon, Mars, the other six planets,
- *   five dwarf planets and 20 moons (see `DEFAULT_BODY_LIST`).
+ *   Eris, Haumea, Makemake), `moon` (deeper). The default registry has 50 bodies: Sun, Earth, Moon, Mars, the other six planets,
+ *   five dwarf planets and 35 moons (see `DEFAULT_BODY_LIST`).
  * - `bodyId`: the registry id of the body it ORBITS (Moon -> `EARTH`). The field is required, so the Sun, which orbits
  *   nothing, names itself (`SUN`). `parentId` is the entity id of the parent body (`body-earth`), unset for the Sun.
  * - `aliases.body` is the registry id; `aliases.alt` an alternative name (Sol, Terra, Luna) for search.

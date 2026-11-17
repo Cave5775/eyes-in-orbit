@@ -229,14 +229,14 @@ describe('matchesType (the type tag: a category id or a kind)', () => {
 });
 
 describe('the list holds every body entity', () => {
-  it('all 35 pass an empty query and a hide term, in browse order', async () => {
+  it('all 50 pass an empty query and a hide term, in browse order', async () => {
     const { classify, isDrawn } = await import('../src/lib/query');
     const { browseOrder } = await import('../src/lib/filters');
     const ordered = [...bodies].sort(browseOrder);
-    expect(ordered.length).toBe(35);
+    expect(ordered.length).toBe(50);
     for (const q of [{ terms: [] as never[] }, { terms: [{ key: 'body' as const, value: 'jupiter', effect: 'hide' as const }] }]) {
-      expect(ordered.filter((r) => isDrawn(classify(r, q))).length).toBe(35);
+      expect(ordered.filter((r) => isDrawn(classify(r, q))).length).toBe(50);
     }
-    expect(categoryCounts(bodies).find(([id]) => id === 'bodies')?.[1]).toBe(35);
+    expect(categoryCounts(bodies).find(([id]) => id === 'bodies')?.[1]).toBe(50);
   });
 });

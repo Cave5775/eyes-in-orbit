@@ -92,6 +92,21 @@ export const BODY_STYLES: Record<string, BodyStyle> = {
   OBERON: { color: '#8a7f77' },
   TRITON: { color: '#e6d6d0', noise: 0.1 },
   CHARON: { color: '#8f8a88' },
+  AMALTHEA: { color: '#a5613f', noise: 0.3 },
+  THEBE: { color: '#8a6a58', noise: 0.3 },
+  HIMALIA: { color: '#7a7672', noise: 0.25 },
+  HYPERION: { color: '#b3a99a', noise: 0.3 },
+  PHOEBE: { color: '#4f4b48', noise: 0.3 },
+  JANUS: { color: '#bdb8b0', noise: 0.25 },
+  EPIMETHEUS: { color: '#b4afa8', noise: 0.25 },
+  PUCK: { color: '#8f8c88', noise: 0.15 },
+  NEREID: { color: '#9a9a98', noise: 0.15 },
+  DESPINA: { color: '#7d7c7a', noise: 0.15 },
+  GALATEA: { color: '#7d7c7a', noise: 0.15 },
+  LARISSA: { color: '#85837f', noise: 0.2 },
+  PROTEUS: { color: '#6d6b69', noise: 0.3 },
+  NIX: { color: '#b8b2aa', noise: 0.15 },
+  HYDRA: { color: '#c8c4bd', noise: 0.15 },
 };
 
 /** The style of a body: its entry, or the neutral grey. */

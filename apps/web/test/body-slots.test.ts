@@ -12,7 +12,7 @@ const T = Date.UTC(2026, 9, 29, 12);
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const norm = (a: V3): number => Math.hypot(a[0], a[1], a[2]);
 
-/** The real registry (35 bodies, real positions at T) as the layer would list it, seen from `cam` (EARTH:inertial, km). */
+/** The real registry (50 bodies, real positions at T) as the layer would list it, seen from `cam` (EARTH:inertial, km). */
 const world = defaultBodies.all().map((b) => ({ id: b.id, c: bodyStateEci(b.id, T).r as V3, radiusKm: b.radiusKm }));
 const sceneBodies = (cam: V3): SceneBody[] =>
   world.map((w) => ({ entityId: `body-${w.id.toLowerCase()}`, c: w.c, rel: sub(w.c, cam), radiusKm: w.radiusKm, k: 1 }));
@@ -33,8 +33,8 @@ const ranked = (bodies: SceneBody[]) =>
   bodies.map((b, i) => ({ i, ang: (b.radiusKm * b.k) / norm(b.rel), disc: bodyDiscRadiusPx(b.radiusKm, b.k, norm(b.rel), FOV, VP) }));
 const hasCone = (g: { sinR: number; dist: number }[], b: SceneBody) => g.some((s) => s.sinR < 1 && Math.abs(s.dist - norm(b.rel)) < 1e-6 * s.dist);
 
-describe('occluder slots with the 35 bodies of the registry', () => {
-  it('has 35 bodies, more than the slots', () => expect(world.length).toBeGreaterThan(MAX_OCCLUDERS));
+describe('occluder slots with the 50 bodies of the registry', () => {
+  it('has 50 bodies, more than the slots', () => expect(world.length).toBeGreaterThan(MAX_OCCLUDERS));
 
   for (const [name, cam] of Object.entries(cameras)) {
     it(`${name}: the slots are the largest discs in the sky in order, none >= ${MIN_OCCLUDER_PX} px dropped while slots remain, deterministic`, () => {
@@ -72,7 +72,7 @@ describe('occluder slots with the 35 bodies of the registry', () => {
   });
 });
 
-describe('cone slots with the 35 bodies of the registry', () => {
+describe('cone slots with the 50 bodies of the registry', () => {
   for (const [name, cam] of Object.entries(cameras)) {
     it(`${name}: the cones go to the largest small discs, in order, registry order on ties`, () => {
       const bodies = sceneBodies(cam);

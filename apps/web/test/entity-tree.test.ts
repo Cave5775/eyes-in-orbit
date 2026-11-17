@@ -311,7 +311,7 @@ describe('the whole body catalogue in the tree', () => {
   const frame = { bodies: BODIES, frameId: 'body-earth', frameBodyId: 'EARTH' };
   const nodes = (rows: TreeRow[]) => rows.filter((r): r is Extract<TreeRow, { type: 'body' }> => r.type === 'body');
   it('every body is a node, even a planet with no objects, moons collapsed under their planet', () => {
-    expect(recs.length).toBe(35);
+    expect(recs.length).toBe(50);
     const rows = buildTreeRows(items, frame);
     const ids = nodes(rows).map((r) => r.bodyId);
     expect(ids).toContain('URANUS');
@@ -320,9 +320,9 @@ describe('the whole body catalogue in the tree', () => {
     expect(ids).not.toContain('IO'); // folded under JUPITER
     expect(ids).toContain('MOON'); // the path to the frame is open
   });
-  it('a node exists for each of the 35 bodies when everything is open', () => {
+  it('a node exists for each of the 50 bodies when everything is open', () => {
     const rows = buildTreeRows(items, { ...frame, openAll: true });
-    expect(new Set(nodes(rows).map((r) => r.entityId)).size).toBe(35);
+    expect(new Set(nodes(rows).map((r) => r.entityId)).size).toBe(50);
   });
   it('a hit on a moon shows Sun > planet > moon only', () => {
     const io = items.filter((i) => i.id === 'body-io');

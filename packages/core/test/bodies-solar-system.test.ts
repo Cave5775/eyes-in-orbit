@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   BodyProvider, BodyRegistry, DEFAULT_BODY_LIST, EntityGraph, bodyDepth, bodyEntityRecords, bodyOf, bodyPeriodSec, bodyStateEci,
   bodyStateInParent, compareHierarchy, convert, defaultBodies, entityRank, equatorToInertialMatrix, isBodyEntity, isOrbitable,
-  mulMV, precessDir, providerFromSpec, setBodyStream, type Sample,
+  mulMV, precessDir, providerFromSpec, setBodyStream, eclipticToEquatorial, DEG, type Sample,
 } from '../src';
 
 const DAY = 86400;
@@ -12,21 +12,32 @@ const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], 
 const PLANETS = ['MERCURY', 'VENUS', 'EARTH', 'MARS', 'JUPITER', 'SATURN', 'URANUS', 'NEPTUNE'];
 const DWARFS = ['CERES', 'PLUTO', 'ERIS', 'HAUMEA', 'MAKEMAKE'];
 const MOONS: Record<string, string[]> = {
-  EARTH: ['MOON'], MARS: ['PHOBOS', 'DEIMOS'], JUPITER: ['IO', 'EUROPA', 'GANYMEDE', 'CALLISTO'],
-  SATURN: ['MIMAS', 'ENCELADUS', 'TETHYS', 'DIONE', 'RHEA', 'TITAN', 'IAPETUS'],
-  URANUS: ['MIRANDA', 'ARIEL', 'UMBRIEL', 'TITANIA', 'OBERON'], NEPTUNE: ['TRITON'], PLUTO: ['CHARON'],
+  EARTH: ['MOON'], MARS: ['PHOBOS', 'DEIMOS'], JUPITER: ['IO', 'EUROPA', 'GANYMEDE', 'CALLISTO', 'AMALTHEA', 'THEBE'],
+  SATURN: ['MIMAS', 'ENCELADUS', 'TETHYS', 'DIONE', 'RHEA', 'TITAN', 'IAPETUS', 'HYPERION', 'PHOEBE', 'JANUS', 'EPIMETHEUS'],
+  URANUS: ['MIRANDA', 'ARIEL', 'UMBRIEL', 'TITANIA', 'OBERON', 'PUCK'],
+  NEPTUNE: ['TRITON', 'DESPINA', 'GALATEA', 'LARISSA', 'PROTEUS'], PLUTO: ['CHARON', 'NIX', 'HYDRA'],
 };
+/** Moons whose orbit is given in the ecliptic of J2000 (SSD frame `ecliptic`) with all six elements: far out, eccentric, no rotation model. */
+const ECLIPTIC_MOONS: Record<string, string> = { HIMALIA: 'JUPITER', NEREID: 'NEPTUNE' };
+/** Moons with no GM in any source (the SSD page lists Nereid as 0.00000, Puck has no row): GM 0 means "not determined". */
+const NO_GM = ['NEREID', 'PUCK'];
+/** The original 35 bodies in registry order: entityRank uses the index, so new bodies are only ever appended. */
+const FIRST_35 = ['SUN', 'EARTH', 'MOON', 'MARS', 'MERCURY', 'VENUS', 'JUPITER', 'SATURN', 'URANUS', 'NEPTUNE', 'CERES', 'PLUTO', 'ERIS', 'HAUMEA', 'MAKEMAKE',
+  'PHOBOS', 'DEIMOS', 'IO', 'EUROPA', 'GANYMEDE', 'CALLISTO', 'MIMAS', 'ENCELADUS', 'TETHYS', 'DIONE', 'RHEA', 'TITAN', 'IAPETUS',
+  'MIRANDA', 'ARIEL', 'UMBRIEL', 'TITANIA', 'OBERON', 'TRITON', 'CHARON'];
 
 describe('the solar system registry', () => {
   const bodies = defaultBodies.all();
 
-  it('has 35 bodies with unique ids, every one with a known parent, radius > 0 and GM > 0', () => {
-    expect(bodies).toHaveLength(35);
+  it('has 50 bodies with unique ids, every one with a known parent, radius > 0 and GM > 0 (but Nereid and Puck, GM not determined)', () => {
+    expect(bodies).toHaveLength(50);
+    expect(DEFAULT_BODY_LIST.slice(0, 35).map((b) => b.id)).toEqual(FIRST_35);
     expect(new Set(bodies.map((b) => b.id)).size).toBe(bodies.length);
     expect(new Set(bodies.map((b) => b.name)).size).toBe(bodies.length);
     for (const b of bodies) {
       expect(b.radiusKm, b.id).toBeGreaterThan(0);
-      expect(b.gm, b.id).toBeGreaterThan(0);
+      if (NO_GM.includes(b.id)) expect(b.gm, b.id).toBe(0);
+      else expect(b.gm, b.id).toBeGreaterThan(0);
       expect(b.flattening, b.id).toBeGreaterThanOrEqual(0);
       expect(b.flattening, b.id).toBeLessThan(0.1);
       if (b.id === 'SUN') expect(b.parentId).toBeUndefined();
@@ -35,12 +46,13 @@ describe('the solar system registry', () => {
         expect(b.orbit, b.id).toBeDefined();
         expect(b.orbit!.a, b.id).toBeGreaterThan(0);
         expect(b.orbit!.e, b.id).toBeGreaterThanOrEqual(0);
-        expect(b.orbit!.e, b.id).toBeLessThan(0.5);
-        // a moon is outside its planet's surface and inside a few million km
+        if (!ECLIPTIC_MOONS[b.id]) expect(b.orbit!.e, b.id).toBeLessThan(0.5);
+        else expect(b.orbit!.e, b.id).toBeLessThan(1);
+        // a moon is outside its planet's surface and inside a few million km (Phoebe and the two ecliptic-frame irregulars reach 5 to 13 million)
         if (b.parentId !== 'SUN') {
           const p = defaultBodies.get(b.parentId!);
           expect(b.orbit!.a * (1 - b.orbit!.e), b.id).toBeGreaterThan(p.radiusKm);
-          expect(b.orbit!.a, b.id).toBeLessThan(4e6);
+          expect(b.orbit!.a, b.id).toBeLessThan(b.id === 'PHOEBE' || ECLIPTIC_MOONS[b.id] ? 1.5e7 : 4e6);
         }
       }
     }
@@ -53,6 +65,7 @@ describe('the solar system registry', () => {
     }
     expect(defaultBodies.lineage('IO').map((b) => b.id)).toEqual(['IO', 'JUPITER', 'SUN']);
     expect(defaultBodies.lineage('CHARON').map((b) => b.id)).toEqual(['CHARON', 'PLUTO', 'SUN']);
+    for (const [m, planet] of Object.entries(ECLIPTIC_MOONS)) expect(defaultBodies.lineage(m).map((b) => b.id), m).toEqual([m, planet, 'SUN']);
     expect(bodies.filter((b) => b.parentId === 'SUN')).toHaveLength(PLANETS.length + DWARFS.length);
   });
 
@@ -78,11 +91,18 @@ describe('the solar system registry', () => {
     near('RHEA', 4.518, 0.03); near('TITAN', 15.945, 0.03); near('IAPETUS', 79.32, 0.03);
     near('MIRANDA', 1.413, 0.04); near('ARIEL', 2.520, 0.04); near('UMBRIEL', 4.144, 0.04); near('TITANIA', 8.706, 0.04); near('OBERON', 13.463, 0.04);
     near('TRITON', 5.877, 0.01); near('CHARON', 6.387, 0.01);
+    // the smaller moons: periods P of the SSD mean-elements table (2026-11-17)
+    near('AMALTHEA', 0.499918, 0.01); near('THEBE', 0.676105, 0.01); near('HIMALIA', 249.909, 0.01);
+    near('HYPERION', 21.276658, 0.03); near('PHOEBE', 550.30391, 0.01); near('JANUS', 0.697353, 0.03); near('EPIMETHEUS', 0.697012, 0.03);
+    near('PUCK', 0.761833, 0.03);
+    near('NEREID', 360.133039, 0.01); near('DESPINA', 0.3347, 0.03); near('GALATEA', 0.4292, 0.03); near('LARISSA', 0.5549, 0.03); near('PROTEUS', 1.1229, 0.03);
+    // Pluto's GM in the registry is the Pluto-Charon system, which is what circumbinary Nix and Hydra feel
+    near('NIX', 24.85, 0.03); near('HYDRA', 38.20, 0.03);
   });
 
-  it('gives rotation where the IAU report has it: Eris, Haumea and Makemake render unrotated', () => {
+  it('gives rotation where the IAU report has it: Eris, Haumea, Makemake and the moons without a model (Himalia, Hyperion, Nereid, Nix, Hydra) render unrotated', () => {
     const none = bodies.filter((b) => b.rotation.kind === 'linear' && b.rotation.rateDegPerDay === 0).map((b) => b.id);
-    expect(none.sort()).toEqual(['ERIS', 'HAUMEA', 'MAKEMAKE']);
+    expect(none.sort()).toEqual(['ERIS', 'HAUMEA', 'HIMALIA', 'HYDRA', 'HYPERION', 'MAKEMAKE', 'NEREID', 'NIX']);
     for (const b of bodies.filter((x) => !none.includes(x.id) && x.id !== 'EARTH')) {
       const r = b.rotation;
       expect(r.kind, b.id).toBe('linear');
@@ -93,8 +113,26 @@ describe('the solar system registry', () => {
         expect(Math.abs(r.rateDegPerDay), b.id).toBeGreaterThan(1);
       }
     }
-    // retrograde rotators: Venus, Uranus and its moons, Triton
-    for (const id of ['VENUS', 'URANUS', 'MIRANDA', 'TRITON']) expect((defaultBodies.get(id).rotation as { rateDegPerDay: number }).rateDegPerDay, id).toBeLessThan(0);
+    // retrograde rotators: Venus, Uranus and its moons, Triton, Puck
+    for (const id of ['VENUS', 'URANUS', 'MIRANDA', 'TRITON', 'PUCK']) expect((defaultBodies.get(id).rotation as { rateDegPerDay: number }).rateDegPerDay, id).toBeLessThan(0);
+  });
+
+  it('keeps the ecliptic-frame irregulars (Himalia, Nereid) within a(1 -+ e) of their planet and at their SSD inclination to the ecliptic', () => {
+    const tilt = { HIMALIA: 28.4, NEREID: 5.1 };
+    const ecl = eclipticToEquatorial([0, 0, 1]); // the ecliptic pole in the equatorial axes
+    for (const m of Object.keys(ECLIPTIC_MOONS)) {
+      const b = defaultBodies.get(m);
+      let maxLat = 0;
+      for (let k = 0; k < 240; k++) {
+        const s = bodyStateInParent(b, T + k * 0.0173 * (bodyPeriodSec(b)! * 1000), defaultBodies)!;
+        const r = Math.hypot(...s.r);
+        expect(r, m).toBeGreaterThanOrEqual(b.orbit!.a * (1 - b.orbit!.e) * 0.9999);
+        expect(r, m).toBeLessThanOrEqual(b.orbit!.a * (1 + b.orbit!.e) * 1.0001);
+        maxLat = Math.max(maxLat, Math.abs(Math.asin((s.r[0] * ecl[0] + s.r[1] * ecl[1] + s.r[2] * ecl[2]) / r)));
+      }
+      expect(maxLat / DEG, m).toBeLessThanOrEqual(tilt[m as keyof typeof tilt] + 1e-6);
+      expect(maxLat / DEG, m).toBeGreaterThan(tilt[m as keyof typeof tilt] - 1.5);
+    }
   });
 
   it('keeps every moon on a ring about its planet: the distance is within a(1 -+ e), the latitude within its inclination to the equator', () => {
@@ -127,8 +165,9 @@ describe('body entities of the whole system', () => {
     for (const id of PLANETS) expect(r[`body-${id.toLowerCase()}`].kind, id).toBe('planet');
     for (const id of DWARFS) expect(r[`body-${id.toLowerCase()}`].kind, id).toBe('dwarf_planet');
     for (const ms of Object.values(MOONS)) for (const m of ms) expect(r[`body-${m.toLowerCase()}`].kind, m).toBe('moon');
+    for (const [m, planet] of Object.entries(ECLIPTIC_MOONS)) expect(r[`body-${m.toLowerCase()}`], m).toMatchObject({ kind: 'moon', bodyId: planet, parentId: `body-${planet.toLowerCase()}` });
     expect(r['body-sun'].kind).toBe('star');
-    expect(recs.filter((x) => x.kind === 'moon')).toHaveLength(21);
+    expect(recs.filter((x) => x.kind === 'moon')).toHaveLength(36);
   });
 
   it('nests moons under planets under the Sun: parentId, bodyId and rank', () => {
@@ -241,5 +280,30 @@ describe('constants verified against external sources (2026-10-29)', () => {
     expect(rot('DIONE').w0Deg).toBe(357.6); // BODY604_PM = ( 357.6 131.5349316 0. )
     expect(rot('PHOBOS')).toMatchObject({ poleRaDeg: 317.67071657, poleDecDeg: 52.88627266, w0Deg: 35.1877444, rateDegPerDay: 1128.84475928 });
     expect(rot('DEIMOS')).toMatchObject({ poleRaDeg: 316.65705808, poleDecDeg: 53.50992033, w0Deg: 79.39932954, rateDegPerDay: 285.16188899 });
+  });
+
+  it('pins the smaller moons: rotation from pck00011.tpc (read 2026-11-17), radius and GM from the SSD physical parameters page', () => {
+    const rot = (id: string) => defaultBodies.get(id).rotation as { poleRaDeg: number; poleDecDeg: number; w0Deg: number; rateDegPerDay: number };
+    // BODY<naif>_POLE_RA, _POLE_DEC, _PM (constant terms)
+    expect(rot('AMALTHEA')).toMatchObject({ poleRaDeg: 268.05, poleDecDeg: 64.49, w0Deg: 231.67, rateDegPerDay: 722.6314560 }); // 505
+    expect(rot('THEBE')).toMatchObject({ poleRaDeg: 268.05, poleDecDeg: 64.49, w0Deg: 8.56, rateDegPerDay: 533.7004100 }); // 514
+    expect(rot('PHOEBE')).toMatchObject({ poleRaDeg: 356.90, poleDecDeg: 77.80, w0Deg: 178.58, rateDegPerDay: 931.639 }); // 609
+    expect(rot('JANUS')).toMatchObject({ poleRaDeg: 40.58, poleDecDeg: 83.52, w0Deg: 58.83, rateDegPerDay: 518.2359876 }); // 610
+    expect(rot('EPIMETHEUS')).toMatchObject({ poleRaDeg: 40.58, poleDecDeg: 83.52, w0Deg: 293.87, rateDegPerDay: 518.4907239 }); // 611
+    expect(rot('PUCK')).toMatchObject({ poleRaDeg: 257.31, poleDecDeg: -15.18, w0Deg: 91.24, rateDegPerDay: -472.5450690 }); // 715
+    expect(rot('DESPINA')).toMatchObject({ poleRaDeg: 299.36, poleDecDeg: 43.45, w0Deg: 306.51, rateDegPerDay: 1075.7341562 }); // 805
+    expect(rot('GALATEA')).toMatchObject({ poleRaDeg: 299.36, poleDecDeg: 43.43, w0Deg: 258.09, rateDegPerDay: 839.6597686 }); // 806
+    expect(rot('LARISSA')).toMatchObject({ poleRaDeg: 299.36, poleDecDeg: 43.41, w0Deg: 179.41, rateDegPerDay: 649.0534470 }); // 807
+    expect(rot('PROTEUS')).toMatchObject({ poleRaDeg: 299.27, poleDecDeg: 42.91, w0Deg: 93.38, rateDegPerDay: 320.7654228 }); // 808
+    const phys = (id: string) => [defaultBodies.get(id).radiusKm, defaultBodies.get(id).gm];
+    expect(phys('AMALTHEA')).toEqual([83.5, 0.16456]);
+    expect(phys('HIMALIA')).toEqual([85, 0.15155]);
+    expect(phys('HYPERION')).toEqual([135, 0.37049]);
+    expect(phys('PHOEBE')).toEqual([106.5, 0.55479]);
+    expect(phys('JANUS')).toEqual([89.2, 0.12662]);
+    expect(phys('PROTEUS')).toEqual([208, 2.58342]);
+    expect(phys('NIX')).toEqual([18, 0.0015]);
+    expect(phys('NEREID')).toEqual([170, 0]);
+    expect(defaultBodies.get('PUCK').radiusKm).toBe(77); // pck00011 BODY715_RADII (the SSD page has no Puck row)
   });
 });
