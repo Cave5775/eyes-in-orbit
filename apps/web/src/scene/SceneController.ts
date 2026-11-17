@@ -1847,7 +1847,7 @@ export class SceneController {
 
     this.celestial.applyScope(this.bodyScoped, this.camera.fov, this.container.clientHeight); // another planet's moons: no glyph, label or pick
     this.celestial.updateMarkers(this.camera.fov, this.container.clientHeight); // glyphs of the bodies too small to see
-    this.celestial.updateMeshes(this.camera.fov, this.container.clientHeight); // detailed body models, loaded only when approached
+    this.celestial.updateMeshes(this.camera.fov, this.container.clientHeight, this.selectedId); // detailed body models, loaded only when approached
     const tUp = perf.on ? performance.now() : 0;
     this.sats.pos.upload(f);
     this.dyn.pos.upload(f);

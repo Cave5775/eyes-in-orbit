@@ -23,6 +23,8 @@ export type MapLayout =
   /** mirrored: west-positive increasing to the right, prime meridian at the centre (a view from inside; needs a flip) */
   | 'centred-west';
 
+import { meshWanted } from './body-shape';
+
 export interface BodyTexture {
   /** file in apps/web/public/textures */
   file: string;
@@ -33,8 +35,18 @@ export interface BodyTexture {
   credit: string;
 }
 
-/** Disc radius, px, at which a body's map is loaded (kept until under 40 % of it, like the mesh tier: `meshWanted`). 2048 px maps are about 11 MB with mipmaps. */
+/** Disc radius, px, at which a body's map is loaded (kept until under 40 % of it, like the mesh tier: `meshWanted`); the selected body loads it at any size (`mapWanted`). 2048 px maps are about 11 MB with mipmaps. */
 export const MAP_LOAD_PX = 24;
+
+/**
+ * Should a high-res tier (a body's map, or its glb mesh with a `loadPx` of its own) be held this frame? The selected body
+ * always wants it, whatever the zoom, and keeps it while it stays selected; any other body follows the size rule with
+ * hysteresis (`meshWanted`: loaded at `loadPx`, kept until under 40 % of it). `shown` false (hidden) wants nothing.
+ */
+export function mapWanted(discPx: number, selected: boolean, wasLoaded: boolean, loadPx: number = MAP_LOAD_PX, shown = true): boolean {
+  if (!shown) return false;
+  return selected || meshWanted(discPx, loadPx, wasLoaded);
+}
 
 const USGS = 'USGS Astrogeology planetary WMS';
 

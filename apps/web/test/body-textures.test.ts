@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { bodyEntityRecords, defaultBodies, NO_ROTATION } from '@eio/core';
-import { BODY_TEXTURES, MAP_LOAD_PX, textureCredits, textureOf, textureU } from '../src/lib/body-textures';
+import { BODY_TEXTURES, MAP_LOAD_PX, mapWanted, textureCredits, textureOf, textureU } from '../src/lib/body-textures';
 import { refPositionEci, refRadiusKm } from '../src/lib/ref-body';
 import { CelestialLayer, createMapSphere, type MapEnv } from '../src/scene/celestial';
 import { createBodyMaterial, createMapMaterial } from '../src/scene/materials';
@@ -87,6 +87,25 @@ describe('the texture table', () => {
   });
 });
 
+describe('mapWanted (load on select or on size)', () => {
+  it('the selected body wants its map at any size, even a dot or an unknown size', () => {
+    expect(mapWanted(0.5, true, false)).toBe(true);
+    expect(mapWanted(0, true, false)).toBe(true);
+    expect(mapWanted(MAP_LOAD_PX / 100, true, true)).toBe(true); // never released while selected
+  });
+  it('an unselected body keeps the size rule with hysteresis', () => {
+    expect(mapWanted(MAP_LOAD_PX - 1, false, false)).toBe(false);
+    expect(mapWanted(MAP_LOAD_PX, false, false)).toBe(true);
+    expect(mapWanted(MAP_LOAD_PX * 0.6, false, true)).toBe(true);
+    expect(mapWanted(MAP_LOAD_PX * 0.3, false, true)).toBe(false);
+  });
+  it('a hidden body wants nothing, selected or not; a mesh tier passes its own loadPx', () => {
+    expect(mapWanted(500, true, true, MAP_LOAD_PX, false)).toBe(false);
+    expect(mapWanted(60, false, false, 100)).toBe(false);
+    expect(mapWanted(60, true, false, 100)).toBe(true);
+  });
+});
+
 describe('lazy loading of a body map in the celestial layer', () => {
   afterEach(() => vi.restoreAllMocks());
   const T0 = Date.UTC(2026, 9, 25, 12, 0, 0), FOV = 50, VP = 700;
@@ -129,6 +148,23 @@ describe('lazy loading of a body map in the celestial layer', () => {
     layer.updateMeshes(FOV, VP);
     expect(io.material).toBe(tinted);
     expect(dispose).toHaveBeenCalled();
+  });
+
+  it('selecting a far body loads its map at once and keeps it while selected; deselecting lets the size rule free it', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const urls: string[] = [];
+    const { layer, io } = make((url, ok) => { urls.push(url); ok(tex()); });
+    const tinted = io.material as THREE.ShaderMaterial;
+    layer.update(T0, camAt('IO', MAP_LOAD_PX * 0.1));
+    layer.updateMeshes(FOV, VP, null);
+    expect(urls).toEqual([]);
+    layer.updateMeshes(FOV, VP, 'body-io');
+    expect(urls).toEqual(['/textures/io.jpg']);
+    expect(io.material).not.toBe(tinted);
+    layer.updateMeshes(FOV, VP, 'body-io'); // still far, still selected
+    expect(io.material).not.toBe(tinted);
+    layer.updateMeshes(FOV, VP, 'body-europa'); // another body selected: Io's disc is small, so it goes
+    expect(io.material).toBe(tinted);
   });
 
   it('a missing file is asked for once and the body keeps its procedural look', () => {
