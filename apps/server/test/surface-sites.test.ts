@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
+import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SURFACE_SITES, convert, providerFromSpec, surfaceSiteOf } from '@eio/core';
 import { loadConfig } from '../src/config';
 import { Scheduler, type Connector } from '../src/connector';
 import { dsn } from '../src/connectors/dsn';
 import { DSN_SURFACE_CODES, DSN_TARGETS, dsnCodes, probeEntity } from '../src/connectors/dsn-targets';
-import { MMGIS_URL, parseMmgisWaypoints, roverAt, surfaceSites } from '../src/connectors/surface-sites';
+import { registerApi } from '../src/api';
+import { MMGIS_URL, parseMmgisTraverse, parseMmgisWaypoints, readTraverse, roverAt, surfaceSites } from '../src/connectors/surface-sites';
 import { Http } from '../src/http';
 import { Hub } from '../src/hub';
 import { Limiter } from '../src/net/limiter';
@@ -257,5 +259,58 @@ describe('surface-sites connector', () => {
     expect(hub.graph.get('dsn-MSL')!.provider).toMatchObject({ latDeg: -4.82602331 });
     expect(hub.healthOf('surface-sites').note).toMatch(/1 targets failed: M20: .*GeoJSON FeatureCollection/);
     void providerFromSpec;
+  });
+
+  it('the cache holds the whole traverse (the one stored form), served by readTraverse and GET /api/traverse/:id; the latest waypoint comes from it', async () => {
+    const { hub, store, scheduler } = setup(serve);
+    expect(readTraverse(store, 'dsn-M20')).toBeUndefined(); // nothing cached yet, and no request is made to find out
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    scheduler.stop();
+    const t = readTraverse(store, 'dsn-M20')!;
+    expect(t).toMatchObject({ entityId: 'dsn-M20', bodyId: 'MARS', stale: false });
+    expect(t.source).toContain(MMGIS_URL.M20);
+    expect(t.points[0]).toEqual([18.444627, 77.450886, 13]);
+    expect(t.points[t.points.length - 1]).toEqual([18.435594, 77.233223, 2022]);
+    expect(hub.graph.get('dsn-M20')!.provider).toMatchObject({ latDeg: 18.43559434 });
+    expect(readTraverse(store, 'dsn-MSL')!.points).toHaveLength(4); // the two identical landing rows are one point
+    expect(readTraverse(store, 'site-apollo-11')).toBeUndefined();
+
+    const app = Fastify();
+    registerApi(app, hub, new Http(store, { fetch: vi.fn<typeof fetch>(), offline: true, limiter: new Limiter(store, { limits: LIMITS }) }), store);
+    const ok = await app.inject({ url: '/api/traverse/dsn-M20' });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ entityId: 'dsn-M20', bodyId: 'MARS', points: t.points });
+    expect((await app.inject({ url: '/api/traverse/site-apollo-11' })).statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('a traverse is marked stale once its cache entry is past the TTL and the refresh failed; the old answer is still served', async () => {
+    const store = new Store(':memory:');
+    const good = setup(serve, { store });
+    await good.scheduler.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    good.scheduler.stop();
+    vi.setSystemTime(Date.now() + 7 * H);
+    expect(readTraverse(store, 'dsn-MSL')).toMatchObject({ stale: true });
+    expect(readTraverse(store, 'dsn-MSL')!.points.length).toBeGreaterThan(1);
+  });
+});
+
+describe('MMGIS traverse parser (trimmed real files)', () => {
+  it('keeps every localization in file order, 6 decimals, without consecutive repeats; the latest waypoint is the same as before', () => {
+    const t = parseMmgisTraverse(fx('mmgis-m20-waypoints.json'));
+    expect(t.points.map((p) => p[2])).toEqual([13, 14, 2009, 2022, 2022]);
+    expect(t.latest).toEqual(parseMmgisWaypoints(fx('mmgis-m20-waypoints.json')));
+    expect(parseMmgisTraverse(fx('mmgis-msl-waypoints.json')).points.map((p) => p[2])).toEqual([3, 5069, 5070, 5073]);
+  });
+  it('skips the points without a usable position', () => {
+    const doc = { type: 'FeatureCollection', features: [
+      { properties: { sol: 1, lat: 1, lon: 2 }, geometry: { coordinates: [2, 1] } },
+      { properties: { sol: 2, lat: -9999, lon: -9999 }, geometry: { coordinates: [-9999, -9999] } },
+      { properties: { sol: 3, lat: 1.0000004, lon: 2 }, geometry: { coordinates: [2, 1] } },
+      { properties: { sol: 4, lat: 3, lon: 4 }, geometry: { coordinates: [4, 3] } },
+    ] };
+    expect(parseMmgisTraverse(JSON.stringify(doc)).points).toEqual([[1, 2, 1], [3, 4, 4]]);
   });
 });

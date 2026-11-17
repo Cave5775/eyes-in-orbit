@@ -1,6 +1,7 @@
 import { defaultBodies, type LiveAscent } from '@eio/core';
 import type { FastifyInstance } from 'fastify';
 import { searchNews } from './connectors/snapi';
+import { readTraverse } from './connectors/surface-sites';
 import { syncLaunchEntities } from './connectors/launchlibrary';
 import { CredentialError, type Credentials } from './credentials';
 import { LimitedError } from './net/limiter';
@@ -140,6 +141,14 @@ export function registerApi(app: FastifyInstance, hub: Hub, http: Http, store?: 
     if (!launch) return reply.code(404).send({ error: `unknown launch ${req.params.launchId}` });
     return buildSeries(launch, matchTrajectory(hub.trajectories, launch), hub.liveTelemetry.get(launch.id));
   });
+
+  // ---- the whole traverse of a Mars rover (the surface-sites cache; never asks the network)
+  if (store) {
+    app.get<{ Params: { entityId: string } }>('/api/traverse/:entityId', async (req, reply) => {
+      const t = readTraverse(store, req.params.entityId);
+      return t ?? reply.code(404).send({ error: `no traverse for ${req.params.entityId}` });
+    });
+  }
 
   const requireLocal = (req: { socket: { remoteAddress?: string }; headers: { origin?: string } }) =>
     isLocalRequest(req.socket.remoteAddress, req.headers.origin);
