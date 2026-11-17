@@ -12,7 +12,7 @@ import { Credentials } from './credentials';
 import { DescribeService } from './describe/service';
 import { ArchiveImagesService } from './archive-images';
 import { bodies } from './connectors/bodies';
-import { celestrak } from './connectors/celestrak';
+import { CELESTRAK_CACHE_PREFIX, celestrak } from './connectors/celestrak';
 import { dsn } from './connectors/dsn';
 import { flightclub } from './connectors/flightclub';
 import { horizons } from './connectors/horizons';
@@ -40,7 +40,8 @@ async function main(): Promise<void> {
   const config = loadConfig();
   setBackoffLog(backoffLogIn(config.dataDir));
   const store = new Store(join(config.dataDir, 'cache.sqlite'));
-  store.prune(30 * 86_400_000);
+  // CelesTrak rows are the fallback while CelesTrak blocks us, so they are kept at any age
+  store.prune(30 * 86_400_000, Date.now(), [CELESTRAK_CACHE_PREFIX]);
   const http = new Http(store, { offline: config.offline });
   const hub = new Hub();
   const off = new Set(config.disabledConnectors);

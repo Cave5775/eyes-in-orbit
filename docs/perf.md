@@ -136,7 +136,7 @@ Limits: a query that matches most of the catalogue is no faster (the cost is ran
 
 The second half of ranked item 2: let the server send only the objects in the camera's scope, so the client holds and indexes less. It needs the client to hold a partial catalogue (the lists, counts, search results and related objects all read the whole one today), so before building it the question is how much a server could actually prune. It does not propagate orbits, so the only thing it can test is the orbit shell: an object can be in a ball of radius R around the camera focus (at geocentric radius rf) only if its shell, perigee to apogee radius (from mean motion and eccentricity), meets [rf - R, rf + R], with R the scope radius of `lib/scope.ts` (80 camera distances, at least 100 km).
 
-`scripts/shell-prune-analysis.mjs` applies that to the real CelesTrak files in `data/celestrak` (19,498 distinct objects; offline):
+`scripts/shell-prune-analysis.mjs` applies that to the CelesTrak group rows of the SQLite cache `data/cache.sqlite` (19,498 distinct objects; offline):
 
 | View | Scope radius | Kept by the shell test |
 |---|---|---|

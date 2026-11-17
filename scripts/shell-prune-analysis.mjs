@@ -1,16 +1,19 @@
 // How much would a server-side, scope-driven entity filter remove? (docs/perf.md, 'Phase 4: viewport filtering'.)
 // The server does not propagate, so the most it can prune on is the orbit SHELL (perigee to apogee radius from the mean motion and
 // eccentricity): an object can only be inside a ball around the camera focus if its shell meets the ball's radial range.
-// Reads the real CelesTrak files in data/celestrak (offline; run 'npm run celestrak:seed' to fetch them). Run: node scripts/shell-prune-analysis.mjs
-import fs from 'node:fs';
+// Reads the CelesTrak group rows (key 'celestrak:<group>') of the server's SQLite cache, data/cache.sqlite, read-only and offline
+// (the server fills it; the rows are kept at any age). Run: node scripts/shell-prune-analysis.mjs
+import { DatabaseSync } from 'node:sqlite';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-const dir = resolve(dirname(fileURLToPath(import.meta.url)), '../data/celestrak') + '/';
+const file = resolve(dirname(fileURLToPath(import.meta.url)), '../data/cache.sqlite');
+const db = new DatabaseSync(file, { readOnly: true });
 const all = new Map();
-for (const f of fs.readdirSync(dir)) {
-  const j = JSON.parse(fs.readFileSync(dir + f, 'utf8'));
+for (const row of db.prepare("SELECT value FROM kv WHERE key LIKE 'celestrak:%'").all()) {
+  const j = JSON.parse(row.value);
   if (Array.isArray(j)) for (const o of j) if (o.MEAN_MOTION && o.NORAD_CAT_ID) all.set(o.NORAD_CAT_ID, o);
 }
+db.close();
 const MU = 398600.4418; // km^3/s^2, Earth GM (WGS84 / EGM96)
 const shell = (o) => {
   const n = (o.MEAN_MOTION * 2 * Math.PI) / 86400;
@@ -31,7 +34,7 @@ const views = [
   ['follow a GPS sat (26,560 km), camera 2,000 km', 26560, 2000],
   ['follow a GEO sat (42,164 km), camera 500 km', 42164, 500],
 ];
-console.log('catalogue:', all.size, 'objects (real CelesTrak files in data/celestrak, deduplicated by NORAD id)');
+console.log('catalogue:', all.size, 'objects (CelesTrak group rows of data/cache.sqlite, deduplicated by NORAD id)');
 const bins = [['< 2,000 km altitude (LEO)', (s) => s[1] - 6378 < 2000], ['2,000 to 35,000 km', (s) => s[1] - 6378 >= 2000 && s[1] - 6378 < 35000], ['GEO and beyond / HEO apogee', (s) => s[1] - 6378 >= 35000]];
 for (const [name, f] of bins) console.log('  ', name.padEnd(30), shells.filter(f).length);
 console.log('\nview'.padEnd(50), 'scope R km'.padStart(11), 'kept by shell'.padStart(14), 'of all');
