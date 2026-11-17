@@ -1,5 +1,5 @@
 import type { FrameId } from '@eio/core';
-import { SPACE_OBSERVATORY_META, SURFACE_SITES, observatoryAttrs, type ObservatoryMeta } from '@eio/core';
+import { SPACE_OBSERVATORY_META, SURFACE_SITES, observatoryAttrs, surfaceSiteRecord, type ObservatoryMeta } from '@eio/core';
 import type { NewEntity } from '../hub';
 
 /**
@@ -101,6 +101,12 @@ export const DSN_TARGETS: Record<string, DsnTarget> = {
 
 /** DSN spacecraft codes of the targets that stand on a surface (`MSL`, `M20`): their entity is a surface site, the DSN feed adds attrs to it. */
 export const DSN_SURFACE_CODES: readonly string[] = SURFACE_SITES.flatMap((s) => (s.dsn ? [s.dsn] : []));
+
+/**
+ * The entities of the DSN surface rovers, from the surface-site table (one source of truth): the DSN connector registers them at startup when no
+ * one else has, so `DISABLED_CONNECTORS=surface-sites` still leaves Curiosity and Perseverance at their landing sites.
+ */
+export const surfaceRoverEntities = (): NewEntity[] => SURFACE_SITES.filter((s) => s.dsn).map((s) => surfaceSiteRecord(s));
 
 /** Every DSN spacecraft code whose entity carries DSN link attrs: the Horizons targets and the surface rovers. */
 export const dsnCodes = (): string[] => [...Object.keys(DSN_TARGETS), ...DSN_SURFACE_CODES];

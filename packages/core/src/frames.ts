@@ -36,12 +36,31 @@ export function inertialToFixedMatrix(body: Body, tMs: number): Mat3 {
   return mulMM(m, [q[0][0], q[1][0], q[2][0], q[0][1], q[1][1], q[2][1], q[0][2], q[1][2], q[2][2]]);
 }
 
+/**
+ * Pole (right ascension, declination) and prime meridian W of an IAU rotation model at `tMs`, degrees, in ICRF: the constant terms, the secular
+ * drift of the pole, the quadratic term of W and the periodic series (`PeriodicTerms`). T and d count from J2000 in UTC days (TDB - UTC, 69 s, is
+ * under 0.011 deg of W and ignored).
+ */
+export function iauAngles(r: Extract<Body['rotation'], { kind: 'linear' }>, tMs: number): { raDeg: number; decDeg: number; wDeg: number } {
+  const d = (tMs - J2000_MS) / MS_PER_DAY, T = d / 36525;
+  let ra = r.poleRaDeg + (r.poleRaRateDegPerCentury ?? 0) * T, dec = r.poleDecDeg + (r.poleDecRateDegPerCentury ?? 0) * T;
+  let w = r.w0Deg + r.rateDegPerDay * d + (r.w2DegPerDay2 ?? 0) * d * d;
+  const p = r.periodic;
+  if (p) {
+    for (let i = 0; i < p.angles.length; i++) {
+      const th = (p.angles[i][0] + p.angles[i][1] * T) * DEG;
+      ra += p.ra[i] * Math.sin(th);
+      dec += p.dec[i] * Math.cos(th);
+      w += p.pm[i] * Math.sin(th);
+    }
+  }
+  return { raDeg: ra, decDeg: dec, wDeg: w };
+}
+
 function iauMatrix(rot: Extract<Body['rotation'], { kind: 'linear' }>, tMs: number): Mat3 {
-  const r = rot;
-  const d = (tMs - J2000_MS) / MS_PER_DAY;
-  const w = wrap2Pi((r.w0Deg + r.rateDegPerDay * d) * DEG);
+  const a = iauAngles(rot, tMs);
   // IAU: R = Rz(W) Rx(90deg - dec) Rz(ra + 90deg)
-  return mulMM(rotZ(w), mulMM(rotX((90 - r.poleDecDeg) * DEG), rotZ((r.poleRaDeg + 90) * DEG)));
+  return mulMM(rotZ(wrap2Pi(a.wDeg * DEG)), mulMM(rotX((90 - a.decDeg) * DEG), rotZ((a.raDeg + 90) * DEG)));
 }
 
 /** Rotation rate of the body, rad/s (used for fixed-frame velocity terms). */
@@ -350,7 +369,9 @@ export function enuBasis(lat: number, lon: number): { e: Vec3; n: Vec3; u: Vec3 
  * body is the sphere of its registry radius, so the latitude is planetocentric. That is what the scene draws (the Moon and Mars
  * are spheres; the registry flattening of Mars, 1/169.8, is ignored by the map sphere) and what the sources of the surface
  * sites publish (LROC, the NASA MMGIS rover layers: a sphere of 1737.4 km / 3396.19 km, planetocentric, east longitude), so a
- * point at height 0 lies on the drawn surface to the metre.
+ * point at height 0 lies on the drawn surface to the metre. Reading a point back on that shape moves the latitude and height of a
+ * Mars orbiter over a pole (MRO) by up to 0.34 deg and 20 km (the polar radius of the registry ellipsoid is 20 km under the sphere), and
+ * a Moon orbiter by up to 0.07 deg: the readouts of orbiters of other bodies are planetocentric, like the sites.
  */
 export function surfaceShape(body: Body): Body {
   return body.id === 'EARTH' || body.flattening === 0 ? body : { ...body, flattening: 0 };

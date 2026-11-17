@@ -1,5 +1,5 @@
 import {
-  FERMI_NORAD, GROUND_OBSERVATORIES, HUBBLE_NORAD, OBSERVATORY_GROUP, SPACE_OBSERVATORY_META, XMM_NORAD, observatoryAttrs,
+  FERMI_NORAD, GROUND_OBSERVATORIES, SURFACE_SITES, HUBBLE_NORAD, OBSERVATORY_GROUP, SPACE_OBSERVATORY_META, XMM_NORAD, observatoryAttrs,
   DEG, EARTH, LL2_STATUS, classifyFeed, MARS, MOON, Sgp4Provider, keplerState, ascentEntityEvents, bodyEntityRecords, deriveMissionState,
   missionTimingFor, modeledAscentForLaunch, modeledAscentSegments, modeledBoosterSegments, orbitSegmentsOf, stateToGeodetic, sunDirectionEci,
   type Article, type AscentSeries, type DsnSnapshot, type EntityRecord, type IssFix, type Launch, type ConnectorHealth, type Omm,
@@ -516,7 +516,7 @@ export function mockHealth(nowMs: number): ConnectorHealth[] {
     ok('dsn-now', 12, 340, 'mock'),
     ok('horizons', 7200, 2, 'mock'),
     { id: 'bodies', status: 'ok', lastOkAt: nowMs, runs: 1, note: '4 bodies (mock)' },
-    { id: 'surface-sites', status: 'ok', lastOkAt: nowMs - 3600_000, runs: 2, fromCache: true, note: '38 surface sites (mock)' },
+    { id: 'surface-sites', status: 'ok', lastOkAt: nowMs - 3600_000, runs: 2, fromCache: true, note: `${SURFACE_SITES.length} surface sites (mock)` },
     { id: 'iss-live', status: 'stub', runs: 0, note: 'mock' },
     { id: 'spacetrack', status: 'ok', lastOkAt: nowMs - 3 * 3600_000, runs: 5, fromCache: true, lastError: 'earlier failure (next attempt 14:30Z)', note: '5000 Starlink element sets (mock)' },
     { id: 'snapi', status: 'ok', lastOkAt: nowMs - 400_000, runs: 9, lastError: `HTTP 429 for https://api.spaceflightnewsapi.net/ [retry-after=900]`, fromCache: true },

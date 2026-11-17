@@ -1,4 +1,4 @@
-import { SURFACE_SITES, surfaceSiteRecord, type SurfaceSite } from '@eio/core';
+import { SURFACE_SITES, surfaceSiteRecord, wrapLonDeg, type SurfaceSite } from '@eio/core';
 import type { Connector, ConnectorContext } from '../connector';
 import type { NewEntity } from '../hub';
 import { LimitedError } from '../net/limiter';
@@ -23,6 +23,10 @@ const REFRESH_MS = 6 * 3600_000;
 const TTL_MS = 6 * 3600_000;
 /** Part of the cache key: bump on any change of what is read from the file. */
 const CACHE_VERSION = 'v1';
+/** a run that fell back to the stale copy asks again after this long (a bad answer must not be downloaded, 665 kB, every 5 min) */
+const STALE_RETRY_MS = 60 * 60_000;
+/** an answer that is not a waypoint layer (an HTML maintenance page with status 200) blocks the source this long, like the dsn connector does for an unreadable answer */
+const BAD_ANSWER_BLOCK_MS = 3 * 3600_000;
 const NO_VALUE = -9999;
 
 /** The latest localization of a rover. */
@@ -79,7 +83,7 @@ export function roverAt(prev: NewEntity, w: Waypoint, fetchedAt: number): NewEnt
     attrs: {
       ...attrs,
       latDeg: w.latDeg,
-      lonEastDeg: w.lonDeg,
+      lonEastDeg: Number(wrapLonDeg(w.lonDeg).toFixed(6)),
       ...(w.elevGeoidM !== null ? { elevationM: w.elevGeoidM } : {}),
       waypointSol: w.sol,
       ...(w.site !== null ? { waypointSite: w.site } : {}),
@@ -87,6 +91,9 @@ export function roverAt(prev: NewEntity, w: Waypoint, fetchedAt: number): NewEnt
       ...(w.distTotalKm !== null ? { driveTotalKm: w.distTotalKm } : {}),
       ...(w.tiltDeg !== null ? { tiltDeg: w.tiltDeg } : {}),
       waypointCount: w.count,
+      // the position is the latest waypoint, no longer the landing site the table starts from
+      ...(typeof prev.attrs?.coordinateSource === 'string' && !prev.attrs.landingSiteSource ? { landingSiteSource: prev.attrs.coordinateSource } : {}),
+      coordinateSource: `NASA MMGIS waypoint layer, latest waypoint (sol ${w.sol}${w.site !== null ? `, site ${w.site}` : ''}${w.drive !== null ? `, drive ${w.drive}` : ''}), mars.nasa.gov/mmgis-maps`,
       positionSource: 'NASA MMGIS waypoint layer (mars.nasa.gov/mmgis-maps)',
       positionFetchedAt: new Date(fetchedAt).toISOString(),
     },
@@ -118,7 +125,16 @@ export const surfaceSites: Connector = {
     for (const site of SURFACE_SITES) {
       if (!site.live) continue;
       try {
-        const res = await ctx.cachedFetch(`surface-sites:${CACHE_VERSION}:${site.live}`, MMGIS_URL[site.live], TTL_MS, parseMmgisWaypoints, undefined, { source: 'mmgis', mode: 'poll' });
+        const parse = (text: string): Waypoint => {
+          try {
+            return parseMmgisWaypoints(text);
+          } catch (err) {
+            ctx.http.limiter.block('mmgis', BAD_ANSWER_BLOCK_MS, 'backoff after an unreadable answer', 'failure');
+            throw err;
+          }
+        };
+        // no conditional GET: `cachedFetch` does not hand back the response headers (Last-Modified / ETag) to send them next time
+        const res = await ctx.cachedFetch(`surface-sites:${CACHE_VERSION}:${site.live}`, MMGIS_URL[site.live], TTL_MS, parse, undefined, { source: 'mmgis', mode: 'poll', staleRetryMs: STALE_RETRY_MS });
         const prev = ctx.hub.graph.get(site.id) ?? surfaceSiteRecord(site);
         ctx.hub.upsert(roverAt(prev, res.value, res.fetchedAt));
         n++;

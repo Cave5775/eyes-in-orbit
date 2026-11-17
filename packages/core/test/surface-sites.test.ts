@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEG, SURFACE_SITES, convert, defaultBodies, fixedToGeodetic, geodeticToFixed, providerFromSpec, stateToGeodetic, surfaceShape,
+  DEG, SURFACE_SITES, convert, hasSurfaceSites, defaultBodies, fixedToGeodetic, geodeticToFixed, providerFromSpec, stateToGeodetic, surfaceShape,
   surfaceSiteAttrs, surfaceSiteRecord, surfaceSiteRecords, wrapLonDeg, type EntityRecord, type Vec3,
 } from '../src';
 
@@ -49,6 +49,48 @@ describe('surface shape: the reference a surface coordinate refers to', () => {
       expect(g.lon / DEG).toBeCloseTo(lon, 9);
       expect(g.alt).toBeCloseTo(alt, 9);
     }
+  });
+});
+
+describe('one placement rule: orbiter readouts and relative offsets use the same shape', () => {
+  it('a Mars orbiter over the pole reads its height above the SPHERE: 300 km, not the 320 km the registry ellipsoid would give (MRO)', () => {
+    const mars = defaultBodies.get('MARS');
+    const r: Vec3 = [0, 0, mars.radiusKm + 300]; // MARS:fixed, over the north pole
+    const g = stateToGeodetic({ frame: 'MARS:fixed', r }, T, 'MARS');
+    expect(g.alt).toBeCloseTo(300, 9);
+    expect(g.lat / DEG).toBeCloseTo(90, 9);
+    const ellipsoid = fixedToGeodetic(r, mars);
+    expect(ellipsoid.alt - g.alt).toBeGreaterThan(19); // the polar radius of the registry ellipsoid is 20 km under the sphere
+    // a 60 degree latitude point: the geodetic latitude of the ellipsoid differs by about 0.2 deg from the planetocentric one
+    const p = geodeticToFixed({ lat: 60 * DEG, lon: 0, alt: 300 }, surfaceShape(mars));
+    expect(Math.abs(fixedToGeodetic(p, mars).lat / DEG - 60)).toBeGreaterThan(0.15);
+    expect(stateToGeodetic({ frame: 'MARS:fixed', r: p }, T, 'MARS').lat / DEG).toBeCloseTo(60, 9);
+  });
+
+  it('a Moon orbiter reads within 0.07 deg of what the registry ellipsoid says (the correction of surfaceShape for the Moon)', () => {
+    const moon = defaultBodies.get('MOON');
+    let worst = 0;
+    for (let lat = -90; lat <= 90; lat += 5) {
+      const p = geodeticToFixed({ lat: lat * DEG, lon: 0.3, alt: 100 }, surfaceShape(moon));
+      worst = Math.max(worst, Math.abs(fixedToGeodetic(p, moon).lat / DEG - lat));
+    }
+    expect(worst).toBeLessThan(0.07);
+    expect(worst).toBeGreaterThan(0.03);
+  });
+
+  it('a relative (ENU) offset above a point on Mars is 1 km above the sphere: RelativeProvider goes through surfaceShape too', () => {
+    const parent = providerFromSpec({ type: 'geodetic', bodyId: 'MARS', latDeg: 68.22, lonDeg: 234.25, altKm: 0 });
+    const drone = providerFromSpec({ type: 'relative', parentId: 'rover', mode: 'enu', offsetKm: [0, 0, 1] });
+    const s = drone.stateAt(T, { stateOf: () => parent.stateAt(T) } as never)!;
+    expect(s.frame).toBe('MARS:fixed');
+    expect(norm(s.r)).toBeCloseTo(defaultBodies.get('MARS').radiusKm + 1, 9);
+  });
+});
+
+describe('which bodies are drawn as spheres', () => {
+  it('the bodies with surface sites (Moon, Mars, Titan) and no other', () => {
+    expect(['MOON', 'MARS', 'TITAN'].every(hasSurfaceSites)).toBe(true);
+    expect(['EARTH', 'JUPITER', 'SATURN', 'IO'].some(hasSurfaceSites)).toBe(false);
   });
 });
 

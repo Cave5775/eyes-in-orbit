@@ -46,7 +46,9 @@ export interface SurfaceSite {
 export const SURFACE_GROUP = 'surface';
 
 const LROC = 'LROC Science Operations Team, Wagner et al. 2016, "Coordinates of Lunar Anthropogenic Targets" (Icarus 273, doi:10.1016/j.icarus.2016.05.011; lroc.im-ldi.com/data/support/downloads/2016_LROC_Coordinates_of_Human_Features.pdf), mean observed latitude and longitude, mean Earth/polar axis system';
-const ODE = 'PDS Geosciences Orbital Data Explorer, "Supported Existing and Proposed Landing Sites" (ode.rsl.wustl.edu/mars/pagehelp/Content/Missions_Instruments/Landing_Sites.htm)';
+// The ODE page prints N/S and E and names no datum. Viking 1 and 2 and Pathfinder are the radio-tracking solutions of Folkner et al. 1997 (Science 278:1749), which are cylindrical (longitude, radius, z), so planetocentric by construction;
+// for Spirit, Opportunity (Arvidson et al. 2004) and Phoenix (Smith et al. 2009) the page does not say, and they are used as planetocentric. If Phoenix (68.22 N) or Viking 2 (47.668 N) were planetographic the latitude would differ by 0.2 to 0.3 deg (about 15 km); not converted, because that cannot be confirmed from the sources opened.
+const ODE = 'PDS Geosciences Orbital Data Explorer, "Supported Existing and Proposed Landing Sites" (ode.rsl.wustl.edu/mars/pagehelp/Content/Missions_Instruments/Landing_Sites.htm; east longitude; the page names no datum, read as planetocentric, see the note in surface-sites.ts)';
 const MMGIS_M20 = 'NASA MMGIS M20_waypoints.json (mars.nasa.gov/mmgis-maps/M20/Layers/json/M20_waypoints.json), first waypoint (sol 13, site 3)';
 const MMGIS_MSL = 'NASA MMGIS MSL_waypoints.json (mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json), first waypoint (sol 3, site 2)';
 
@@ -80,11 +82,11 @@ export const SURFACE_SITES: readonly SurfaceSite[] = [
   moon({ key: 'yutu', name: "Yutu (Chang'e 3 rover)", kind: 'rover', latDeg: 44.1208, lonDeg: 340.4878, elevationM: -2630, status: 'inactive', year: 2013, agency: 'CNSA' }),
   moon({
     key: 'change-4', name: "Chang'e 4 lander", kind: 'lander', latDeg: -45.4561, lonDeg: 177.5885, elevationM: -5927, status: 'active', year: 2019, agency: 'CNSA',
-    source: "LROC stereo DTM of the Chang'e 4 site, lroc.im-ldi.com/posts/1087 (via a web search summary; the page itself was not opened)",
+    source: "LROC \"Topographic Map of the Chang'e 4 Site\", lroc.im-ldi.com/images/1100 (published 2019-04-30: 45.4561 S, 177.5885 E, -5927 m); the first LROC estimate, lroc.im-ldi.com/posts/1087 (2019-01-11), was 45.457 S, 177.589 E +-20 m",
   }),
   moon({
     key: 'change-5', name: "Chang'e 5 lander", kind: 'lander', latDeg: 43.0576, lonDeg: 308.0839, elevationM: -2570, status: 'inactive', year: 2020, agency: 'CNSA',
-    source: "LROC \"First Look: Chang'e 5\", lroc.im-ldi.com/posts/1172.2020 (via a web search summary: 43.0576 N, 308.0839 E, about 20 m)",
+    source: "LROC \"First Look: Chang'e 5\", lroc.im-ldi.com/posts/1172.2020 (published 2020-12-04: 43.0576 N, 308.0839 E, -2570 m, +-20 m)",
   }),
   moon({
     key: 'change-6', name: "Chang'e 6 lander", kind: 'lander', latDeg: -41.6385, lonDeg: 206.0148, elevationM: -5256, status: 'inactive', year: 2024, agency: 'CNSA',
@@ -111,12 +113,12 @@ export const SURFACE_SITES: readonly SurfaceSite[] = [
   mars({ key: 'opportunity', name: 'Opportunity (MER-B)', kind: 'rover', latDeg: -1.9483, lonDeg: 354.47417, status: 'inactive', year: 2004, agency: 'NASA', source: `${ODE}, MER Opportunity Doppler/radiometric solution (Arvidson et al. 2004)` }),
   mars({ key: 'phoenix', name: 'Phoenix', kind: 'lander', latDeg: 68.22, lonDeg: 234.25, status: 'inactive', year: 2008, agency: 'NASA' }),
   mars({
-    key: 'insight', name: 'InSight', kind: 'lander', latDeg: 4.502, lonDeg: 135.623, status: 'inactive', year: 2018, agency: 'NASA',
-    source: 'Golombek et al., LPSC 2019, InSight landing site (4.502 N, 135.623 E; via a web search summary, the abstract was not opened)',
+    key: 'insight', name: 'InSight', kind: 'lander', latDeg: 4.502384, lonDeg: 135.623447, elevationM: -2613.426, status: 'inactive', year: 2018, agency: 'NASA',
+    source: 'Golombek et al. 2020, "Location and Setting of the Mars InSight Lander, Instruments, and Landing Site", Earth and Space Science 7(10):e2020EA001248, doi:10.1029/2020EA001248 (pmc.ncbi.nlm.nih.gov/articles/PMC7583488: 4.502384 N, 135.623447 E, MOLA planetocentric, IAU 2000, sphere of 3396190 m; -2613.426 m re the geoid)',
   }),
   mars({
     key: 'zhurong', name: 'Zhurong (Tianwen-1)', kind: 'rover', latDeg: 25.066, lonDeg: 109.925, status: 'inactive', year: 2021, agency: 'CNSA',
-    source: 'Wikipedia "Tianwen-1" infobox (25.066 N, 109.925 E), agrees with Remote Sensing 17(14):2400 (25.067 N, 109.926 E); secondary, no agency page found',
+    source: 'UNCONFIRMED (secondary): Wikipedia "Tianwen-1" infobox (25.066 N, 109.925 E), agrees with Remote Sensing 17(14):2400 (25.067 N, 109.926 E); no agency or peer-reviewed page with the lander position could be opened (the Nature Astronomy paper is paywalled; the HiRISE page ESP_069731_2055 gives only the image centre 25.101 N, 109.915 E, 2021-06-23); datum unknown',
   }),
   // the two NASA rovers: also DSN targets (`dsn-MSL`, `dsn-M20`); the live position is the latest waypoint of the MMGIS layer
   {
@@ -138,6 +140,12 @@ export const SURFACE_SITES: readonly SurfaceSite[] = [
     source: 'Kazeminejad, Atkinson and Lebreton 2011, Adv. Space Res. 47(9):1622 (10.573 S, 192.335 W = 167.665 E), as printed on Wikipedia "Huygens (spacecraft)"; secondary, assumes the registry pole of Titan',
   },
 ];
+
+/**
+ * Bodies that carry surface sites: the scene draws them as spheres (`celestial.ts`), whatever flattening the registry gives, so a site (placed on
+ * the sphere, `surfaceShape`) never floats above the drawn mesh while the map is still loading or missing.
+ */
+export const hasSurfaceSites = (bodyId: string): boolean => SURFACE_SITES.some((s) => s.bodyId === bodyId);
 
 /** The surface site of an entity id, or undefined. */
 export const surfaceSiteOf = (id: string): SurfaceSite | undefined => SURFACE_SITES.find((s) => s.id === id);

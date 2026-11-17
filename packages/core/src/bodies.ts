@@ -15,7 +15,43 @@ export type BodyRotation =
       w0Deg: number;
       /** rotation rate, degrees per day */
       rateDegPerDay: number;
+      /** secular drift of the pole, degrees per Julian century (pck00011 BODY<n>_POLE_RA / _DEC second coefficient); default 0 */
+      poleRaRateDegPerCentury?: number;
+      poleDecRateDegPerCentury?: number;
+      /** quadratic term of the prime meridian, degrees per day squared (BODY<n>_PM third coefficient); default 0 */
+      w2DegPerDay2?: number;
+      /** the periodic terms of the IAU series, see `MoonPeriodic` */
+      periodic?: PeriodicTerms;
     };
+
+/**
+ * Periodic terms of an IAU rotation model (the NUT_PREC series of NAIF text PCKs): with the arguments theta_i = angles[i][0] + angles[i][1] T
+ * (T in Julian centuries from J2000; degrees), RA = ra0 + ra1 T + sum ra_i sin theta_i, Dec = dec0 + dec1 T + sum dec_i cos theta_i,
+ * W = w0 + w1 d + w2 d^2 + sum pm_i sin theta_i (d in days). `ra`, `dec` and `pm` are in degrees, one per angle.
+ */
+export interface PeriodicTerms {
+  /** [theta0, theta rate per century], degrees */
+  angles: readonly (readonly [number, number])[];
+  ra: readonly number[];
+  dec: readonly number[];
+  pm: readonly number[];
+}
+
+/**
+ * The Moon's periodic terms, NAIF pck00011.tpc (https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc, read 2026-11-17):
+ * BODY3_NUT_PREC_ANGLES (E1..E13, the Earth-Moon system arguments of the IAU 2009 report, Archinal et al. 2011) and BODY301_NUT_PREC_RA / _DEC / _PM
+ * (13 terms each, copied digit for digit). The largest are 3.56 deg in W and 3.88 deg in RA (E1, the 18.6 year node cycle), 1.54 deg in Dec.
+ */
+export const MOON_PERIODIC: PeriodicTerms = {
+  angles: [
+    [125.045, -1935.5364525], [250.089, -3871.072905], [260.008, 475263.3328725], [176.625, 487269.629985], [357.529, 35999.0509575],
+    [311.589, 964468.49931], [134.963, 477198.869325], [276.617, 12006.300765], [34.226, 63863.5132425], [15.134, -5806.6093575],
+    [119.743, 131.84064], [239.961, 6003.1503825], [25.053, 473327.79642],
+  ],
+  ra: [-3.8787, -0.1204, 0.07, -0.0172, 0, 0.0072, 0, 0, 0, -0.0052, 0, 0, 0.0043],
+  dec: [1.5419, 0.0239, -0.0278, 0.0068, 0, -0.0029, 0.0009, 0, 0, 0.0008, 0, 0, -0.0009],
+  pm: [3.561, 0.1208, -0.0642, 0.0158, 0.0252, -0.0066, -0.0047, -0.0046, 0.0028, 0.0052, 0.004, 0.0019, -0.0044],
+};
 
 export interface Body {
   id: string;
@@ -88,7 +124,11 @@ export const EARTH: Body = {
 export const MOON: Body = {
   id: 'MOON', name: 'Moon', parentId: 'EARTH',
   radiusKm: 1737.4, flattening: 0.0012, gm: 4902.8,
-  rotation: { kind: 'linear', poleRaDeg: 269.9949, poleDecDeg: 66.5392, w0Deg: 38.3213, rateDegPerDay: 13.17635815 },
+  // pck00011 BODY301_POLE_RA/DEC/PM and the NUT_PREC series: the full IAU 2009 model (the 2015 report gives none for the Moon)
+  rotation: {
+    kind: 'linear', poleRaDeg: 269.9949, poleDecDeg: 66.5392, w0Deg: 38.3213, rateDegPerDay: 13.17635815,
+    poleRaRateDegPerCentury: 0.0031, poleDecRateDegPerCentury: 0.013, w2DegPerDay2: -1.4e-12, periodic: MOON_PERIODIC,
+  },
   orbit: { a: 384_400, e: 0.0549, i: 5.145 * DEG, raan: 125.08 * DEG, argp: 318.15 * DEG, m0: 135.27 * DEG, epochMs: J2000_MS },
   ephemeris: moonStateEci,
   approx: true,
@@ -109,8 +149,9 @@ export const MARS: Body = {
 //  - radius, flattening, GM, pole and prime meridian: IAU WGCCRE 2015 report (Archinal et al. 2018, Celest Mech Dyn Astr
 //    130:22; pole, W0 and rate verified 2026-10-29 against NAIF pck00011.tpc, constant terms only: Dione W0 corrected to 357.6,
 //    Phobos and Deimos take the pck00011 (2022) values) and the NASA Planetary Fact Sheets / JPL "Planetary Satellite Physical Parameters" and "Solar System Dynamics
-//    constants" pages, as remembered (rounded to the digits given here). The periodic libration terms of the IAU series
-//    (for example Neptune's sin N terms, the Phobos libration) are left out: sub-degree effects.
+//    constants" pages, as remembered (rounded to the digits given here). The periodic terms of the IAU series
+//    are left out for these bodies (for example Neptune's sin N terms, the Phobos libration: up to a degree or so in W or the pole);
+//    the Moon is the exception, it has its full series (`MOON_PERIODIC`, 3.6 deg in W, 70-100 km at its equator).
 //  - planet orbits: Standish, "Keplerian Elements for Approximate Positions of the Major Planets", table 1 (1800-2050 AD,
 //    elements at J2000, mean anomaly = L - long. of perihelion).
 //  - Ceres, Eris, Haumea, Makemake: osculating elements at J2000 (ecliptic of J2000) from JPL Horizons itself, fetched

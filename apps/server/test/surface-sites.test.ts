@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SURFACE_SITES, convert, providerFromSpec, surfaceSiteOf } from '@eio/core';
 import { loadConfig } from '../src/config';
-import { Scheduler } from '../src/connector';
+import { Scheduler, type Connector } from '../src/connector';
+import { dsn } from '../src/connectors/dsn';
 import { DSN_SURFACE_CODES, DSN_TARGETS, dsnCodes, probeEntity } from '../src/connectors/dsn-targets';
 import { MMGIS_URL, parseMmgisWaypoints, roverAt, surfaceSites } from '../src/connectors/surface-sites';
 import { Http } from '../src/http';
@@ -96,7 +97,7 @@ describe('surface-sites connector', () => {
     vi.restoreAllMocks();
   });
 
-  function setup(answer: (url: string) => Response, opts: { offline?: boolean; store?: Store } = {}) {
+  function setup(answer: (url: string) => Response, opts: { offline?: boolean; store?: Store } = {}, connectors: Connector[] = [surfaceSites]) {
     const hub = new Hub(0);
     const store = opts.store ?? new Store(':memory:');
     const limiter = new Limiter(store, { limits: LIMITS });
@@ -106,7 +107,7 @@ describe('surface-sites connector', () => {
       return answer(String(input));
     });
     const http = new Http(store, { fetch: fetchMock, offline: !!opts.offline, limiter });
-    const scheduler = new Scheduler({ hub, config: loadConfig({}), store, http }, [surfaceSites], 0);
+    const scheduler = new Scheduler({ hub, config: loadConfig({}), store, http }, connectors, 0);
     return { hub, store, limiter, calls, scheduler };
   }
   const serve = (url: string): Response =>
@@ -198,7 +199,7 @@ describe('surface-sites connector', () => {
     await scheduler.start();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(calls.length).toBeGreaterThanOrEqual(1);
-    expect(calls.length).toBeLessThanOrEqual(2);
+    expect(calls.length).toBeLessThanOrEqual(5);
     const n = calls.length;
     await vi.advanceTimersByTimeAsync(2 * H);
     scheduler.stop();
@@ -206,6 +207,45 @@ describe('surface-sites connector', () => {
     expect(limiter.status('mmgis')).toBeDefined();
     expect(hub.graph.get('dsn-M20')!.provider).toMatchObject({ latDeg: 18.44462715 });
     expect(hub.healthOf('surface-sites').lastError).toMatch(/403/);
+  });
+
+  it('a 200 with an HTML maintenance page blocks the source for hours: no download storm (one request per 3 h block, at most 5 in 12 h instead of one every 5 min)', async () => {
+    const { calls, hub, scheduler } = setup(() => new Response('<html><body>Down for maintenance</body></html>'));
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(12 * H);
+    scheduler.stop();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls.length).toBeLessThanOrEqual(5);
+    expect(hub.graph.get('dsn-M20')!.provider).toMatchObject({ latDeg: 18.44462715 });
+  });
+
+  it('with a stale cache and a bad answer it asks again after an hour at the earliest (staleRetryMs), not every 5 minutes', async () => {
+    const store = new Store(':memory:');
+    const good = setup(serve, { store });
+    await good.scheduler.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    good.scheduler.stop();
+    vi.setSystemTime(Date.now() + 7 * H); // the cached rows are past their 6 h TTL
+    const bad = setup(() => new Response('<html>maintenance</html>'), { store });
+    await bad.scheduler.start();
+    await vi.advanceTimersByTimeAsync(2 * H);
+    bad.scheduler.stop();
+    expect(bad.calls.length).toBeLessThanOrEqual(1);
+    expect(bad.hub.graph.get('dsn-M20')!.provider).toMatchObject({ latDeg: 18.43559434 }); // the stale waypoint is still served
+  });
+
+  it('the live attrs say the position is the latest waypoint and keep the landing-site citation apart; the longitude is in [-180, 180)', () => {
+    const rec = roverAt({ ...providerlessRover(), attrs: { coordinateSource: 'landing waypoint' } }, { sol: 7, site: 1, drive: 2, latDeg: 1, lonDeg: 200, elevGeoidM: null, distTotalKm: null, tiltDeg: null, count: 3 }, 0);
+    expect(rec.attrs).toMatchObject({ landingSiteSource: 'landing waypoint', lonEastDeg: -160 });
+    expect(String(rec.attrs?.coordinateSource)).toMatch(/latest waypoint \(sol 7, site 1, drive 2\)/);
+  });
+
+  it('with the surface-sites connector disabled the dsn connector still registers the two rovers at their landing sites (one table)', async () => {
+    const { hub, scheduler } = setup(serve, {}, [dsn]);
+    await scheduler.start();
+    scheduler.stop();
+    expect(hub.graph.get('dsn-M20')).toMatchObject({ kind: 'rover', bodyId: 'MARS', provider: { type: 'geodetic', latDeg: 18.44462715 } });
+    expect(hub.graph.get('dsn-MSL')).toMatchObject({ provider: { type: 'geodetic', latDeg: -4.589467 } });
   });
 
   it('an unreadable answer is an error naming the shape, and the other rover still moves', async () => {

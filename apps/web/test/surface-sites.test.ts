@@ -78,6 +78,23 @@ describe('a surface point is on the drawn mesh (the sphere the scene draws for t
     expect(checked).toBeGreaterThan(30);
   });
 
+  it('Mars is a sphere with no map as well (loading or missing), where the registry flattening would float Phoenix and Viking 2 ~15 km off the mesh', () => {
+    const scene = new THREE.Scene();
+    const layer = new CelestialLayer(scene, new THREE.Vector3(1, 0, 0), { loadTexture: () => undefined, textures: {} });
+    layer.setBodies(bodyEntityRecords().filter((r) => r.id === 'body-mars'));
+    layer.update(T0, new THREE.Vector3(...refPositionEci('MARS', T0)).add(new THREE.Vector3(9000, 0, 0)));
+    const mars = sphereOf(scene, defaultBodies.get('MARS').radiusKm);
+    expect(mars.scale.toArray()).toEqual([1, 1, 1]);
+    const inv2 = (mars.material as THREE.ShaderMaterial).uniforms.uInv2.value as THREE.Vector3;
+    expect(inv2.toArray()).toEqual([1, 1, 1]);
+    // Saturn, which has no sites, keeps its flattening
+    const sat = new THREE.Scene();
+    const l2 = new CelestialLayer(sat, new THREE.Vector3(1, 0, 0), { loadTexture: () => undefined, textures: {} });
+    l2.setBodies(bodyEntityRecords().filter((r) => r.id === 'body-saturn'));
+    l2.update(T0, new THREE.Vector3(...refPositionEci('SATURN', T0)).add(new THREE.Vector3(9e5, 0, 0)));
+    expect(sphereOf(sat, defaultBodies.get('SATURN').radiusKm).scale.z).toBeLessThan(1);
+  });
+
   it('the placement matches the map: Apollo 11 (23.47 E, 0.67 N) is right of the prime meridian on the texture and Apollo 12 (23.42 W) left of it', () => {
     const u = (id: string) => (byId[id].provider as { lonDeg: number }).lonDeg / 360 + 0.5;
     const wrap = (x: number) => x - Math.floor(x);
@@ -144,6 +161,21 @@ describe('entities of the surface sites in the browser (tree, classification, sc
       useStore.setState({ selectedId: null, follow: false, frame: EARTH_CENTRE, frameLocked: false, focus: null, entities: new Map() });
       useStore.getState().upsertEntities([...bodyEntityRecords(), ...sites], true);
       useStore.setState({ selectedId: null, follow: false, frame: EARTH_CENTRE, frameLocked: false, focus: null });
+    });
+
+    it('a surface site gets the frame behaviour of any other object on its body (an orbiter of Mars): selected, followed, the frame left alone, one request', () => {
+      const mro: EntityRecord = { id: 'dsn-MRO', name: 'MRO', kind: 'probe', bodyId: 'MARS', aliases: {}, updatedAt: 0, provider: { type: 'sampled', frame: 'MARS:inertial', samples: [[0, 4000, 0, 0, 0, 3, 0], [1e9, 4000, 1, 0, 0, 3, 0]] } };
+      useStore.getState().upsertEntities([mro], false);
+      const result = (id: string) => {
+        useStore.setState({ selectedId: null, follow: false, frame: EARTH_CENTRE, frameLocked: false, focus: null });
+        useStore.getState().selectObject(id);
+        const s = useStore.getState();
+        return { selectedId: s.selectedId, follow: s.follow, frame: s.frame, locked: s.frameLocked, requests: s.focus ? 1 : 0 };
+      };
+      const a = result('dsn-MRO'), b = result('dsn-M20');
+      expect({ ...b, selectedId: a.selectedId }).toEqual(a);
+      expect(b.selectedId).toBe('dsn-M20');
+      expect(b.frame).toBe(EARTH_CENTRE);
     });
 
     it('selectObject selects and follows a lander on the Moon and a rover on Mars with one focus request, leaving the frame alone', () => {
