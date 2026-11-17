@@ -6,7 +6,7 @@ import { precessDir } from './precession';
 import {
   DEG, J2000_MS, Mat3, MS_PER_DAY, Vec3, add, mulMM, mulMV, rotX, rotZ, sub, transpose, wrap2Pi,
 } from './math';
-import type { FrameId, FrameKind, StateVector } from './types';
+import type { FrameId, FrameKind, Sample, StateVector } from './types';
 
 export function parseFrame(f: FrameId): { bodyId: string; kind: FrameKind } {
   const i = f.lastIndexOf(':');
@@ -23,10 +23,21 @@ export function gmstRad(tMs: number): number {
   return wrap2Pi(deg * DEG);
 }
 
-/** Matrix taking inertial-frame vectors to body-fixed vectors. */
+/**
+ * Matrix taking inertial-frame vectors to body-fixed vectors, in the axes of the body's own `<BODY>:inertial` frame (`frameEpoch`):
+ * the IAU pole and prime meridian are referred to ICRF (J2000), so a body of date with such a rotation (the Moon) first takes the
+ * vector from the axes of date back to J2000 (the pole is 0.37 deg off otherwise, 2026); a J2000-group body needs no change.
+ */
 export function inertialToFixedMatrix(body: Body, tMs: number): Mat3 {
   if (body.rotation.kind === 'gmst') return rotZ(gmstRad(tMs));
-  const r = body.rotation;
+  const m = iauMatrix(body.rotation, tMs);
+  if (frameEpoch(body.id) !== 'date') return m;
+  const q = [precessDir([1, 0, 0], tMs, true), precessDir([0, 1, 0], tMs, true), precessDir([0, 0, 1], tMs, true)];
+  return mulMM(m, [q[0][0], q[1][0], q[2][0], q[0][1], q[1][1], q[2][1], q[0][2], q[1][2], q[2][2]]);
+}
+
+function iauMatrix(rot: Extract<Body['rotation'], { kind: 'linear' }>, tMs: number): Mat3 {
+  const r = rot;
   const d = (tMs - J2000_MS) / MS_PER_DAY;
   const w = wrap2Pi((r.w0Deg + r.rateDegPerDay * d) * DEG);
   // IAU: R = Rz(W) Rx(90deg - dec) Rz(ra + 90deg)
@@ -49,6 +60,26 @@ function bodyAngularRate(body: Body): number {
 export type FrameEpoch = 'date' | 'j2000';
 export function frameEpoch(bodyId: string): FrameEpoch {
   return bodyId === 'EARTH' || bodyId === 'MOON' ? 'date' : 'j2000';
+}
+
+/**
+ * Put a J2000 (ICRF) sample stream, such as JPL Horizons vectors, into the axes of the frame it is declared in: a frame whose body
+ * is of date (`EARTH:inertial`, `MOON:inertial`) gets every sample's position and velocity precessed from J2000 to
+ * the date of that sample's own time (the same rotation the hop applies, `precessDir`, so a probe tracked Earth-centred and the
+ * same probe tracked Sun-centred land on the same point); a J2000 frame (the Sun, a planet) returns the samples unchanged (the same
+ * array). Without it the samples would be written into the frame of date unrotated, off by the precession of the geocentric
+ * distance (0.0066 rad in 2026: Juno 6e6 km from Jupiter). Called once at ingest (the `horizons` connector), so the provider, the
+ * paths and the listed-parent window all read the same samples; the Hermite interpolation then runs between rotated positions with
+ * rotated velocities (the turning of the axes is not added, as in the hop; the interpolation error is about 1 km at a 30 min step).
+ */
+export function streamToFrameAxes(frame: FrameId, samples: Sample[]): Sample[] {
+  if (frameEpoch(parseFrame(frame).bodyId) !== 'date') return samples;
+  return samples.map((s) => {
+    const r = precessDir([s[1], s[2], s[3]], s[0], false);
+    if (s.length < 7) return [s[0], r[0], r[1], r[2]];
+    const v = precessDir([s[4], s[5], s[6]], s[0], false);
+    return [s[0], r[0], r[1], r[2], v[0], v[1], v[2]];
+  });
 }
 
 /**

@@ -15,8 +15,9 @@ export function fitMapSize(width: number, height: number, max: number): { width:
  * Body-fixed to SCENE-inertial rotation (row-major): it takes the mesh's local axes (z = pole, +x = prime meridian) to the
  * scene's Earth-inertial axes (of date), so it is the mesh's orientation. The IAU matrix is in the body's own inertial axes,
  * which are J2000 for every body but the Earth and the Moon (core `frameEpoch`), so for those the columns are precessed to
- * the date, the same rotation the frame hop applies to the body's position: mesh, rings, pole and positions agree. The Moon
- * (a J2000 IAU pole in a frame of date, 0.37 deg) and the Earth are left as they were (docs/frames.md).
+ * the date, the same rotation the frame hop applies to the body's position: mesh, rings, pole and positions agree. The Moon's
+ * own frame is of date: core `inertialToFixedMatrix` already takes it back to the J2000 IAU pole, so its matrix is used as it is
+ * (the Earth's is the of-date GMST rotation).
  */
 export function bodyFixedToInertial(body: Body, tMs: number): Mat3 {
   const m = transpose(inertialToFixedMatrix(body, tMs));
@@ -26,12 +27,12 @@ export function bodyFixedToInertial(body: Body, tMs: number): Mat3 {
 }
 
 /**
- * Unit vector of the body's IAU north pole in the scene-inertial axes (from its pole right ascension and declination, precessed
- * to `tMs` for a J2000-group body; without `tMs` the J2000 direction).
+ * Unit vector of the body's IAU north pole in the scene-inertial axes (from its pole right ascension and declination, which are
+ * J2000, precessed to the date `tMs`, Moon included; without `tMs` the J2000 direction; the Earth's is z).
  */
 export function poleDirection(body: Body, tMs?: number): Vec3 {
   if (body.rotation.kind !== 'linear') return [0, 0, 1];
   const ra = body.rotation.poleRaDeg * DEG, dec = body.rotation.poleDecDeg * DEG;
   const p: Vec3 = [Math.cos(dec) * Math.cos(ra), Math.cos(dec) * Math.sin(ra), Math.sin(dec)];
-  return tMs !== undefined && frameEpoch(body.id) === 'j2000' ? precessDir(p, tMs, false) : p;
+  return tMs !== undefined ? precessDir(p, tMs, false) : p;
 }
