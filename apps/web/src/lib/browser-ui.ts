@@ -25,7 +25,7 @@ export function bodyFacts(rec: Pick<EntityRecord, 'attrs' | 'bodyId' | 'parentId
   const radius = num('radiusKm');
   if (radius !== undefined) out.push({ label: 'Radius', value: fmtKm(radius, radius < 10 ? 2 : 0) });
   const gm = num('gm');
-  if (gm !== undefined) out.push({ label: 'GM', value: `${fmtNum(gm, gm < 1000 ? 1 : 0)} km³/s²` });
+  if (gm !== undefined && gm > 0) out.push({ label: 'GM', value: `${gm < 1 ? gm.toPrecision(2) : fmtNum(gm, gm < 1000 ? 1 : 0)} km³/s²` });
   const parent = rec.parentId ? (defaultBodies.has(rec.bodyId) ? defaultBodies.get(rec.bodyId).name : rec.bodyId) : undefined;
   const period = num('periodDays');
   if (period !== undefined) out.push({ label: parent ? `Orbital period around ${parent}` : 'Orbital period', value: fmtDays(period) });

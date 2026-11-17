@@ -20,8 +20,8 @@ export const bodyEntityId = (bodyId: string): string => `body-${bodyId.toLowerCa
  * other: `provider: { type: 'body', bodyId }` (state in `EARTH:inertial`, see `bodyStateEci`).
  *
  * - `kind`: `star` (no parent), `planet` (parent is the root), `dwarf_planet` (parent is the root, `Body.dwarf`: Ceres, Pluto,
- *   Eris, Haumea, Makemake), `moon` (deeper). The default registry has 35 bodies: Sun, Earth, Moon, Mars, the other six planets,
- *   five dwarf planets and 20 moons (see `DEFAULT_BODY_LIST`).
+ *   Eris, Haumea, Makemake), `moon` (deeper). The default registry has 50 bodies: Sun, Earth, Moon, Mars, the other six planets,
+ *   five dwarf planets and 35 moons (see `DEFAULT_BODY_LIST`).
  * - `bodyId`: the registry id of the body it ORBITS (Moon -> `EARTH`). The field is required, so the Sun, which orbits
  *   nothing, names itself (`SUN`). `parentId` is the entity id of the parent body (`body-earth`), unset for the Sun.
  * - `aliases.body` is the registry id; `aliases.alt` an alternative name (Sol, Terra, Luna) for search.
@@ -34,7 +34,8 @@ export function bodyEntityRecords(registry: BodyRegistry = defaultBodies, update
     const period = bodyPeriodSec(b, registry);
     const aliases: Record<string, string> = { body: b.id };
     if (ALT_NAMES[b.id]) aliases.alt = ALT_NAMES[b.id];
-    const attrs: NonNullable<EntityRecord['attrs']> = { radiusKm: b.radiusKm, gm: b.gm };
+    const attrs: NonNullable<EntityRecord['attrs']> = { radiusKm: b.radiusKm };
+    if (b.gm > 0) attrs.gm = b.gm; // GM 0 = not determined (Nereid, Puck): no value rather than a 0
     if (period !== undefined) attrs.periodDays = period / 86400;
     attrs.approx = !!b.approx;
     const rec: EntityRecord = {
