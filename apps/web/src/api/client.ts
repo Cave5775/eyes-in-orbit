@@ -1,4 +1,4 @@
-import type { ArchiveImagesResult, Article, AscentSeries, CredentialInfo, Description, EntityRecord, Launch, ServerMessage } from '@eio/core';
+import type { ArchiveImagesResult, Article, AscentSeries, CredentialInfo, Description, EntityRecord, Launch, RoverTraverse, ServerMessage } from '@eio/core';
 import { isIss } from '../lib/entity';
 import { clampMockCount } from '../mock/generators';
 import { createMockApi } from '../mock/mock-api';
@@ -32,6 +32,7 @@ const restApi: Api = {
   archiveImages: (observatoryId, bodyId) => getJson<ArchiveImagesResult>(`/api/archive-images${qs({ observatory: observatoryId, body: bodyId })}`, 30_000),
   iss: () => getJson('/api/iss'),
   health: () => getJson('/api/health', 4_000),
+  traverse: (entityId) => getJson<RoverTraverse>(`/api/traverse/${encodeURIComponent(entityId)}`, 15_000).catch(() => null),
   ascent: (launchId) => getJson<AscentSeries>(`/api/telemetry/${encodeURIComponent(launchId)}`, 8_000).catch(() => null),
   credentials: async () => (await getJson<{ credentials: CredentialInfo[] }>('/api/credentials', 8_000)).credentials,
   saveCredentials: async (values) => {

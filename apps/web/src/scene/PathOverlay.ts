@@ -6,6 +6,7 @@ import {
   PATH_MAX_PHASES, makePathBuffers, nowIndex, pathStale, planPathWindow, samplePath, type PathPlan, type PathResult,
 } from '../lib/paths';
 import { SHOW_EXEMPT } from '../lib/pick';
+import { bodyAxes, traverseFixed, traverseWorld } from '../lib/traverse';
 import { GLYPH_ID } from './palette';
 import { RelPositions, type RenderFrame } from './relative';
 
@@ -212,5 +213,68 @@ export class PathOverlay {
   private hide(): PathStatus {
     this.past.visible = this.future.visible = this.ticks.visible = false;
     return OFF;
+  }
+}
+
+/**
+ * The traverse of the selected rover (`GET /api/traverse/:id`, lib/traverse.ts): every localization of its history as one
+ * polyline on the body's surface, ending at the rover. It is the rover's own path overlay, not a time window round "now": the
+ * points are fixed on the body, so they are kept body-fixed (float64, once per data change) and placed every frame from the
+ * body's frame at that moment (four conversions, `bodyAxes`), then made camera-relative like every other position, so the line
+ * turns with the planet and stays under the rover. Depth-tested: the planet hides the far side.
+ */
+export class TraverseOverlay {
+  readonly entityId: string;
+  /** the array the line was built from: a new fetch gives a new array and a new line */
+  readonly points: readonly (readonly number[])[];
+  private readonly fixed: Float64Array;
+  private readonly count: number;
+  private readonly pos: RelPositions;
+  private readonly line: THREE.Line;
+  private readonly bodyId: string;
+  private ok = false;
+
+  constructor(world: THREE.Object3D, color: THREE.Color, entityId: string, bodyId: string, points: readonly (readonly number[])[]) {
+    this.entityId = entityId;
+    this.points = points;
+    this.bodyId = bodyId;
+    this.fixed = new Float64Array(points.length * 3);
+    this.count = traverseFixed(points, bodyId, this.fixed);
+    this.pos = new RelPositions(Math.max(1, this.count), false);
+    this.line = makeLine(this.pos.attr, color.clone().lerp(new THREE.Color(1, 1, 1), 0.3), 0.95);
+    this.line.geometry.setDrawRange(0, this.count);
+    this.line.renderOrder = 3;
+    world.add(this.line);
+  }
+
+  /** The body-fixed points, for the Close-up distance (`reachFrom`). */
+  get fixedPoints(): { fixed: Float64Array; count: number } {
+    return { fixed: this.fixed, count: this.count };
+  }
+
+  /** Place the points for sim time `t`; false (and hidden) when the body has no state then or there is no line to draw. */
+  update(t: number): boolean {
+    const axes = this.count >= 2 ? bodyAxes(this.bodyId, t) : null;
+    this.ok = !!axes;
+    this.line.visible = this.ok;
+    if (axes) traverseWorld(this.fixed, this.count, axes, this.pos.world);
+    return this.ok;
+  }
+
+  uploadFrame(f: RenderFrame): void {
+    if (this.ok) this.pos.upload(f, this.count);
+  }
+
+  /** Visit every point in world space, float64 (for FIT), as of the last `update`. */
+  worldPoints(visit: (x: number, y: number, z: number) => void): void {
+    if (!this.ok) return;
+    const step = Math.max(1, Math.floor(this.count / 120));
+    for (let i = 0; i < this.count; i += step) visit(this.pos.world[i * 3], this.pos.world[i * 3 + 1], this.pos.world[i * 3 + 2]);
+  }
+
+  dispose(): void {
+    this.line.removeFromParent();
+    this.line.geometry.dispose();
+    (this.line.material as THREE.Material).dispose();
   }
 }

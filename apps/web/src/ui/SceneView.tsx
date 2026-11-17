@@ -13,6 +13,8 @@ import { modelDef } from '../scene/models/registry';
 import { LabelLayer, type LabelItem } from '../scene/LabelLayer';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { usePanels } from '../state/panels';
+import { api } from '../api/client';
+import { hasTraverse } from '@eio/core';
 import { clock, runtime, type CameraCommands } from '../state/runtime';
 import { jumpToSimTime } from '../state/seek';
 import { leaveSkyView } from '../state/sky-flow';
@@ -40,8 +42,8 @@ const HELP: [string, string][] = [
   ['Look from here', 'Observatories panel: the camera stands at the selected observatory (a ground site at eye height, a space telescope where it is now) and looks outward with a level horizon. Left drag turns the view, the wheel changes the field of view (1 to 120 degrees), pan is off. Esc or Leave returns to the Earth view you had (the observatory stays selected)'],
   ['Sky view', "Observatories panel (or double-click a row): the camera stands at the observatory and the whole scene area changes into an Aladin Lite sky survey pointed exactly where the camera looks, with the same field of view and a matching horizon. Drag and wheel are Aladin's own, the survey list is at the top left. Esc or Back leaves the sky view and the first-person view in one step, to the Earth view you had (or, with a body selected on the sky map, to that body). The Sun, Moon, planets, dwarf planets and moons with a streamed position are ringed and named (View > Labels; dimmed when below the horizon or behind the Earth); hover for RA, Dec, altitude and azimuth and distance, click one to select it and turn the view to it, double-click to select it and leave the sky view with the camera flying to it. Settings > Sky view picks the transition. Observatories with no sky imagery (radio dishes) are disabled"],
   ['Esc', 'Deselect and return to the Earth view (while in the sky view or the first-person view it only leaves them, a second Esc deselects)'],
-  ['Follow, Fit, Model', 'Camera actions for the selection, in the selection panel on the right. Follow keeps the camera on the object; Fit is the same as F'],
-  ['Model', 'Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it). F or Model on such a selection flies to it'],
+  ['Follow, Fit, Close-up', 'Camera actions for the selection, in the selection panel on the right. Follow keeps the camera on the object; Fit is the same as F'],
+  ['Close-up', 'The close view of the selection. Objects with a 3D model (ISS, launch boosters, one Starlink) turn from a point into the true-size model once the camera is within its distance (ISS 45 km, booster 12 km, satellite 6 km; the point stays until the model is bigger than it); F or Close-up on such a selection flies to it. A lander, rover or aircraft on the Moon, Mars or Titan: the camera flies to 4 km over the site, 45 degrees over the horizon on the Sun side, looking down at it; for Curiosity and Perseverance the view is widened to hold the whole traverse, which is drawn on the surface (every localization NASA has published, ending at the rover) whenever the rover is selected'],
   ['View: Labels', 'Names next to objects, on by default and remembered. The Sun, planets and moons are named when zoomed out (the name fades as the body fills the view); the selection is always named. With a search on (text or tags), the satellites it lets through are named too (at most 48 labels, the ones nearest the screen centre first, overlapping ones left out); objects behind a body are not named'],
   ['View: Highlight', 'Dims everything but the selection, the objects related to it and what the search matches (smaller, fainter points) instead of hiding what the search leaves out. Hidden groups stay hidden. Off by default, remembered'],
   ['View menu (top bar)', 'Labels, highlight, scope (draw everything, or only what is near the camera focus) and the colour legend; and show or hide the launch board, the observatories, the news ticker and the colour legend (the Data streams button next to it opens the feed list and the DSN table); a hidden panel gives its space back to the globe and the choice is remembered'],
@@ -81,6 +83,14 @@ export function SceneView() {
 
   // the popup describes where objects were under the cursor: any selection change (a list click, the browser, a hotkey) retires it
   useEffect(() => setPick(null), [selectedId]);
+
+  // a rover's whole traverse (GET /api/traverse/:id) is fetched when it is selected; the scene draws it on the planet while it stays selected
+  useEffect(() => {
+    if (!selectedId || !hasTraverse(selectedId)) return;
+    let live = true;
+    void api.traverse(selectedId).then((t) => { if (live && t) scene.current?.setTraverse(selectedId, t); }).catch(() => {});
+    return () => { live = false; };
+  }, [selectedId]);
 
   useEffect(() => {
     const store = useStore;
@@ -164,7 +174,7 @@ export function SceneView() {
       },
       fitVisible: () => ctl.fitVisible(),
       toggleSurface: () => ctl.toggleSurface(),
-      viewModel: (id) => { ctl.viewModel(id); },
+      viewCloseUp: (id) => { ctl.viewCloseUp(id); },
       lookFrom: (id) => ctl.lookFrom(id),
       leaveFirstPerson: () => ctl.leaveFirstPerson(),
       firstPersonPose: () => ctl.firstPersonPose(),

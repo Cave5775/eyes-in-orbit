@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci,
-  type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
+  type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm, type RoverTraverse,
 } from '@eio/core';
 import { listedParent } from '../lib/listed-parent';
 import { modelViewDirection } from '../lib/attitude';
@@ -35,7 +35,8 @@ import type { DetailView } from '../lib/earth-detail';
 import { CelestialLayer } from './celestial';
 import { EarthDetail, type DetailStats } from './earth-detail';
 import { EntityOverlay } from './overlays';
-import { PathOverlay, type PathStatus } from './PathOverlay';
+import { PathOverlay, TraverseOverlay, type PathStatus } from './PathOverlay';
+import { closeUpDirection, closeUpDistance, reachFrom, traverseFixed } from '../lib/traverse';
 import { nearestOnPath, type PathHit } from '../lib/path-pick';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
@@ -245,6 +246,9 @@ export class SceneController {
   /** the trajectory under the cursor (hover highlight, cursor, tooltip); null when none */
   private pathHover: (PathHit & { id: string }) | null = null;
   private pathStatus: PathStatus = { active: false, frame: 'inertial', plan: null };
+  /** the traverses the page has fetched (`setTraverse`), and the line of the selected rover's one (scene/PathOverlay.ts) */
+  private traverses = new Map<string, RoverTraverse>();
+  private traverseOverlay: TraverseOverlay | null = null;
   private hadPathLabels = false;
   // object labels (lib/labels.ts)
   private labelsOn = true;
@@ -1005,6 +1009,8 @@ export class SceneController {
     if (this.surfaceOn && ids.length === 1 && !opts.points?.length && this.fitSurface(ids[0])) return true;
     // an entity with a 3D model and nothing else to frame: show the model (following it), not a 3,200 km view of a dot
     if (ids.length === 1 && !opts.points?.length && this.viewModel(ids[0])) return true;
+    // a rover: its whole traverse is the subject, not a view of the planet
+    if (ids.length === 1 && !opts.points?.length && this.traverseOverlay?.entityId === ids[0] && this.viewCloseUp(ids[0])) return true;
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const id of ids) {
@@ -1025,6 +1031,43 @@ export class SceneController {
   /** Does the entity have a registered 3D model (drawn when the camera is near)? */
   hasModel(id: string | null | undefined): boolean {
     return !!id && this.models.has(id);
+  }
+
+  /**
+   * CLOSE-UP: the close view of the selected object. An object with a 3D model: the model (`viewModel`). A lander, rover or
+   * aircraft on another body (`viewClass` surface): the camera flies to a few km over the site, 45 degrees over the horizon on the
+   * Sun's side, looking down at it (lib/traverse.ts `closeUpDirection`), far enough out to hold its whole traverse when the page
+   * has fetched one. False for anything else.
+   */
+  viewCloseUp(id: string): boolean {
+    return this.viewModel(id) || this.viewSurface(id);
+  }
+
+  private viewSurface(id: string): boolean {
+    const rec = this.recs.get(id);
+    if (!rec || viewClass(rec) !== 'surface') return false;
+    this.leaveFirstPerson();
+    const t = clock.now();
+    if (!graph.get(id)) graph.upsert(rec);
+    const st = graph.stateIn(id, t, 'EARTH:inertial');
+    if (!st) return false;
+    if (this.surfaceOn) this.setSurfaceMode(false);
+    const c = refDisplay(rec.bodyId, t).r;
+    const s = sunDirectionEci(t);
+    const dir = closeUpDirection([st.r[0] - c[0], st.r[1] - c[1], st.r[2] - c[2]], [s[0], s[1], s[2]]);
+    // everything the traverse reaches from the rover must fit
+    let reach = 0;
+    const tr = this.traverseOverlay?.entityId === id ? this.traverseOverlay : null;
+    if (tr && rec.provider?.type === 'geodetic') {
+      const here = new Float64Array(3);
+      traverseFixed([[rec.provider.latDeg, rec.provider.lonDeg]], rec.bodyId, here);
+      const p = tr.fixedPoints;
+      reach = reachFrom(p.fixed, p.count, here);
+    }
+    this.focus({ id, nonce: 0 });
+    this.rig.flyTo({ dist: closeUpDistance(reach, this.camera.fov, this.camera.aspect, FIT_MARGIN), az: Math.atan2(dir[1], dir[0]), el: Math.asin(Math.max(-1, Math.min(1, dir[2]))) });
+    this.cb.onFollowChange?.(true);
+    return true;
   }
 
   /**
@@ -1264,6 +1307,7 @@ export class SceneController {
     this.celestial.dispose();
     this.detail.dispose();
     this.overlays.forEach((o) => o.dispose());
+    this.traverseOverlay?.dispose();
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
       m.geometry?.dispose?.();
@@ -1495,6 +1539,26 @@ export class SceneController {
       this.pathStatus = { active: false, frame: 'inertial', plan: null };
       if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
     }
+    this.syncTraverse();
+  }
+
+  /** The page fetched (or lost) a rover's traverse: draw it when that rover is selected. */
+  setTraverse(entityId: string, traverse: RoverTraverse | null): void {
+    if (traverse) this.traverses.set(entityId, traverse);
+    else this.traverses.delete(entityId);
+    this.syncTraverse();
+  }
+
+  /** The traverse line exists exactly while its rover is selected and its points are known (a surface-fixed object has no other path). */
+  private syncTraverse(): void {
+    const id = this.selectedId;
+    const data = id ? this.traverses.get(id) : undefined;
+    const rec = id ? this.recs.get(id) : undefined;
+    const want = data && rec && data.points.length >= 2 ? data : null;
+    const have = this.traverseOverlay;
+    if (have && want && have.entityId === want.entityId && have.points === want.points) return;
+    have?.dispose();
+    this.traverseOverlay = want && rec ? new TraverseOverlay(this.scene, this.palette.colors[colorKeyOf(rec)], want.entityId, rec.bodyId, want.points) : null;
   }
 
   // ------------------------------------------------------------------ geometry queries
@@ -1855,6 +1919,7 @@ export class SceneController {
     this.hi.pos.upload(f);
     this.overlays.forEach((o) => o.uploadFrame(f));
     this.pathOverlay?.uploadFrame(f);
+    this.traverseOverlay?.uploadFrame(f);
     if (perf.on) perf.time('upload', performance.now() - tUp);
   }
 
@@ -2087,6 +2152,7 @@ export class SceneController {
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
     if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, centre);
+    this.traverseOverlay?.update(t);
   }
 
   /** Project the selected path's phase boundaries to the screen for the label layer. */
