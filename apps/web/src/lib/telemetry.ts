@@ -56,7 +56,7 @@ export function computeTelemetry(graph: EntityGraph, rec: EntityRecord, t: numbe
   }
   const provider = graph.provider(rec.id);
   // period around the primary body (its gm and radius): the Earth for satellites unless deep in space, the Moon for LRO
-  if (inertial && (rec.bodyId !== 'EARTH' || !deepSpace)) out.periodSec = orbitPeriodSec(graph, rec, inertial, t) ?? undefined;
+  if (inertial && provider?.type !== 'geodetic' && (rec.bodyId !== 'EARTH' || !deepSpace)) out.periodSec = orbitPeriodSec(graph, rec, inertial, t) ?? undefined;
   if (provider instanceof Sgp4Provider && rec.provider?.type === 'sgp4') {
     out.elementAgeDays = (t - Date.parse(rec.provider.omm.EPOCH.endsWith('Z') ? rec.provider.omm.EPOCH : `${rec.provider.omm.EPOCH}Z`)) / 86_400_000;
   }

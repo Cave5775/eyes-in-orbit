@@ -1,4 +1,4 @@
-import { inertialToFixedMatrix, frameEpoch, precessDir, transpose, DEG, type Body, type Mat3, type Vec3 } from '@eio/core';
+import { iauAngles, J2000_MS, inertialToFixedMatrix, frameEpoch, precessDir, transpose, DEG, type Body, type Mat3, type Vec3 } from '@eio/core';
 
 /**
  * Pure helpers for body surface maps (the Moon and Mars are drawn as a sphere with an equirectangular map, z = pole,
@@ -28,11 +28,12 @@ export function bodyFixedToInertial(body: Body, tMs: number): Mat3 {
 
 /**
  * Unit vector of the body's IAU north pole in the scene-inertial axes (from its pole right ascension and declination, which are
- * J2000, precessed to the date `tMs`, Moon included; without `tMs` the J2000 direction; the Earth's is z).
+ * J2000 plus the Moon's drift and periodic terms at `tMs`, precessed to the date `tMs`, Moon included; without `tMs` the J2000 direction; the Earth's is z).
  */
 export function poleDirection(body: Body, tMs?: number): Vec3 {
   if (body.rotation.kind !== 'linear') return [0, 0, 1];
-  const ra = body.rotation.poleRaDeg * DEG, dec = body.rotation.poleDecDeg * DEG;
+  const a = iauAngles(body.rotation, tMs ?? J2000_MS); // the Moon's pole includes its periodic terms (pck00011 E1..E13)
+  const ra = a.raDeg * DEG, dec = a.decDeg * DEG;
   const p: Vec3 = [Math.cos(dec) * Math.cos(ra), Math.cos(dec) * Math.sin(ra), Math.sin(dec)];
   return tMs !== undefined ? precessDir(p, tMs, false) : p;
 }

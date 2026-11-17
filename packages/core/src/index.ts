@@ -21,3 +21,4 @@ export * from './observatory';
 export * from './archive-images';
 export * from './match';
 export * from './precession';
+export * from './surface-sites';

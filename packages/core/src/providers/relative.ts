@@ -1,5 +1,5 @@
 import { BodyRegistry, defaultBodies } from '../bodies';
-import { convert, enuBasis, fixedToGeodetic, parseFrame } from '../frames';
+import { convert, enuBasis, fixedToGeodetic, parseFrame, surfaceShape } from '../frames';
 import { Vec3, add, scale } from '../math';
 import type { ProviderContext, ProviderSpec, Sample, StateProvider, StateVector } from '../types';
 
@@ -31,7 +31,7 @@ export class RelativeProvider implements StateProvider {
     // ENU: work in the parent's body-fixed frame so "up" means away from the surface
     const { bodyId } = parseFrame(parent.frame);
     const fixed = convert(parent, `${bodyId}:fixed`, t, this.bodies);
-    const g = fixedToGeodetic(fixed.r, this.bodies.get(bodyId));
+    const g = fixedToGeodetic(fixed.r, surfaceShape(this.bodies.get(bodyId))); // the one placement rule (frames.ts)
     const { e, n, u } = enuBasis(g.lat, g.lon);
     const delta = add(add(scale(e, off[0]), scale(n, off[1])), scale(u, off[2]));
     return { frame: fixed.frame, r: add(fixed.r, delta), v: fixed.v, confidence: parent.confidence };

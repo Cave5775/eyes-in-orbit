@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { EARTH, MOON, SUN, bodyOf, defaultBodies, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
+import { EARTH, MOON, SUN, bodyOf, defaultBodies, hasSurfaceSites, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
 import { bodyFixedToInertial, fitMapSize, poleDirection } from '../lib/body-map';
 import { BODY_TEXTURES, MAP_LOAD_PX, textureOf, type BodyTexture } from '../lib/body-textures';
 import { MARKER_BELOW_PX, MARKER_SIZE_PX, bodyStyle, hexRgb } from '../lib/body-style';
@@ -351,7 +351,8 @@ export class CelestialLayer {
     const shape = (this.env.shapes ?? BODY_SHAPES)[d.bodyId];
     const ell = baseEllipsoid(shape);
     const axes = !map && ell ? ellipsoidScale(ell.radiiKm, refRadiusKm(d.bodyId)) : null;
-    const f = !map && !axes && body && body.flattening >= MIN_DRAWN_FLATTENING ? body.flattening : 0;
+    // a body with surface sites stays a sphere (core `hasSurfaceSites`): the sites are placed on the sphere, so Mars without its map is not drawn flattened
+    const f = !map && !axes && body && body.flattening >= MIN_DRAWN_FLATTENING && !hasSurfaceSites(d.bodyId) ? body.flattening : 0;
     const mat = createBodyMaterial(sunFromBody, style, axes ? [1 / (axes[0] * axes[0]), 1 / (axes[1] * axes[1]), 1 / (axes[2] * axes[2])] : [1, 1, 1 / ((1 - f) * (1 - f))]);
     if (map) d.radiusKm = map.body.radiusKm;
     const mesh = new THREE.Mesh(createMapSphere(d.radiusKm, 96, 48), mat);

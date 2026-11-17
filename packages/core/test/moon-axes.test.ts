@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MARS, MOON, convert, inertialToFixedMatrix, mulMV, precessDir, streamToFrameAxes, type Vec3 } from '../src';
+import { MARS, MOON, convert, iauAngles, inertialToFixedMatrix, mulMV, precessDir, streamToFrameAxes, type Vec3 } from '../src';
 
 const t = Date.UTC(2026, 10, 16);
 const DEG = Math.PI / 180;
@@ -7,8 +7,8 @@ const raDec = (d: Vec3) => [Math.atan2(d[1], d[0]) / DEG, Math.asin(d[2]) / DEG]
 
 describe('the Moon frame is of date, its IAU pole is J2000', () => {
   it('the Moon pole in MOON:inertial is the IAU pole precessed to the date, and the prime meridian turns by about 0.37 deg', () => {
-    const rot = MOON.rotation as { poleRaDeg: number; poleDecDeg: number };
-    const ra = rot.poleRaDeg * DEG, dec = rot.poleDecDeg * DEG;
+    const a = iauAngles(MOON.rotation as never, t); // the pole of the date: constant, drift and the E1..E13 terms
+    const ra = a.raDeg * DEG, dec = a.decDeg * DEG;
     const j2000: Vec3 = [Math.cos(dec) * Math.cos(ra), Math.cos(dec) * Math.sin(ra), Math.sin(dec)];
     // fixed +z back to inertial: transpose row 3 of the matrix
     const m = inertialToFixedMatrix(MOON, t);

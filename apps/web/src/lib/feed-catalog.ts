@@ -54,6 +54,12 @@ export const FEED_CATALOG: Record<string, FeedInfo> = {
     source: 'NASA JPL Solar System Dynamics',
     link: 'https://ssd.jpl.nasa.gov/horizons/',
   },
+  'surface-sites': {
+    name: 'Landers and rovers on other worlds',
+    provides: 'Landers, rovers and the Ingenuity helicopter on the Moon, Mars and Titan at their cited coordinates (offline table), and the live position of Curiosity and Perseverance from their latest NASA waypoints.',
+    source: 'LROC (Arizona State University), PDS Geosciences Node, NASA MMGIS',
+    link: 'https://github.com/NASA-AMMOS/MMGIS',
+  },
   observatories: {
     name: 'Ground observatories',
     provides: 'Mauna Kea, Paranal and Rubin as fixed ground points (offline list; coordinates cited in the connector).',

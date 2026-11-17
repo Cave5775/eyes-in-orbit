@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { MARS, MOON, bodyEntityRecords, bodyStateEci, convert, inertialToFixedMatrix, mulMV, precessDir, type Vec3 } from '@eio/core';
+import { MARS, MOON, bodyEntityRecords, bodyStateEci, convert, iauAngles, inertialToFixedMatrix, mulMV, precessDir, type Vec3 } from '@eio/core';
 import { bodyFixedToInertial, fitMapSize, poleDirection } from '../src/lib/body-map';
 import { CelestialLayer, createMapSphere, type MapEnv } from '../src/scene/celestial';
 
@@ -68,7 +68,10 @@ describe('body orientation of a mapped sphere', () => {
 
 describe('the Moon mesh is in the axes of date', () => {
   it('its pole and prime meridian are the J2000 IAU ones precessed to the date, as for a J2000-group body (the hop rotates its position the same way)', () => {
-    const want = poleDirection(MOON), got = poleDirection(MOON, T0), pre = precessDir(want, T0, false);
+    // the J2000 IAU pole of the date T0: constant, drift and the E1..E13 terms (core iauAngles)
+    const a = iauAngles(MOON.rotation as never, T0), ra = a.raDeg * Math.PI / 180, dec = a.decDeg * Math.PI / 180;
+    const want: Vec3 = [Math.cos(dec) * Math.cos(ra), Math.cos(dec) * Math.sin(ra), Math.sin(dec)];
+    const got = poleDirection(MOON, T0), pre = precessDir(want, T0, false);
     for (let i = 0; i < 3; i++) expect(got[i]).toBeCloseTo(pre[i], 12);
     // a body with the Moon's IAU rotation but a J2000 frame (the precession applied by body-map) gives the same matrix as the Moon
     const moon = bodyFixedToInertial(MOON, T0), asJ2000Body = bodyFixedToInertial({ ...MOON, id: 'X' }, T0);

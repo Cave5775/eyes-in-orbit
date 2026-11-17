@@ -1,6 +1,6 @@
 # EyesInOrbit
 
-A local mission control for spaceflight. It pulls public feeds (satellite orbits, upcoming launches, the Deep Space Network, the ISS, planet and probe ephemerides, space news), keeps them in a small database on your machine, and shows everything in an interactive 3D scene of the solar system, drawn to true scale.
+A local mission control for spaceflight. It pulls public feeds (satellite orbits, upcoming launches, the Deep Space Network, the ISS, planet and probe ephemerides, Mars rover positions from NASA, space news), keeps them in a small database on your machine, and shows everything in an interactive 3D scene of the solar system, drawn to true scale.
 
 <img width="2255" height="1275" alt="image" src="https://github.com/user-attachments/assets/1d3312c5-b37e-4569-99ee-27c462c0ca5e" />
 
@@ -8,6 +8,7 @@ A local mission control for spaceflight. It pulls public feeds (satellite orbits
 
 - **Explore the sky**: thousands of satellites, stations, debris, launch pads and deep-space probes around the Earth, plus the Sun, the planets, the dwarf planets and their major moons, all at their real positions and sizes.
 - **Search and filter**: type a name or ID, or use tags like `group:starlink` or `type:debris`. Hide or highlight whole groups, or browse everything as a tree grouped by the body it orbits.
+- **Visit other worlds**: landers, rovers and the Ingenuity helicopter stand on the Moon, Mars and Titan at their cited coordinates (Apollo to Chang'e and Chandrayaan-3, Viking to Perseverance); Curiosity and Perseverance follow NASA's waypoint data.
 - **Follow anything**: click an object to see its telemetry, launch info, livestream, news and a Wikipedia summary, and let the camera follow it.
 - **Look through a telescope**: the Observatories panel lists space telescopes and ground sites. The Sky view turns the scene into a sky survey (Aladin Lite) seen from there, with the planets marked and archive images from Hubble and JWST.
 - **Watch launches**: a launch board with live countdowns, livestreams in pop-out windows, and modeled ascent paths for Falcon 9 and Electron.

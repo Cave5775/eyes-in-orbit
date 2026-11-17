@@ -173,8 +173,10 @@ describe('horizons', () => {
     }
   });
 
-  it('leaves landers, rovers and the cruising probes on the default Earth-centred query', () => {
-    for (const code of ['MSL', 'M20', 'VGR1', 'JWST', 'NHPC']) {
+  it('leaves the cruising probes on the default Earth-centred query (the Mars rovers MSL and M20 are surface sites, not targets)', () => {
+    expect(DSN_TARGETS.MSL).toBeUndefined();
+    expect(DSN_TARGETS.M20).toBeUndefined();
+    for (const code of ['VGR1', 'JWST', 'NHPC']) {
       expect(horizonsSpecOf(DSN_TARGETS[code]), code).toEqual(DEFAULT_HORIZONS);
       expect(probeEntity(code), code).toMatchObject({ bodyId: 'EARTH' });
     }

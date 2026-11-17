@@ -1,4 +1,4 @@
-import type { CredentialInfo } from '@eio/core';
+import { surfaceSiteRecords, type CredentialInfo } from '@eio/core';
 import type { Api } from '../api/types';
 import { rankEntities } from '../lib/filters';
 import { pageSlice } from '../lib/paging';
@@ -11,7 +11,7 @@ import {
 /** Offline stand-in for the server: same shapes as the REST contract, synthesised in memory. */
 export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
   const { launches, entities: launchEntities } = mockLaunches(nowMs);
-  const entities = [...mockBodies(nowMs), ...mockSatellites(nowMs, satCount), ...launchEntities, ...mockGroundAndProbes(nowMs), ...mockObservatories(nowMs)];
+  const entities = [...mockBodies(nowMs), ...mockSatellites(nowMs, satCount), ...launchEntities, ...mockGroundAndProbes(nowMs), ...mockObservatories(nowMs), ...surfaceSiteRecords(nowMs)];
   const iss = entities.find((e) => e.id === 'sat-25544');
   const issOmm = iss?.provider?.type === 'sgp4' ? iss.provider.omm : undefined;
 

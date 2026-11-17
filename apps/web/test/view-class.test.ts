@@ -16,9 +16,10 @@ describe('viewClass', () => {
       ['Mars orbiter', rec('probe', 'MARS', sampled), undefined, 'orbiter'],
       ['Moon orbiter', rec('probe', 'MOON', sampled), undefined, 'orbiter'],
       ['Mars-bound satellite', rec('satellite', 'MARS', sampled), undefined, 'orbiter'],
-      ['Mars rover on the ground', rec('rover', 'MARS', geodetic), undefined, 'probe'],
-      ['lander', rec('lander', 'MARS', geodetic), undefined, 'probe'],
-      ['probe fixed on a surface', rec('probe', 'MARS', geodetic), undefined, 'probe'],
+      // a geodetic point on a body other than the Earth is a surface site (viewed from its body), whatever its kind
+      ['Mars rover on the ground', rec('rover', 'MARS', geodetic), undefined, 'surface'],
+      ['lander', rec('lander', 'MARS', geodetic), undefined, 'surface'],
+      ['probe fixed on a surface', rec('probe', 'MARS', geodetic), undefined, 'surface'],
       ['Voyager (far, Earth bodyId)', rec('probe', 'EARTH'), 2.5e10, 'probe'],
       ['JWST at L2', rec('probe', 'EARTH'), 1.5e6, 'probe'],
       ['probe without position', rec('probe', 'EARTH'), undefined, 'probe'],
@@ -46,7 +47,10 @@ describe('viewClass', () => {
     const cls: Record<string, string> = {};
     for (const code of Object.keys(DSN_TARGETS)) cls[code] = viewClass(probeEntity(code) as EntityRecord);
     for (const code of ['MRO', 'ODY', 'MVN', 'TGO', 'MEX', 'LRO']) expect(cls[code], code).toBe('orbiter');
-    for (const code of ['VGR1', 'JWST', 'NHPC', 'M20', 'MSL', 'JNO', 'PSP']) expect(cls[code], code).toBe('probe');
+    for (const code of ['VGR1', 'JWST', 'NHPC', 'JNO', 'PSP']) expect(cls[code], code).toBe('probe');
+    // the Mars rovers are no Horizons targets any more: they stand on Mars (surface sites)
+    expect(DSN_TARGETS.M20).toBeUndefined();
+    expect(DSN_TARGETS.MSL).toBeUndefined();
   });
 
   it('mock catalogue', () => {
