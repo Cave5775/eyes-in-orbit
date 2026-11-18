@@ -365,7 +365,13 @@ function writeContainer(n: number, meta: PackedMeta): Uint8Array {
 /** Typed views over a container (no copy when `bytes` is 4-byte aligned, else one copy). Throws on a foreign or truncated buffer. */
 export function readContainer(bytes: Uint8Array): UnpackedOrbits {
   if (bytes.length < 16) throw new Error('minor planet data: truncated header');
-  const aligned = bytes.byteOffset % 4 === 0 ? bytes : bytes.slice();
+  // a view that does not start on a 4-byte boundary (a Node Buffer out of SQLite) is copied into a fresh ArrayBuffer: `Uint8Array.slice` copies,
+  // but `Buffer.slice` is a view, so the copy is explicit
+  let aligned = bytes;
+  if (bytes.byteOffset % 4 !== 0) {
+    aligned = new Uint8Array(bytes.length);
+    aligned.set(bytes);
+  }
   const dv = new DataView(aligned.buffer, aligned.byteOffset, aligned.byteLength);
   if (dv.getUint32(0, true) !== MAGIC) throw new Error('minor planet data: not an MPCB container');
   if (dv.getUint8(4) !== PACKED_VERSION) throw new Error(`minor planet data: unsupported version ${dv.getUint8(4)}`);

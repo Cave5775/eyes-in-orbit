@@ -1,6 +1,5 @@
-import { OrbitBuilder, readMpcorb, sliceOrbits, readContainer } from '@eio/core';
+import { MPCORB_SAMPLE, OrbitBuilder, readMpcorb, sliceOrbits, readContainer } from '@eio/core';
 import type { MinorPlanetIndex } from '../api/types';
-import { MPCORB_SAMPLE } from './fixtures/mpcorb-sample';
 
 /** Mock mode (`?mock=1`, no server): the 20 real MPCORB lines of the fixture, packed in the browser like the server packs the file. */
 let packed: Promise<Uint8Array> | null = null;

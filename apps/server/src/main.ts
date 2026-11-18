@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   setBackoffLog(backoffLogIn(config.dataDir));
   const store = new Store(join(config.dataDir, 'cache.sqlite'));
   // CelesTrak rows are the fallback while CelesTrak blocks us, so they are kept at any age
-  store.prune(30 * 86_400_000, Date.now(), [CELESTRAK_CACHE_PREFIX]);
+  store.prune(30 * 86_400_000, Date.now(), [CELESTRAK_CACHE_PREFIX, 'mpcorb:']);
   const http = new Http(store, { offline: config.offline });
   const hub = new Hub();
   const off = new Set(config.disabledConnectors);

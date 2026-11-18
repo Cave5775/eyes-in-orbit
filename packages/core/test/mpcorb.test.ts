@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   AU_KM, OrbitBuilder, SUN, designationCode, designationText, eclipticToEquatorial, keplerState, mpcToKepler, orbitAt, packedEpochMs,
   parseMpcorbLine, readContainer, readMpcorb, sliceOrbits, DEG, type MpcOrbit,
+  MPCORB_SAMPLE,
 } from '../src';
-import { MPCORB_HEAD } from './fixtures/mpcorb-head';
 
-const LINES = MPCORB_HEAD.split('\n');
+const LINES = MPCORB_SAMPLE.split('\n');
 const DATA = LINES.filter((l: string) => /^\d{5} /.test(l));
 
 describe('packed designations (examples of the MPC page PackedDes.html)', () => {

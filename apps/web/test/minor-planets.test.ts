@@ -1,16 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AU_KM, OrbitBuilder, SUN, keplerFromDegrees, keplerState, orbitAt, precessDir, readContainer, readMpcorb, DEG, type MpcOrbit, type UnpackedOrbits,
+  MPCORB_SAMPLE, AU_KM, OrbitBuilder, SUN, keplerFromDegrees, keplerState, orbitAt, precessDir, readContainer, readMpcorb, DEG, type MpcOrbit, type UnpackedOrbits,
 } from '@eio/core';
 import {
   CELL_ERROR_KM, CELL_FAR_KM, CELL_NEAR_KM, JUMP_MS, MIN_RERUN_MS, cellDrawCount, eclipticToDate, orbitPosition, pickBelt, pickedOrbit, pointLook,
   propagateBelt, rerunDue, sphereInCone,
 } from '../src/lib/minor-planets';
-import { MPCORB_HEAD } from '../../../packages/core/test/fixtures/mpcorb-head';
 
 async function fixtureOrbits(): Promise<UnpackedOrbits> {
   const b = new OrbitBuilder();
-  await readMpcorb(MPCORB_HEAD.split('\n'), b);
+  await readMpcorb(MPCORB_SAMPLE.split('\n'), b);
   return readContainer(b.finish({ skipped: 0 }));
 }
 

@@ -28,6 +28,10 @@ export const MPCORB_URL = 'https://www.minorplanetcenter.net/iau/MPCORB/MPCORB.D
 export const MPCORB_SOURCE = 'mpcorb';
 export const MPCORB_KEY = 'mpcorb:v1';
 export const MPCORB_TTL_MS = 30 * 86_400_000;
+/** a small `kv` row beside the blob: what the 12-hourly check and the conditional request need without reading 45 MB (written with the blob, same TTL) */
+export const MPCORB_META_KEY = 'mpcorb:meta:v1';
+/** the route's resident copy of the packed orbits is dropped after this long without a request */
+export const RESIDENT_IDLE_MS = 5 * 60_000;
 /** objects per chunk of `GET /api/minor-planets?chunk=k` (2 MB packed) */
 export const CHUNK_SIZE = 1 << 16;
 /** the real file has about 1.4 million orbits; fewer than this means the answer is not MPCORB and the stored data is kept */
@@ -53,12 +57,41 @@ export async function packMpcorbGz(
   return { bytes: builder.finish({ ...meta, skipped: stats.skipped }), stats };
 }
 
-/** Read the packed row: cached by its age so a chunk request does not copy tens of MB out of SQLite each time. */
-export class MinorPlanetData {
-  private cache?: { fetchedAt: number; ttlMs: number; u: UnpackedOrbits };
-  private gz = new Map<number, Buffer>();
+/** What the meta row holds: the packed meta plus the blob's size and time, to check that the two rows belong together. */
+export interface StoredMeta extends PackedMeta {
+  count: number;
+  bytes: number;
+  fetchedAt: number;
+}
 
-  constructor(private readonly store: Store, private readonly now: () => number = Date.now) {}
+/**
+ * Read the packed row for the route: the 45 MB are read out of SQLite once and kept while requests keep coming (a chunk request
+ * must not copy tens of MB out of SQLite each time); after `idleMs` without one the copy is dropped (`release`), because a browser
+ * fetches the chunks once and then the memory is better free. The next request reads it again.
+ */
+export class MinorPlanetData {
+  private cache?: { fetchedAt: number; u: UnpackedOrbits };
+  private gz = new Map<number, Buffer>();
+  private timer?: NodeJS.Timeout;
+
+  constructor(private readonly store: Store, private readonly now: () => number = Date.now, private readonly idleMs = RESIDENT_IDLE_MS) {}
+
+  /** Is the packed copy in memory? */
+  get resident(): boolean {
+    return this.cache !== undefined;
+  }
+
+  release(): void {
+    clearTimeout(this.timer);
+    this.cache = undefined;
+    this.gz.clear();
+  }
+
+  private touch(): void {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.release(), this.idleMs);
+    this.timer.unref?.();
+  }
 
   /** The stored orbits with their age, or undefined when nothing was downloaded yet. */
   get(): { u: UnpackedOrbits; fetchedAt: number; stale: boolean } | undefined {
@@ -67,11 +100,11 @@ export class MinorPlanetData {
     if (this.cache?.fetchedAt !== info.fetchedAt) {
       const row = this.store.getBlob(MPCORB_KEY, this.now());
       if (!row) return undefined;
-      this.cache = { fetchedAt: row.fetchedAt, ttlMs: row.ttlMs, u: readContainer(row.value) };
+      this.cache = { fetchedAt: row.fetchedAt, u: readContainer(row.value) };
       this.gz.clear();
     }
-    this.cache.ttlMs = info.ttlMs;
-    return { u: this.cache.u, fetchedAt: info.fetchedAt, stale: this.now() - info.fetchedAt >= info.ttlMs };
+    this.touch();
+    return { u: (this.cache as NonNullable<typeof this.cache>).u, fetchedAt: info.fetchedAt, stale: this.now() - info.fetchedAt >= info.ttlMs };
   }
 
   /** Chunk k gzipped (memoised, the last 6), or null past the end. */
@@ -94,42 +127,58 @@ export interface MinorPlanetsOptions {
   now?: () => number;
 }
 
+/** The blob's size and age and its meta row, without reading the blob; a missing or mismatched meta row is rebuilt once from the blob (an older store). */
+function storedState(store: Store): { info: { fetchedAt: number; ttlMs: number; bytes: number }; meta: StoredMeta } | undefined {
+  const info = store.blobInfo(MPCORB_KEY);
+  if (!info) return undefined;
+  const row = store.get<StoredMeta>(MPCORB_META_KEY)?.value;
+  if (row && row.bytes === info.bytes && row.fetchedAt === info.fetchedAt) return { info, meta: row };
+  const blob = store.getBlob(MPCORB_KEY);
+  if (!blob) return undefined;
+  const u = readContainer(blob.value);
+  const meta: StoredMeta = { ...u.meta, count: u.count, bytes: info.bytes, fetchedAt: info.fetchedAt };
+  store.set(MPCORB_META_KEY, meta, info.ttlMs, info.fetchedAt);
+  return { info, meta };
+}
+
 export function createMinorPlanets(opts: MinorPlanetsOptions = {}): Connector {
   const url = opts.url ?? MPCORB_URL;
   const minOrbits = opts.minOrbits ?? MIN_ORBITS;
   const now = opts.now ?? Date.now;
   return {
     id: 'minor-planets',
-    // a cheap check every 12 h; the download happens when the stored row is past its 30 days
+    // a cheap check every 12 h (two small SQLite reads); the download happens when the stored row is past its 30 days
     intervalMs: 12 * 3600_000,
     startDelayMs: 20_000,
     async run(ctx) {
-      const data = new MinorPlanetData(ctx.store, now);
-      const have = data.get();
-      const describe = (d: NonNullable<typeof have>, how: string): string =>
-        `${d.u.count.toLocaleString('en')} minor planets (${how}, ${(d.u.meta.builtAt ? new Date(d.u.meta.builtAt) : new Date(d.fetchedAt)).toISOString().slice(0, 10)}), MPCORB`;
-      if (have && !have.stale) {
+      const have = storedState(ctx.store);
+      const describe = (m: StoredMeta, how: string): string =>
+        `${m.count.toLocaleString('en')} minor planets (${how}, ${new Date(m.builtAt ?? m.fetchedAt).toISOString().slice(0, 10)}), MPCORB`;
+      if (have && now() - have.info.fetchedAt < have.info.ttlMs) {
         ctx.health.fromCache = true;
-        ctx.health.note = describe(have, 'cached');
+        ctx.health.note = describe(have.meta, 'cached');
         return;
       }
       if (ctx.config.offline) {
         if (!have) throw new Error('offline (OFFLINE=1)');
-        ctx.health.note = describe(have, 'cached, OFFLINE=1');
+        ctx.health.note = describe(have.meta, 'cached, OFFLINE=1');
         return;
       }
       try {
         const headers: Record<string, string> = { 'user-agent': USER_AGENT, accept: 'application/gzip, */*' };
-        if (have?.u.meta.etag) headers['if-none-match'] = have.u.meta.etag;
-        else if (have?.u.meta.lastModified) headers['if-modified-since'] = have.u.meta.lastModified;
+        if (have?.meta.etag) headers['if-none-match'] = have.meta.etag;
+        else if (have?.meta.lastModified) headers['if-modified-since'] = have.meta.lastModified;
         const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
         const r = await guardedFetch(ctx.http.limiter, MPCORB_SOURCE, url, { headers, signal }, { mode: 'poll', fetch: opts.fetch });
         if ('limited' in r) throw new LimitedError(MPCORB_SOURCE, r.retryAt, r.reason, r.kind, r.blockKind);
         const res = r.response;
         if (res.status === 304 && have) {
-          ctx.store.touchBlob(MPCORB_KEY, MPCORB_TTL_MS, now());
+          const t = now();
+          ctx.store.touchBlob(MPCORB_KEY, MPCORB_TTL_MS, t);
+          const meta: StoredMeta = { ...have.meta, fetchedAt: t };
+          ctx.store.set(MPCORB_META_KEY, meta, MPCORB_TTL_MS, t);
           ctx.health.fromCache = true;
-          ctx.health.note = describe(data.get() as NonNullable<typeof have>, 'unchanged at the source');
+          ctx.health.note = describe(meta, 'unchanged at the source');
           return;
         }
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} for ${url}`);
@@ -139,15 +188,17 @@ export function createMinorPlanets(opts: MinorPlanetsOptions = {}): Connector {
         if (stats.parsed < minOrbits || stats.skipped > (stats.parsed + stats.skipped) * MAX_SKIPPED_SHARE) {
           throw new Error(`unexpected MPCORB response: ${stats.parsed} orbits read, ${stats.skipped} lines not understood${stats.samples[0] ? ` (first: "${stats.samples[0]}")` : ''}`);
         }
-        ctx.store.setBlob(MPCORB_KEY, bytes, MPCORB_TTL_MS, now());
-        const fresh = data.get() as NonNullable<typeof have>;
-        ctx.health.note = `${describe(fresh, 'downloaded')}${stats.skipped ? `, ${stats.skipped} lines skipped` : ''}`;
+        const t = now();
+        ctx.store.setBlob(MPCORB_KEY, bytes, MPCORB_TTL_MS, t);
+        const meta: StoredMeta = { ...readContainer(bytes).meta, count: stats.parsed, bytes: bytes.length, fetchedAt: t };
+        ctx.store.set(MPCORB_META_KEY, meta, MPCORB_TTL_MS, t);
+        ctx.health.note = `${describe(meta, 'downloaded')}${stats.skipped ? `, ${stats.skipped} lines skipped` : ''}`;
       } catch (err) {
         if (!have) throw err;
         if (err instanceof LimitedError) throw err;
         // stored data keeps being served; the connector retries in hours, not in 12 h
         ctx.softFail((err as Error).message, STALE_RETRY_MS);
-        ctx.health.note = describe(have, 'stale, refresh failed');
+        ctx.health.note = describe(have.meta, 'stale, refresh failed');
       }
     },
   };
