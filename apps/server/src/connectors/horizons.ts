@@ -1,7 +1,7 @@
 import { streamToFrameAxes, type Sample } from '@eio/core';
 import type { Connector } from '../connector';
 import { LimitedError } from '../net/limiter';
-import { DEFAULT_HORIZONS, DSN_TARGETS, horizonsSpecOf, probeEntity, probeId, type HorizonsSpec } from './dsn-targets';
+import { DEFAULT_HORIZONS, activeTargets, horizonsSpecOf, probeEntity, probeId, type HorizonsSpec } from './dsn-targets';
 
 const API = 'https://ssd.jpl.nasa.gov/api/horizons.api';
 const TTL_MS = 23 * 3600_000;
@@ -82,7 +82,7 @@ export const horizons: Connector = {
     const failed: string[] = [];
     let cached = 0, n = 0;
     let limited: LimitedError | undefined;
-    for (const [code, target] of Object.entries(DSN_TARGETS)) {
+    for (const [code, target] of activeTargets()) {
       try {
         const spec = horizonsSpecOf(target);
         const res = await ctx.cachedFetch(horizonsCacheKey(target.horizons, spec), horizonsUrl(target.horizons, Date.now(), spec), TTL_MS, parseHorizonsVectors, undefined, { source: 'horizons', mode: 'poll' });

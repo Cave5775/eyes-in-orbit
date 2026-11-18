@@ -4,7 +4,7 @@ import { categoryOf, matchesType } from '../src/lib/browser-ui';
 import { settleView } from '../src/lib/camera';
 import { NEAR_ORBIT_KM, primaryOf, viewClass } from '../src/lib/view-class';
 import { mockBodies, mockGroundAndProbes, mockLaunches, mockSatellites } from '../src/mock/generators';
-import { DSN_TARGETS, probeEntity } from '../../server/src/connectors/dsn-targets';
+import { DSN_TARGETS, activeTargets, probeEntity } from '../../server/src/connectors/dsn-targets';
 
 const rec = (kind: string, bodyId: string, provider?: EntityRecord['provider']): EntityRecord => ({ id: 'x', name: 'x', kind, bodyId, aliases: {}, provider, updatedAt: 0 });
 
@@ -45,8 +45,8 @@ describe('viewClass', () => {
 
   it('server connector kinds: Mars orbiters and LRO are orbiters, the rest probes', () => {
     const cls: Record<string, string> = {};
-    for (const code of Object.keys(DSN_TARGETS)) cls[code] = viewClass(probeEntity(code) as EntityRecord);
-    for (const code of ['MRO', 'ODY', 'MVN', 'TGO', 'MEX', 'LRO']) expect(cls[code], code).toBe('orbiter');
+    for (const [code] of activeTargets()) cls[code] = viewClass(probeEntity(code) as EntityRecord);
+    for (const code of ['MRO', 'ODY', 'TGO', 'MEX', 'LRO']) expect(cls[code], code).toBe('orbiter');
     for (const code of ['VGR1', 'JWST', 'NHPC', 'JNO', 'PSP']) expect(cls[code], code).toBe('probe');
     // the Mars rovers are no Horizons targets any more: they stand on Mars (surface sites)
     expect(DSN_TARGETS.M20).toBeUndefined();
