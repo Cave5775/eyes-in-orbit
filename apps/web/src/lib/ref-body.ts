@@ -1,5 +1,6 @@
 import { EARTH, bodyStateEci, defaultBodies, type Vec3 } from '@eio/core';
-import { MIN_ALT_KM } from './camera';
+import { CAMERA_NEAR_KM, MIN_ALT_KM } from './camera';
+import { BODY_SHAPES } from './body-shape';
 
 /**
  * Reference bodies: the body the view is centred on and the one readouts are measured from. Entities stay stored in
@@ -51,11 +52,28 @@ export function refDisplay(body: RefBody, tMs: number): { r: Vec3; k: number } {
  */
 export const refViewDistKm = (body: RefBody): number => (body === 'EARTH' ? 24000 : refRadiusKm(body) * 4);
 
+/** Clearance kept between the camera and the body's farthest drawn point, in near-plane distances (a body of a few metres would be clipped otherwise). */
+export const NEAR_CLEARANCE_FACTOR = 4;
+
+/** Longest drawn semi-axis of a body, km: the ellipsoid's `a` when it has a triaxial shape (Eros, Itokawa, Haumea...), else the registry radius. */
+export function refDrawnRadiusKm(body: RefBody): number {
+  const r = refRadiusKm(body);
+  const s = BODY_SHAPES[body];
+  const a = s?.kind === 'ellipsoid' ? s.radiiKm[0] : s?.kind === 'mesh' ? s.fallback?.radiiKm[0] : undefined;
+  return a !== undefined ? Math.max(r, a) : r;
+}
+
 /**
  * Closest the camera may come to the body's centre while it is the view centre: just above its surface (the
- * Earth: the camera's usual minimum altitude, the same as when nothing is followed).
+ * Earth: the camera's usual minimum altitude, the same as when nothing is followed). The ONE rule: 2 % above the longest
+ * drawn semi-axis, and never closer than `NEAR_CLEARANCE_FACTOR` near-plane distances above it, so a body smaller than the
+ * near plane's reach (Dimorphos 73 m, Itokawa, Apophis, Bennu) is not clipped when zoomed to the limit.
  */
-export const refMinDistKm = (body: RefBody): number => (body === 'EARTH' ? EARTH.radiusKm + MIN_ALT_KM : refRadiusKm(body) * 1.02);
+export const refMinDistKm = (body: RefBody): number => {
+  if (body === 'EARTH') return EARTH.radiusKm + MIN_ALT_KM;
+  const r = refDrawnRadiusKm(body);
+  return Math.max(r * 1.02, r + NEAR_CLEARANCE_FACTOR * CAMERA_NEAR_KM);
+};
 
 /** `r` (Earth-inertial, km) relative to the body's centre. Same axes, so this is a translation. */
 export function relativeToRef(body: RefBody, r: Vec3, tMs: number): Vec3 {

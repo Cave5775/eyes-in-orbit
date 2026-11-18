@@ -9,6 +9,8 @@ const F = EARTH.flattening;
 
 /** Closest the camera may get to the ellipsoid: clears the Earth mesh facet sag (~0.12 km) with a wide margin. */
 export const MIN_ALT_KM = 3;
+/** Near clip plane of the render camera, km (SceneController): anything nearer than this to the camera is clipped. */
+export const CAMERA_NEAR_KM = 0.005;
 /** Farthest the camera may be from its target. Everything is drawn at its real distance (Voyager 1 is ~2.5e10 km out). */
 export const MAX_DIST_KM = 1e11;
 

@@ -26,7 +26,7 @@ const MAX_SEP_DEG = 88;
 
 /**
  * The annotation layer of the Sky view: a ring, and with View > Labels a name, at the exact position of every solar-system body
- * (lib/sky-annotations.ts `selectBodies`: the Sun, Moon, planets, dwarf planets and the moons that have a streamed position; no
+ * (lib/sky-annotations.ts `selectBodies`: the Sun, Moon, planets, dwarf planets, asteroids and the moons that have a streamed position; no
  * satellites or probes). Rendered into the `.sky-annotations` slot of SkyOverlay, the same box as the Aladin canvas.
  *
  * While the sky view is entering or on it runs its own requestAnimationFrame loop (the scene's is paused): the markers are

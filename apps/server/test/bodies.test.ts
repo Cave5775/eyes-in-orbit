@@ -34,7 +34,7 @@ describe('bodies connector', () => {
     vi.restoreAllMocks();
   });
 
-  it('registers the body entities (62: Sun, 8 planets, 5 dwarf planets, 11 asteroids, 36 moons) under OFFLINE=1 and runs once', async () => {
+  it('registers the body entities (62: Sun, 8 planets, 5 dwarf planets, 11 asteroids, 37 moons including the Moon) under OFFLINE=1 and runs once', async () => {
     const { hub, scheduler, get } = setup({ OFFLINE: '1' });
     await scheduler.start();
     // registered by start(), before any timer fires

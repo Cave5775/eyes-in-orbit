@@ -11,7 +11,7 @@ import { loadConfig } from '../src/config';
 import { Scheduler } from '../src/connector';
 import { bodies } from '../src/connectors/bodies';
 import {
-  BODY_TARGETS, MOON_STEPS_OVERRIDE, MOON_STEPS_PER_REV, MOON_WINDOW_STEPS, bodyCacheKey, bodyUrl, horizonsBodies, moonTarget, targetRows,
+  BODY_TARGETS, activeBodyTargets, MOON_STEPS_OVERRIDE, MOON_STEPS_PER_REV, MOON_WINDOW_STEPS, bodyCacheKey, bodyUrl, horizonsBodies, moonTarget, targetRows,
 } from '../src/connectors/horizons-bodies';
 import { parseHorizonsVectors } from '../src/connectors/horizons';
 import { J2000_MS } from '@eio/core';
@@ -305,9 +305,9 @@ describe('named asteroids and Dimorphos (Horizons records of 2026-11-17)', () =>
 
   it('has the Horizons small-body command ids (record syntax with a semicolon), the Sun body centre and a step that keeps the Hermite error small', () => {
     const want: Record<string, [string, number, number]> = {
-      VESTA: ['4;', 14_400, 147], PALLAS: ['2;', 14_400, 147], HYGIEA: ['10;', 14_400, 147], PSYCHE: ['16;', 14_400, 147],
-      BENNU: ['101955;', 4320, 488], RYUGU: ['162173;', 4320, 488], EROS: ['433;', 4320, 488],
-      DIDYMOS: ['65803;', 2880, 549], APOPHIS: ['99942;', 2880, 549], ITOKAWA: ['25143;', 2880, 549],
+      VESTA: ['4;', 7200, 293], PALLAS: ['2;', 7200, 293], HYGIEA: ['10;', 14_400, 147], PSYCHE: ['16;', 7200, 293],
+      BENNU: ['101955;', 2880, 549], RYUGU: ['162173;', 2880, 549], EROS: ['433;', 2880, 549],
+      DIDYMOS: ['65803;', 2880, 549], APOPHIS: ['99942;', 2160, 487], ITOKAWA: ['25143;', 2880, 549],
       ARROKOTH: ['486958;', 86_400, 122],
     };
     for (const [id, [cmd, stepMin, rows]] of Object.entries(want)) {
@@ -318,13 +318,13 @@ describe('named asteroids and Dimorphos (Horizons records of 2026-11-17)', () =>
       expect(p.get('CENTER'), id).toBe("'500@10'");
     }
     expect(Object.keys(want)).toHaveLength(11);
-    // a fast, eccentric orbit moves up to (1 + e)^2 / (1 - e^2)^1.5 times the mean motion at perihelion: the worst case over the real orbit stays small against 5 km
+    // a fast, eccentric orbit moves up to (1 + e)^2 / (1 - e^2)^1.5 times the mean motion at perihelion: the worst case over the real orbit stays under the 5 km budget stated in the connector header
     for (const id of Object.keys(want)) {
       const o = defaultBodies.get(id).orbit!;
       const n = (2 * Math.PI) / bodyPeriodSec(defaultBodies.get(id))!;
       const peri = (1 + o.e) ** 2 / (1 - o.e * o.e) ** 1.5;
       const worst = (o.a * (n * byBody[id].stepMin * 60 * peri) ** 4) / 384;
-      expect(worst, id).toBeLessThan(25); // km, against the tens of millions of km of the orbit
+      expect(worst, id).toBeLessThan(5); // km, against the tens of millions of km of the orbit
     }
   });
 
@@ -335,6 +335,19 @@ describe('named asteroids and Dimorphos (Horizons records of 2026-11-17)', () =>
     expect(p.get('COMMAND')).toBe("'120065803'");
     expect(p.get('CENTER')).toBe("'500@20065803'");
     expect(defaultBodies.get('DIMORPHOS').parentId).toBe('DIDYMOS');
+  });
+
+  it('the Dimorphos record ends 2027-06-30: the target is dropped once its request window would run past that day, all others stay', () => {
+    expect(byBody.DIMORPHOS.validUntil).toBe('2027-06-30');
+    expect(BODY_TARGETS.filter((t) => t.validUntil).map((t) => t.bodyId)).toEqual(['DIMORPHOS']);
+    const at = (iso: string) => activeBodyTargets(Date.parse(iso)).map((t) => t.bodyId);
+    expect(at('2026-11-17T12:00:00Z')).toHaveLength(59);
+    expect(at('2027-06-25T12:00:00Z')).toContain('DIMORPHOS'); // window ends 2027-06-29 16:00
+    // the window reaches 4.17 days (200 steps of 30 min) past the fetch hour, so the last fetch that fits is 2027-06-26 20:00
+    expect(at('2027-06-26T20:00:00Z')).toContain('DIMORPHOS');
+    expect(at('2027-06-26T21:00:00Z')).not.toContain('DIMORPHOS');
+    expect(at('2028-01-01T00:00:00Z')).toHaveLength(58);
+    expect(at('2028-01-01T00:00:00Z')).toContain('ITOKAWA');
   });
 
   it('parses every recorded table (4 rows, 1 day apart); the distance from the Sun lies in the registry orbit, within 10 %', () => {
@@ -484,6 +497,21 @@ describe('horizons-bodies connector', () => {
       expect(entityRank(e)).toBe(entityRank(before[id]));
     }
     expect(hub.graph.stateOf('body-dimorphos', T0)!.frame).toBe('EARTH:inertial');
+    scheduler.stop();
+  });
+
+  it('after the Dimorphos record ends nothing is requested for it, health is not degraded, and Dimorphos keeps its analytic fallback orbit', async () => {
+    vi.setSystemTime(Date.parse('2027-09-01T00:00:00Z'));
+    const { hub, scheduler, urls } = setup();
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(urls).toHaveLength(58);
+    expect(urls.some((u) => new URL(u).searchParams.get('COMMAND') === "'120065803'")).toBe(false);
+    expect(hub.graph.get('body-dimorphos')!.provider).toEqual({ type: 'body', bodyId: 'DIMORPHOS' });
+    expect(hub.healthOf('horizons-bodies').note).toBe('58 of 58 bodies streamed');
+    expect(hub.healthOf('horizons-bodies').status).toBe('ok');
+    const s = hub.graph.stateOf('body-dimorphos', Date.now())!;
+    expect(s.r.every(Number.isFinite)).toBe(true);
     scheduler.stop();
   });
 

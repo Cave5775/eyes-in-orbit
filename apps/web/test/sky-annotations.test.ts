@@ -223,8 +223,14 @@ describe('selectBodies', () => {
     for (const p of ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'ceres', 'pluto', 'eris', 'haumea', 'makemake']) expect(ids).toContain(`body-${p}`);
     expect(ids).not.toContain('body-earth');
     expect(ids).not.toContain('sat-1');
-    // 1 Sun + the Moon + 7 planets (Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune) + 5 dwarf planets
-    expect(out).toHaveLength(14);
+    // 1 Sun + the Moon + 7 planets (Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune) + 5 dwarf planets + 11 asteroids
+    expect(out).toHaveLength(25);
+    expect(out.filter((m) => m.kind === 'asteroid').map((m) => m.id).sort()).toEqual(['body-apophis', 'body-arrokoth', 'body-bennu', 'body-didymos', 'body-eros', 'body-hygiea', 'body-itokawa', 'body-pallas', 'body-psyche', 'body-ryugu', 'body-vesta']);
+    // an unstreamed asteroid is flagged approximate (an old osculating epoch); Dimorphos, a moon, is dropped unless streamed
+    expect(out.find((m) => m.id === 'body-vesta')!.approx).toBe(true);
+    expect(out.map((m) => m.id)).not.toContain('body-dimorphos');
+    const withDimorphos = selectBodies(records, { tMs: T, observer: ground, isHidden: none, isStreamed: (id) => id === 'DIMORPHOS' });
+    expect(withDimorphos.find((m) => m.id === 'body-dimorphos')).toMatchObject({ kind: 'moon', approx: false });
     for (const m of out) {
       expect(Number.isFinite(m.raDeg + m.decDeg + m.distKm)).toBe(true);
       expect(m.raDeg).toBeGreaterThanOrEqual(0);
@@ -248,7 +254,7 @@ describe('selectBodies', () => {
     expect(ids).not.toContain('body-mars');
     expect(ids).not.toContain('body-pluto');
     expect(ids).toContain('body-venus');
-    expect(out).toHaveLength(8); // Sun, Moon and six planets
+    expect(out).toHaveLength(19); // Sun, Moon, six planets and 11 asteroids
   });
 
   it('drops a body with no position (null or not finite)', () => {
@@ -320,9 +326,9 @@ describe('skyRank and declutter', () => {
   // a toy projector: 1 px per 0.1 deg along x, y = 100
   const project = (ra: number, dec: number, out: [number, number]) => { out[0] = ra * 10; out[1] = 100 + dec * 10; return ra < 300; };
 
-  it('ranks Sun > Moon > planets > dwarf planets > moons', () => {
-    const order = [mk('body-sun', 'star', 0), mk('body-moon', 'moon', 0), mk('body-mars', 'planet', 0), mk('body-pluto', 'dwarf_planet', 0), mk('body-io', 'moon', 0)];
-    expect(order.map(skyRank)).toEqual([0, 1, 2, 3, 4]);
+  it('ranks Sun > Moon > planets > dwarf planets > asteroids > moons', () => {
+    const order = [mk('body-sun', 'star', 0), mk('body-moon', 'moon', 0), mk('body-mars', 'planet', 0), mk('body-pluto', 'dwarf_planet', 0), mk('body-vesta', 'asteroid', 0), mk('body-io', 'moon', 0)];
+    expect(order.map(skyRank)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
   it('keeps the higher-ranked of two markers closer than LABEL_H px, whatever the input order', () => {

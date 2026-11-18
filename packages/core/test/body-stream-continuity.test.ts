@@ -12,11 +12,18 @@ const orbiting = new BodyRegistry().all().filter((b) => b.parentId && b.orbit).m
 /**
  * A stream of the body's own Kepler orbit plus a constant offset, over a window of ±halfMs around T. The offset is the one above
  * for every orbit of 10,000 km or more and shrinks in proportion for a smaller one (Dimorphos circles Didymos at 1.2 km: an error
- * of 3e5 km is no Horizons-minus-Kepler error of that body).
+ * of 3e5 km is no Horizons-minus-Kepler error of that body). Below 2000 km the offset is 10 % of the orbit radius; every other body
+ * (Phobos, 9376 km, is the smallest) keeps the offset and the slacks it always had.
  */
+const TINY_ORBIT_KM = 2000;
+const isTiny = (a: number): boolean => a < TINY_ORBIT_KM;
+/** Absolute slacks, km and km/s: 1 km and 1e-6 as ever, but a tenth of a per cent of the orbit (and 1e-9) for a tiny orbit, where 1 km is the whole orbit. */
+const slackKm = (a: number): number => (isTiny(a) ? a * 1e-3 : 1);
+const slackV = (a: number): number => (isTiny(a) ? 1e-9 : 1e-6);
 function streamed(id: string): { reg: BodyRegistry; fresh: BodyRegistry; start: number; end: number; periodMs: number; offR: Vec3 } {
   const fresh = new BodyRegistry(), reg = new BodyRegistry();
-  const k = Math.min(1, fresh.get(id).orbit!.a / 1e4);
+  const a = fresh.get(id).orbit!.a;
+  const k = isTiny(a) ? (0.1 * a) / Math.hypot(...OFFSET_R) : 1;
   const offR = OFFSET_R.map((x) => x * k) as Vec3, offV = OFFSET_V.map((x) => x * k) as Vec3;
   const periodMs = bodyPeriodSec(fresh.get(id), fresh)! * 1000;
   const halfMs = Math.min(2 * YEAR_MS, periodMs * 0.02);
@@ -34,13 +41,14 @@ function streamed(id: string): { reg: BodyRegistry; fresh: BodyRegistry; start: 
 describe('a streamed body continues smoothly past its sample window', () => {
   it.each(orbiting)('%s: position and velocity are continuous across both window edges', (id) => {
     const { reg, start, end } = streamed(id);
+    const a0 = reg.get(id).orbit!.a;
     const st = (t: number) => bodyStateInParent(reg.get(id), t, reg)!;
     for (const edge of [start, end]) {
       const a = st(edge - 1), b = st(edge + 1); // 1 ms either side
       const vmag = Math.hypot(...st(edge).v);
-      expect(dist(a.r, b.r), `${id} position jump`).toBeLessThan(vmag * 0.002 + 1e-3 + 1); // 2 ms of travel plus < 1 km
-      expect(dist(a.r, b.r), `${id} position jump`).toBeLessThan(vmag * 0.002 + 1);
-      expect(dist(a.v, b.v), `${id} velocity jump`).toBeLessThan(1e-4 * Math.max(vmag, 1e-3) + 1e-6);
+      expect(dist(a.r, b.r), `${id} position jump`).toBeLessThan(vmag * 0.002 + 1e-3 + slackKm(a0)); // 2 ms of travel plus < 1 km (a tenth of a per cent of the orbit for a tiny one)
+      expect(dist(a.r, b.r), `${id} position jump`).toBeLessThan(vmag * 0.002 + slackKm(a0));
+      expect(dist(a.v, b.v), `${id} velocity jump`).toBeLessThan(1e-4 * Math.max(vmag, isTiny(a0) ? 0 : 1e-3) + slackV(a0));
     }
   });
 
@@ -60,7 +68,7 @@ describe('a streamed body continues smoothly past its sample window', () => {
     expect(mid).toBeLessThan(0.6 * dist(offR, [0, 0, 0]));
     // inside the window: the stream (Kepler + offset, to the Hermite error)
     const tIn = T + (end - start) / 7;
-    expect(dist(st(reg, tIn).r, [0, 1, 2].map((k) => st(fresh, tIn).r[k] + offR[k]))).toBeLessThan(1 + 1e-6 * Math.hypot(...st(fresh, tIn).r));
+    expect(dist(st(reg, tIn).r, [0, 1, 2].map((k) => st(fresh, tIn).r[k] + offR[k]))).toBeLessThan(slackKm(fresh.get(id).orbit!.a) + 1e-6 * Math.hypot(...st(fresh, tIn).r));
   });
 
   it('is C1: the velocity matches the derivative of the position through the fade', () => {

@@ -346,7 +346,7 @@ describe('the named asteroids (constants read 2026-11-17)', () => {
     expect(phys('APOPHIS')).toEqual([0.17, 0]); // Horizons: GM n.a.
     expect(phys('EROS')).toEqual([8.42, 4.463e-4]);
     expect(phys('ITOKAWA')).toEqual([0.165, 2.1e-9]);
-    expect(phys('ARROKOTH')).toEqual([9.948, 0]); // half of the 19.896 km volume equivalent diameter; Horizons has neither radius nor GM
+    expect(phys('ARROKOTH')).toEqual([9.948, 0]); // half of the 19.896 km volume equivalent diameter (Porter et al. 2024 draft on the PDS); Horizons has neither radius nor GM
     expect(phys('DIDYMOS')).toEqual([0.3551, 3.51278e-8]); // volume 0.1876 km^3 -> 0.3551 km
     expect(phys('DIMORPHOS')).toEqual([0.0728, 3.0268e-10]); // volume 0.001616 km^3 -> 0.0728 km
     expect(Math.cbrt((3 * 0.1876) / (4 * Math.PI))).toBeCloseTo(0.3551, 4);

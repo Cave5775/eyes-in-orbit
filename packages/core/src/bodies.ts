@@ -227,7 +227,10 @@ export const MAKEMAKE = dwarf('MAKEMAKE', 'Makemake', 715, 0, 207, NO_ROTATION,
 //    4.463e-4, Itokawa 0.165 / 2.1e-9 (km, km^3/s^2). Horizons has no GM for Bennu or Apophis ("n.a."): they carry GM 0, "not
 //    determined" (the entity shows no GM, the sphere-of-influence test skips it; Bennu's measured GM is not entered because it
 //    was not read from a source here). Arrokoth: Horizons has neither radius nor GM; radius 9.948 km is half the volume
-//    equivalent diameter 19.896 km of the Porter (2024) shape model (as listed in the English Wikipedia infobox), GM 0
+//    equivalent diameter 19.896 km of the Porter et al. (2024) shape model (Porter (2024), Planetary Science Journal 5:241, DOI 10.3847/PSJ/ad8347;
+//    the table "Diameter of a Sphere of Equal Volume" read 2026-11-18 in the authors' June 2024 draft on the PDS Small Bodies Node,
+//    pds-smallbodies.astro.umd.edu/holdings/pds4-nh_derived-v3.0/arrokoth_shapemodel_porter2024/porteretal2024b.pdf; the journal
+//    page itself was not opened, so the published number is not checked against the draft), GM 0
 //    (Keane et al. 2022 give only a density-dependent mass estimate).
 //  - Didymos and Dimorphos: the Horizons records of the DART/Hera reconstruction (920065803 Didymos primary body, 120065803
 //    Dimorphos, header text of 2026-10-30): Didymos radii 0.39167 x 0.39167 x 0.29195 km, volume 0.1876 km^3 (volume equivalent
@@ -239,7 +242,7 @@ export const MAKEMAKE = dwarf('MAKEMAKE', 'Makemake', 715, 0, 207, NO_ROTATION,
 //    of Dimorphos about the Didymos system barycentre (centre 500@20065803, ICRF) at 2026-11-17 00:00 TDB, turned into ecliptic
 //    J2000 Kepler elements with the Didymos GM (a 1.1786 km, e 0.0234, i 170.701, node 39.997, argp 268.624, M 0.000 deg; period
 //    11.92 h). Dimorphos is a `moon` entity of an asteroid and orbits the SYSTEM BARYCENTRE in the stream (the
-//    primary wobbles about it by about 0.1 km).
+//    primary wobbles about it by about 0.01 km).
 //  - rotation: IAU WGCCRE 2015 (Archinal et al. 2018), constant terms, read from NAIF pck00011.tpc (BODY2000004 Vesta,
 //    BODY2000002 Pallas, BODY2000433 Eros, BODY2025143 Itokawa: "values are unchanged in the 2015 IAU report"). The kernel gives
 //    no model for Hygiea, Psyche, Bennu, Ryugu, Apophis or Arrokoth, and none is entered: NO_ROTATION. Triaxial radii (NAIF

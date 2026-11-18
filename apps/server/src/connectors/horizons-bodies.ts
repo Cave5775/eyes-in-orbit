@@ -32,6 +32,12 @@ export interface BodyTarget {
   /** window: days before / after the fetch hour */
   pastDays: number;
   futureDays: number;
+  /**
+   * The last UTC date (`YYYY-MM-DD`) the Horizons record covers (cite it in a comment at the target), like `ended` in dsn-targets.ts.
+   * `activeBodyTargets` leaves the target out once the request window (the fetch hour plus `futureDays`) would run past the end of that
+   * day: no request, no failure, no degraded health; the body then keeps its analytic fallback orbit from `bodies.ts`.
+   */
+  validUntil?: string;
 }
 
 /** Rows of a table: both ends and the start row. */
@@ -95,9 +101,12 @@ export function moonTarget(bodyId: string, horizons: string, planetNaif: string,
  *   Jupiter 599: 20 d, +-4 y (147)           Saturn 699: 30 d, +-10 y (244)   Uranus 799, Neptune 899: 60 d, +-10 y (122)
  *   Ceres `1;`: 10 d, +-2 y (147)           Pluto 999, Eris, Haumea, Makemake: 60 d, +-10 y (122)
  * Named asteroids (small-body designation with a semicolon, Horizons ids checked 2026-11-17): Vesta `4;`, Pallas `2;`, Hygiea `10;`,
- *   Psyche `16;` (10 d, +-2 y, 147 rows); Bennu `101955;`, Ryugu `162173;`, Eros `433;` (3 d, +-2 y, 488 rows); Didymos `65803;` (the
- *   system barycentre), Apophis `99942;`, Itokawa `25143;` (2 d, +-1.5 y, 549 rows: fast near-Earth orbits, e 0.19 to 0.38, whose
- *   perihelion speed is up to 2.4 times the mean motion); Arrokoth `486958;` (60 d, +-10 y, 122 rows).
+ *   Psyche `16;` (Hygiea 10 d, +-2 y, 147 rows; Vesta, Pallas, Psyche 5 d, +-2 y, 293 rows); Bennu `101955;`, Ryugu `162173;`, Eros `433;`,
+ *   Didymos `65803;` (the system barycentre), Itokawa `25143;` (2 d, +-1.5 y, 549 rows); Apophis `99942;` (1.5 d, +-1 y, 487 rows); Arrokoth
+ *   `486958;` (60 d, +-10 y, 122 rows). The near-Earth orbits are fast and eccentric (e 0.19 to 0.38): perihelion speed is up to 2.4 times
+ *   the mean motion, so the budget for the asteroids is the worst case over the real orbit, R (n h f)^4 / 384 with f = (1 + e)^2 / (1 - e^2)^1.5,
+ *   under 5 km for every one (1.7 km Bennu, 1.2 Ryugu, 1.3 Apophis, 1.6 Didymos and Itokawa, 0.6 Eros, 0.6 Vesta, 1.0 Pallas, 2.8 Hygiea,
+ *   0.3 Psyche); `test/horizons-bodies.test.ts` asserts it.
  * Moons: see `moonTarget`. Dimorphos `120065803` is relative to the Didymos system barycentre `500@20065803` (the centre the
  *   Didymos record itself is on), not the primary body `920065803`: Didymos is drawn at that barycentre.
  *
@@ -118,15 +127,15 @@ export function buildBodyTargets(registry: BodyRegistry = defaultBodies): BodyTa
     planetTarget('ERIS', '136199;', 60, 10),
     planetTarget('HAUMEA', '136108;', 60, 10),
     planetTarget('MAKEMAKE', '136472;', 60, 10),
-    planetTarget('VESTA', '4;', 10, 2),
-    planetTarget('PALLAS', '2;', 10, 2),
+    planetTarget('VESTA', '4;', 5, 2),
+    planetTarget('PALLAS', '2;', 5, 2),
     planetTarget('HYGIEA', '10;', 10, 2),
-    planetTarget('PSYCHE', '16;', 10, 2),
-    planetTarget('BENNU', '101955;', 3, 2),
-    planetTarget('RYUGU', '162173;', 3, 2),
+    planetTarget('PSYCHE', '16;', 5, 2),
+    planetTarget('BENNU', '101955;', 2, 1.5),
+    planetTarget('RYUGU', '162173;', 2, 1.5),
     planetTarget('DIDYMOS', '65803;', 2, 1.5),
-    planetTarget('APOPHIS', '99942;', 2, 1.5),
-    planetTarget('EROS', '433;', 3, 2),
+    planetTarget('APOPHIS', '99942;', 1.5, 1),
+    planetTarget('EROS', '433;', 2, 1.5),
     planetTarget('ITOKAWA', '25143;', 2, 1.5),
     planetTarget('ARROKOTH', '486958;', 60, 10),
   ];
@@ -146,10 +155,21 @@ export function buildBodyTargets(registry: BodyRegistry = defaultBodies): BodyTa
     // Dimorphos: its own Horizons record (checked 2026-11-17), centred on the Didymos system barycentre (an SPK id, not a planet NAIF)
     ['DIMORPHOS', '120065803', '20065803'],
   ];
-  return [...planets, ...moons.map(([id, cmd, planet]) => moonTarget(id, cmd, planet, registry))];
+  // The Dimorphos record (JPL s547 + Hera latest, header "Updated: 2026-Oct-30", read 2026-11-17) ends with the ESA file
+  // dimorphos_fsp_000005_260701_270701_v01 on 2027-06-30 TDB. After that Dimorphos stays on its registry fallback orbit (the
+  // 2026-11-17 elements, period 11.92 h: right size and plane, the phase drifts), and every other target is unaffected.
+  const validUntil: Record<string, string> = { DIMORPHOS: '2027-06-30' };
+  return [...planets, ...moons.map(([id, cmd, planet]) => moonTarget(id, cmd, planet, registry))].map((t) => (validUntil[t.bodyId] ? { ...t, validUntil: validUntil[t.bodyId] } : t));
 }
 
 export const BODY_TARGETS: BodyTarget[] = buildBodyTargets();
+
+/** End of the UTC day `validUntil`, ms. */
+const endOfDayMs = (validUntil: string): number => Date.parse(`${validUntil}T00:00:00Z`) + DAY_MS;
+
+/** The targets whose Horizons record still covers the request window at `nowMs` (every target without `validUntil`). */
+export const activeBodyTargets = (nowMs: number, targets: readonly BodyTarget[] = BODY_TARGETS): BodyTarget[] =>
+  targets.filter((t) => t.validUntil === undefined || Math.floor(nowMs / HOUR_MS) * HOUR_MS + Math.round(t.futureDays * DAY_MS) <= endOfDayMs(t.validUntil));
 
 /** Cache key of one target's table: includes command, centre, step and window so a changed request never reuses older data. */
 export function bodyCacheKey(t: BodyTarget): string {
@@ -201,7 +221,8 @@ export const horizonsBodies: Connector = {
     let cached = 0, n = 0, retryAt = Infinity;
     let halted: string | undefined;
     const records = new Map(bodyEntityRecords().map((r) => [r.id, r]));
-    for (const target of BODY_TARGETS) {
+    const targets = activeBodyTargets(Date.now());
+    for (const target of targets) {
       const id = `body-${target.bodyId.toLowerCase()}`;
       if (halted) {
         failed.push(`${target.bodyId}: skipped (${halted})`);
@@ -253,7 +274,7 @@ export const horizonsBodies: Connector = {
     }
     if (!n) throw new Error(`no body ephemerides: ${failed[0]}`);
     ctx.log(`${n} body ephemerides (${cached} cached)${failed.length ? `, failed: ${failed.join('; ')}` : ''}`);
-    ctx.health.note = `${n} of ${BODY_TARGETS.length} bodies streamed${failed.length ? `; ${failed.length} on the analytic fallback` : ''}`;
+    ctx.health.note = `${n} of ${targets.length} bodies streamed${failed.length ? `; ${failed.length} on the analytic fallback` : ''}`;
     if (failed.length && !ctx.http.offline) ctx.softFail(failed[0], Math.min(Math.max(retryAt - Date.now(), 5 * 60_000), 60 * 60_000));
   },
 };

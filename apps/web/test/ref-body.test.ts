@@ -120,3 +120,25 @@ describe('reference bodies are drawn to scale', () => {
     expect(refMinDistKm('SUN')).toBeCloseTo(REF_RADIUS_KM.SUN * 1.02, 6);
   });
 });
+
+describe('the closest approach to every body (one rule)', () => {
+  it('keeps the camera at least NEAR_CLEARANCE_FACTOR near-plane distances above the longest drawn semi-axis, and 2 % above it, for every registry body', async () => {
+    const { defaultBodies } = await import('@eio/core');
+    const { CAMERA_NEAR_KM } = await import('../src/lib/camera');
+    const { BODY_SHAPES } = await import('../src/lib/body-shape');
+    const { NEAR_CLEARANCE_FACTOR, refDrawnRadiusKm } = await import('../src/lib/ref-body');
+    for (const b of defaultBodies.all()) {
+      if (b.id === 'EARTH') continue;
+      const s = BODY_SHAPES[b.id];
+      const drawn = Math.max(b.radiusKm, s?.kind === 'ellipsoid' ? s.radiiKm[0] : 0);
+      expect(refDrawnRadiusKm(b.id), b.id).toBe(drawn);
+      expect(refMinDistKm(b.id) - drawn, b.id).toBeGreaterThanOrEqual(NEAR_CLEARANCE_FACTOR * CAMERA_NEAR_KM - 1e-12);
+      expect(refMinDistKm(b.id), b.id).toBeGreaterThanOrEqual(drawn * 1.02 - 1e-9);
+      expect(refViewDistKm(b.id), b.id).toBeGreaterThan(refMinDistKm(b.id));
+    }
+    // a body under the near plane's reach: Dimorphos (72.8 m) stays 20 m clear; Eros is measured on its 17 km long axis
+    expect(refMinDistKm('DIMORPHOS')).toBeCloseTo(0.0728 + 0.02, 9);
+    expect(refMinDistKm('EROS')).toBeCloseTo(17 * 1.02, 9);
+    expect(refMinDistKm('MARS')).toBeCloseTo(3396.19 * 1.02, 6);
+  });
+});
