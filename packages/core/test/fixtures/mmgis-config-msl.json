@@ -1,0 +1,91 @@
+{
+ "msv": {
+  "mission": "MSL",
+  "site": "GAC",
+  "masterdb": false,
+  "view": [
+   "-4.66368705",
+   "137.39786870",
+   "13"
+  ],
+  "radius": {
+   "major": "3396190",
+   "minor": "3396190"
+  },
+  "mapscale": "15"
+ },
+ "projection": {
+  "custom": false,
+  "epsg": "",
+  "proj": "",
+  "xmlpath": "",
+  "bounds": [
+   "",
+   "",
+   "",
+   ""
+  ],
+  "origin": [
+   "",
+   ""
+  ],
+  "reszoomlevel": "",
+  "resunitsperpixel": ""
+ },
+ "layers": [
+  {
+   "name": "Labels",
+   "type": "tile",
+   "url": "https://mars.nasa.gov/mmgis-maps/MSL/Layers/MSL_WebGIS_PlaceText/{z}/{x}/{y}.png",
+   "tileformat": "tms",
+   "visibility": true,
+   "initialOpacity": 1,
+   "togglesWithHeader": true,
+   "minZoom": 4,
+   "maxNativeZoom": 17,
+   "maxZoom": 22,
+   "boundingBox": [
+    136.4996580968144,
+    -6.33348668791018,
+    138.19948720529013,
+    -4.13060156470986
+   ]
+  },
+  {
+   "name": "Basemap",
+   "type": "tile",
+   "url": "https://mars.nasa.gov/mmgis-maps/MSL/Layers/MSL_Gale_HiRISE-LRGB_78quads/{z}/{x}/{y}.png",
+   "tileformat": "tms",
+   "visibility": true,
+   "initialOpacity": 1,
+   "togglesWithHeader": true,
+   "minZoom": 10,
+   "maxNativeZoom": 18,
+   "maxZoom": 22,
+   "boundingBox": [
+    137.32672354505786,
+    -4.87560429259321,
+    137.4785574965306,
+    -4.55506331169111
+   ]
+  },
+  {
+   "name": "Gale Crater Map",
+   "type": "tile",
+   "url": "https://mars.nasa.gov/mmgis-maps/MSL/Layers/MSL_CTX_ortho_mosaic_6m/{z}/{x}/{y}.png",
+   "tileformat": "tms",
+   "visibility": true,
+   "initialOpacity": 1,
+   "togglesWithHeader": true,
+   "minZoom": 6,
+   "maxNativeZoom": 13,
+   "maxZoom": 22,
+   "boundingBox": [
+    135.97876221689464,
+    -7.84409099977539,
+    139.48590357790334,
+    -3.39706499423008
+   ]
+  }
+ ]
+}

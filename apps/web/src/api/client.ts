@@ -3,7 +3,7 @@ import { isIss } from '../lib/entity';
 import { clampMockCount } from '../mock/generators';
 import { createMockApi } from '../mock/mock-api';
 import { setTextMatcher, useStore } from '../state/store';
-import { bodyEntityRecords } from '@eio/core';
+import { bodyEntityRecords, localTilePath } from '@eio/core';
 import { PAGE_SIZE, loadPaged } from '../lib/paging';
 import type { Api } from './types';
 import { StreamClient } from './stream';
@@ -33,6 +33,7 @@ const restApi: Api = {
   iss: () => getJson('/api/iss'),
   health: () => getJson('/api/health', 4_000),
   traverse: (entityId) => getJson<RoverTraverse>(`/api/traverse/${encodeURIComponent(entityId)}`, 15_000).catch(() => null),
+  mapTile: (layer, z, x, y) => localTilePath(layer, z, x, y),
   ascent: (launchId) => getJson<AscentSeries>(`/api/telemetry/${encodeURIComponent(launchId)}`, 8_000).catch(() => null),
   credentials: async () => (await getJson<{ credentials: CredentialInfo[] }>('/api/credentials', 8_000)).credentials,
   saveCredentials: async (values) => {

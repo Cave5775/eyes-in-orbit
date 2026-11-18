@@ -4,6 +4,11 @@ import { rankEntities } from '../lib/filters';
 import { pageSlice } from '../lib/paging';
 import { mockArchiveImages } from './archive-images';
 import mmgis from './fixtures/mmgis-traverse.json';
+// trimmed real MMGIS map tiles (fixtures/mmgis-tiles/<mission>-<layer>-<z>-<x>-<y>.png): the mock's Mars surface patch near Perseverance
+const MOCK_TILES: Record<string, string> = Object.fromEntries(
+  Object.entries(import.meta.glob('./fixtures/mmgis-tiles/*.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>)
+    .map(([path, url]) => [path.slice(path.lastIndexOf('/') + 1, -'.png'.length).toUpperCase(), url]),
+);
 import { mockDescription } from './describe';
 import {
   mockAscentSeries, mockBodies, mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockObservatories, mockSatellites,
@@ -81,6 +86,7 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
     }),
     health: async () => ({ serverTime: Date.now(), entityCount: entities.length, connectors: mockHealth(Date.now()) }),
     traverse: async (entityId) => mockTraverse(entityId, nowMs),
+    mapTile: (layer, z, x, y) => MOCK_TILES[`${layer.mission}-${layer.id}-${z}-${x}-${y}`.toUpperCase()] ?? null,
     ascent: async (launchId) => {
       const launch = launches.find((l) => l.id === launchId);
       return launch ? mockAscentSeries(launch) : null;

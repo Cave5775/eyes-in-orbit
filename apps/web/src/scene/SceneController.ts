@@ -3,6 +3,7 @@ import {
   DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci,
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm, type RoverTraverse,
 } from '@eio/core';
+import { localTilePath, type MmgisLayer } from '@eio/core';
 import { listedParent } from '../lib/listed-parent';
 import { modelViewDirection } from '../lib/attitude';
 import { bodyPickScan, gatherWithBodies } from '../lib/body-scene';
@@ -35,6 +36,7 @@ import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
 import type { DetailView } from '../lib/earth-detail';
 import { CelestialLayer } from './celestial';
 import { EarthDetail, type DetailStats } from './earth-detail';
+import { SurfacePatch, type PatchStats } from './surface-patch';
 import { EntityOverlay } from './overlays';
 import { PathOverlay, TraverseOverlay, type PathStatus } from './PathOverlay';
 import { closeUpDirection, closeUpDistance, localAngles, reachFrom, siteBasis, traverseFixed } from '../lib/traverse';
@@ -99,6 +101,8 @@ export interface SceneCallbacks {
   onSurfacePrefChange?(on: boolean): void;
   /** The first-person view started (the observatory's id) or ended (null), see `SceneController.lookFrom`. */
   onFirstPersonChange?(id: string | null): void;
+  /** Address of a Mars map tile (scene/surface-patch.ts), or null when there is none; default the server route. */
+  tileUrl?(layer: MmgisLayer, z: number, x: number, y: number): string | null;
 }
 
 /** What the page tells the scene about the query and the selection (see `SceneController.setView`). */
@@ -226,6 +230,9 @@ export class SceneController {
   private detail = new EarthDetail();
   private lastDetailAt = 0;
   private detailDir = new THREE.Vector3();
+  /** NASA's rover-map mosaics laid on Mars near Jezero and Gale (scene/surface-patch.ts), placed like the traverse */
+  private patch: SurfacePatch;
+  private patchDir = new THREE.Vector3();
   private stars: THREE.Points;
   private pointMat: THREE.ShaderMaterial;
   private sats: PointSet;
@@ -422,6 +429,7 @@ export class SceneController {
       maxAnisotropy: () => this.renderer.capabilities.getMaxAnisotropy(),
       pointMaterial: this.pointMat,
     });
+    this.patch = new SurfacePatch(this.scene, (l, z, x, y) => (this.cb.tileUrl ? this.cb.tileUrl(l, z, x, y) : localTilePath(l, z, x, y)), Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
 
     this.sats = makePointSet(0, this.pointMat);
     this.dyn = makePointSet(0, this.pointMat);
@@ -597,6 +605,11 @@ export class SceneController {
     SHADING.value = on ? 1 : 0;
     this.celestial.setShaded(on);
     this.models.setShaded(on);
+  }
+
+  /** The Mars surface patch as of the last frame (tiles drawn, textures, bytes): for the HUD and `window.__eio`. */
+  get surfacePatchStats(): PatchStats {
+    return this.patch.stats;
   }
 
   setDetailEnabled(on: boolean): void {
@@ -1316,6 +1329,7 @@ export class SceneController {
     this.models.dispose();
     this.celestial.dispose();
     this.detail.dispose();
+    this.patch.dispose();
     this.overlays.forEach((o) => o.dispose());
     this.traverseOverlay?.dispose();
     this.scene.traverse((o) => {
@@ -1934,6 +1948,7 @@ export class SceneController {
     this.overlays.forEach((o) => o.uploadFrame(f));
     this.pathOverlay?.uploadFrame(f);
     this.traverseOverlay?.uploadFrame(f);
+    this.patch.update(t, f.origin, cam.getWorldDirection(this.patchDir), cam.fov, cam.aspect, this.container.clientHeight);
     if (perf.on) perf.time('upload', performance.now() - tUp);
   }
 

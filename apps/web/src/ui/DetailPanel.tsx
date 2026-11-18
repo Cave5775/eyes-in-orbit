@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { emptyHint } from '../lib/browser-ui';
 import { kindLabel, launchOf } from '../lib/entity';
 import { typeOf, viewClass } from '../lib/view-class';
+import { mmgisMapUrl } from '@eio/core';
 import { modelDef } from '../scene/models/registry';
 import { runtime } from '../state/runtime';
 import { useStore } from '../state/store';
@@ -79,6 +80,11 @@ export function DetailPanel() {
             title={model ? `Fly to the 3D model (${model.label}) and follow it. It replaces the point sprite within ${model.lodKm} km.` : 'Fly to 4 km over the site, looking down at it, and follow it; a rover with a published traverse is framed with its whole path.'}>
             Close-up
           </button>
+        )}
+        {mmgisMapUrl(rec.id) && (
+          <a className="key" href={mmgisMapUrl(rec.id)} target="_blank" rel="noopener noreferrer" title="Open NASA's rover map for this mission (MMGIS: traverse, imagery, waypoints) in a new tab">
+            Open in MMGIS
+          </a>
         )}
         {frameLocked && frame === rec.id ? (
           <button

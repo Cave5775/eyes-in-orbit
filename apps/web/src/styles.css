@@ -151,6 +151,7 @@ body.resizing .scene-host, body.resizing canvas, body.resizing iframe { pointer-
 .key.on.warn { background: var(--warn); border-color: var(--warn); }
 .key.on.live { background: transparent; border-color: rgba(88, 194, 139, 0.55); color: var(--ok); }
 .btn:disabled, .key:disabled { opacity: 0.4; cursor: not-allowed; }
+a.key { text-decoration: none; }
 .btn.icon { padding: 0 8px; font-size: 16px; }
 .key kbd { font: inherit; font-size: 10.5px; color: var(--ink-3); }
 .key.on kbd { color: color-mix(in srgb, var(--on-fg) 55%, transparent); }
