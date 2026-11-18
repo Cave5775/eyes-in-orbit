@@ -14,6 +14,10 @@ export interface TreeBody {
    * items: the node carries it as `entityId` unless an item backs the node itself.
    */
   entityId?: string;
+  /** what the body is (entity kind: planet, moon ...); the key of its folder when the tree groups bodies */
+  kind?: string;
+  /** equatorial radius, km (the size sort) */
+  radiusKm?: number;
 }
 
 /** What the tree needs of an entity (a record or a search hit). */
@@ -28,7 +32,7 @@ export interface TreeItem {
 
 export type TreeRow =
   | { type: 'body'; key: string; bodyId: string; name: string; depth: number; count: number; open: boolean; entityId?: string }
-  | { type: 'group'; key: string; kind: string; depth: number; count: number; open: boolean }
+  | { type: 'group'; key: string; kind: string; depth: number; count: number; open: boolean; /** title when it is not the kind's own name (a body folder: Planets) */ label?: string }
   | { type: 'entity'; key: string; id: string; depth: number };
 
 export interface TreeOptions<T extends TreeItem> {
@@ -51,13 +55,32 @@ export interface TreeOptions<T extends TreeItem> {
   bodyOf?: (item: T) => string | undefined;
   /** registry body id an item stands for, for items without a `provider` (search hits of body entities) */
   standsForBody?: (item: T) => string | undefined;
+  /**
+   * Put the bodies that orbit a body into folders by kind (Planets, Moons ...): `of` gives the folder kind of a body, the
+   * others its title and its place. Without it the child bodies are listed directly under their parent.
+   */
+  bodyGroups?: BodyGroups;
+  /** order of the child bodies within their folder (or under the parent); default: registry order */
+  sortBodies?: (a: TreeBody, b: TreeBody) => number;
+  /** order of the objects within a body or kind group; default: the order they came in */
+  sortItems?: (a: T, b: T) => number;
+}
+
+export interface BodyGroups {
+  of: (b: TreeBody) => string;
+  label: (kind: string) => string;
+  order: (kind: string) => number;
 }
 
 export const bodyKey = (id: string): string => `b:${id}`;
 export const groupKey = (bodyId: string, kind: string): string => `g:${bodyId}:${kind}`;
+/** the folder of the bodies of one kind under a body (distinct from the kind group of objects, `groupKey`) */
+export const bodyGroupKey = (parentId: string, kind: string): string => `h:${parentId}:${kind}`;
 export const entityKey = (bodyId: string, id: string): string => `e:${bodyId}:${id}`;
 
 interface Node<T> {
+  /** the registry entry (a made-up one for a body the registry does not know) */
+  body: TreeBody;
   id: string;
   name: string;
   parent: Node<T> | null;
@@ -74,8 +97,11 @@ interface Node<T> {
 
 export const DEFAULT_GROUP_MIN = 12;
 
-/** Keys of the body nodes from the root down to `bodyId` (root first). Unknown ids give just their own key. */
-export function bodyPathKeys(bodies: readonly TreeBody[], bodyId: string): string[] {
+/**
+ * Keys of the body nodes from the root down to `bodyId` (root first). Unknown ids give just their own key. With `groups` the
+ * key of the folder a body sits in comes before the body's own key.
+ */
+export function bodyPathKeys(bodies: readonly TreeBody[], bodyId: string, groups?: BodyGroups): string[] {
   const byId = new Map(bodies.map((b) => [b.id, b]));
   const out: string[] = [];
   const seen = new Set<string>();
@@ -83,7 +109,9 @@ export function bodyPathKeys(bodies: readonly TreeBody[], bodyId: string): strin
   while (cur && !seen.has(cur)) {
     seen.add(cur);
     out.push(bodyKey(cur));
-    cur = byId.get(cur)?.parentId;
+    const self = byId.get(cur);
+    if (groups && self?.parentId && byId.has(self.parentId)) out.push(bodyGroupKey(self.parentId, groups.of(self)));
+    cur = self?.parentId;
   }
   return out.reverse();
 }
@@ -95,7 +123,7 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
 
   // nodes in registry order, linked to their parents
   const nodes = new Map<string, Node<T>>();
-  for (const b of opts.bodies) nodes.set(b.id, { id: b.id, name: b.name, parent: null, children: [], items: [], count: 0, entityId: b.entityId, backed: false });
+  for (const b of opts.bodies) nodes.set(b.id, { body: b, id: b.id, name: b.name, parent: null, children: [], items: [], count: 0, entityId: b.entityId, backed: false });
   const roots: Node<T>[] = [];
   for (const b of opts.bodies) {
     const n = nodes.get(b.id)!;
@@ -110,7 +138,7 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
   const nodeFor = (bid: string): Node<T> => {
     let n = nodes.get(bid);
     if (!n) {
-      n = { id: bid, name: bid, parent: roots[0] ?? null, children: [], items: [], count: 0, backed: false };
+      n = { body: { id: bid, name: bid }, id: bid, name: bid, parent: roots[0] ?? null, children: [], items: [], count: 0, backed: false };
       nodes.set(bid, n);
       if (roots[0]) roots[0].children.push(n);
       else roots.push(n);
@@ -149,7 +177,7 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
 
   // open by default: the path to the frame (and its own node), and everything with a hit while filtering
   const auto = new Set<string>();
-  for (const k of bodyPathKeys(opts.bodies, opts.frameBodyId ?? 'EARTH')) auto.add(k);
+  for (const k of bodyPathKeys(opts.bodies, opts.frameBodyId ?? 'EARTH', opts.bodyGroups)) auto.add(k);
   const frameEntity = opts.frameId;
   const isOpen = (key: string): boolean => {
     const o = overrides?.get(key);
@@ -166,14 +194,15 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
     if (n.entityId) row.entityId = n.entityId;
     rows.push(row);
     if (!open) return;
-    for (const c of n.children) emit(c, depth + 1);
+    emitChildren(n, depth + 1);
     if (n.items.length === 0) return;
-    if (n.items.length <= groupMin) {
-      for (const it of n.items) rows.push({ type: 'entity', key: entityKey(n.id, it.id), id: it.id, depth: depth + 1 });
+    const items = opts.sortItems ? [...n.items].sort(opts.sortItems) : n.items;
+    if (items.length <= groupMin) {
+      for (const it of items) rows.push({ type: 'entity', key: entityKey(n.id, it.id), id: it.id, depth: depth + 1 });
       return;
     }
     const byKind = new Map<string, T[]>();
-    for (const it of n.items) {
+    for (const it of items) {
       const l = byKind.get(it.kind);
       if (l) l.push(it);
       else byKind.set(it.kind, [it]);
@@ -185,6 +214,31 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
       const gopen = isOpen(gkey) || (!overrides?.has(gkey) && list.some((it) => it.id === frameEntity));
       rows.push({ type: 'group', key: gkey, kind, depth: depth + 1, count: list.length, open: gopen });
       if (gopen) for (const it of list) rows.push({ type: 'entity', key: entityKey(n.id, it.id), id: it.id, depth: depth + 2 });
+    }
+  };
+  /** the sub-bodies of `n`, directly or in folders by kind; `at` is the depth of the folders (or of the bodies without them) */
+  const emitChildren = (n: Node<T>, at: number): void => {
+    const kids = n.children.filter(isShown);
+    if (opts.sortBodies) kids.sort((a, b) => opts.sortBodies!(a.body, b.body));
+    const groups = opts.bodyGroups;
+    if (!groups) {
+      for (const c of kids) emit(c, at);
+      return;
+    }
+    const byKind = new Map<string, Node<T>[]>();
+    for (const c of kids) {
+      const k = groups.of(c.body);
+      const l = byKind.get(k);
+      if (l) l.push(c);
+      else byKind.set(k, [c]);
+    }
+    const kinds = [...byKind.keys()].sort((a, b) => groups.order(a) - groups.order(b) || groups.label(a).localeCompare(groups.label(b)));
+    for (const kind of kinds) {
+      const list = byKind.get(kind)!;
+      const gkey = bodyGroupKey(n.id, kind);
+      const gopen = isOpen(gkey);
+      rows.push({ type: 'group', key: gkey, kind, label: groups.label(kind), depth: at, count: list.reduce((s, c) => s + c.count, 0), open: gopen });
+      if (gopen) for (const c of list) emit(c, at + 1);
     }
   };
   for (const r of roots) emit(r, 0);
@@ -199,6 +253,8 @@ export interface RevealOptions<T extends TreeItem> {
   groupMin?: number;
   bodyOf?: (item: T) => string | undefined;
   standsForBody?: (item: T) => string | undefined;
+  /** same as in `TreeOptions`: the folders of the bodies are opened too */
+  bodyGroups?: BodyGroups;
 }
 
 /**
@@ -208,12 +264,15 @@ export interface RevealOptions<T extends TreeItem> {
  */
 export function revealKeys<T extends TreeItem>(item: T, opts: RevealOptions<T>): string[] {
   const own = item.provider?.type === 'body' ? item.provider.bodyId : opts.standsForBody?.(item);
-  if (own) return bodyPathKeys(opts.bodies, own).slice(0, -1);
+  if (own) return bodyPathKeys(opts.bodies, own, opts.bodyGroups).slice(0, -1);
   const bodyId = opts.bodyOf?.(item) ?? item.bodyId ?? 'EARTH';
   const known = opts.bodies.some((b) => b.id === bodyId);
   // a body the registry does not know hangs off the first root (as in buildTreeRows)
   const root = opts.bodies.find((b) => !b.parentId || !opts.bodies.some((p) => p.id === b.parentId));
-  const path = known || !root ? bodyPathKeys(opts.bodies, bodyId) : [...bodyPathKeys(opts.bodies, root.id), bodyKey(bodyId)];
+  const g = opts.bodyGroups;
+  const path = known || !root
+    ? bodyPathKeys(opts.bodies, bodyId, g)
+    : [...bodyPathKeys(opts.bodies, root.id, g), ...(g ? [bodyGroupKey(root.id, g.of({ id: bodyId, name: bodyId }))] : []), bodyKey(bodyId)];
   return [...path, groupKey(bodyId, item.kind)];
 }
 
