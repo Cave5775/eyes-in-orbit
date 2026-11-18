@@ -6,7 +6,7 @@ import {
   type SurfaceBody, type V3,
 } from '../src/lib/camera';
 import {
-  FLOOR_SAG_FACTOR, MIN_FLOOR_KM, altitudeFloorKm, groundPointWorld, hasSurface, surfaceBodyAt, worldToGround,
+  FLOOR_SAG_FACTOR, MIN_FLOOR_KM, altitudeFloorKm, drawnRadiusKm, firstBodyHit, groundPointWorld, hasSurface, surfaceBodyAt, worldToGround,
 } from '../src/lib/surface-body';
 import { bodyAxes } from '../src/lib/traverse';
 import { OrbitRig } from '../src/scene/controls';
@@ -351,5 +351,141 @@ describe('OrbitRig in the surface view of another body', () => {
     expect(rig.frame).not.toBeNull();
     expect(dot(rig.frame!.n as V3, POLE)).toBeGreaterThan(0);
     expect(dot(rig.frame!.u as V3, s.u)).toBeGreaterThan(1 - 1e-12);
+  });
+});
+
+describe('review follow-ups: stale ground, a moving body, a low destination', () => {
+  const setup = () => {
+    const cam = new THREE.PerspectiveCamera(45, 1.6, 0.1, 1e12);
+    const rig = new OrbitRig(cam, fakeDom());
+    rig.surfaceBody = BODY;
+    rig.minDist = 0.2;
+    return { cam, rig };
+  };
+
+  it('a transition between other modes (the first-person view) after a visit to another body goes round the Earth', () => {
+    const { rig } = setup();
+    const obj = onBody(5, 100, 60).p;
+    rig.mode = 'surface';
+    rig.az = -Math.PI / 2;
+    rig.el = 0.35;
+    rig.dist = 300;
+    rig.update(vec(obj), new THREE.Vector3(), 0);
+    clock = 1000;
+    rig.switchMode('globe', 1500); // leaving the surface view keeps the body for its blend out
+    expect(rig.surfaceBody).toBe(BODY);
+    clock = 1100;
+    rig.switchMode('firstPerson', 1500); // an observatory view entered during it: Earth
+    expect(rig.surfaceBody).toBe(EARTH_BODY);
+    rig.mode = 'globe';
+    rig.switchMode('surface', 1500);
+    expect(rig.surfaceBody).toBe(EARTH_BODY); // the owner sets a body before entering; here it did not, so the Earth
+  });
+
+  it('the first-person entry blend after a Mars-like visit keeps the Earth floor and starts from where the camera was', () => {
+    const { cam, rig } = setup();
+    const site = (() => { const d: V3 = unit([0.6, 0.3, 0.74]); const r = EARTH_BODY.radiusKm; return [d[0] * r, d[1] * r, d[2] * r] as V3; })();
+    rig.mode = 'surface';
+    rig.update(vec(onBody(0, 0, 10).p), new THREE.Vector3(), 0);
+    rig.switchMode('globe', 100);
+    rig.mode = 'globe';
+    clock = 5000;
+    rig.switchMode('firstPerson', 1500);
+    for (let t = 0; t <= 1600; t += 100) {
+      rig.update(vec(site), new THREE.Vector3(), 5000 + t);
+      expect(altitudeOf([cam.position.x, cam.position.y, cam.position.z])).toBeGreaterThanOrEqual(MIN_ALT_KM - 1e-6);
+    }
+  });
+
+  it('the exit blend follows the body as it moves: the start pose stays where it was relative to the body', () => {
+    const { cam, rig } = setup();
+    const objRel: V3 = sub(onBody(5, 100, 60).p, BODY.c);
+    const at = (c: V3): V3 => [c[0] + objRel[0], c[1] + objRel[1], c[2] + objRel[2]];
+    rig.mode = 'surface';
+    rig.az = -Math.PI / 2;
+    rig.el = 0.35;
+    rig.dist = 20;
+    rig.update(vec(at(BODY.c)), new THREE.Vector3(), 0);
+    const startRel = sub([cam.position.x, cam.position.y, cam.position.z], BODY.c);
+    clock = 1000;
+    rig.switchMode('globe', 1500);
+    rig.az = 0.5;
+    rig.el = 0.3;
+    rig.dist = 20;
+    // the body moves 40 km per second (Mars about 24 km/s relative to the Earth, the Moon 1 km/s: both well within)
+    const moved = (ms: number): V3 => [BODY.c[0] + 40 * (ms / 1000), BODY.c[1], BODY.c[2]];
+    let minAlt = Infinity;
+    for (const ms of [100, 300, 700, 1100, 1500, 1600]) {
+      const c = moved(ms);
+      rig.surfaceBody = { ...BODY, c };
+      rig.update(vec(at(c)), new THREE.Vector3(), 1000 + ms);
+      minAlt = Math.min(minAlt, altitudeOf([cam.position.x, cam.position.y, cam.position.z], { ...BODY, c }));
+      if (ms === 100) {
+        // the first frame: the camera is where it was relative to the body (a start pose left behind would be 4 km off here)
+        expect(len(sub(sub([cam.position.x, cam.position.y, cam.position.z], c), startRel))).toBeLessThan(1.5);
+      }
+    }
+    expect(minAlt).toBeGreaterThanOrEqual(BODY.floorKm - 1e-6);
+    // and without the carry, the same frame in the middle would be 28 km off the body-relative start
+    expect(40 * 0.7).toBeGreaterThan(20);
+  });
+
+  it('a blend to a pose under the floor ends continuously (the Close-up of a rover: 2.8 km up over a body with a 4.1 km floor)', () => {
+    const { cam, rig } = setup();
+    const mars: SurfaceBody = { ...BODY, floorKm: 4.1 };
+    rig.surfaceBody = mars;
+    const rover = onBody(18, 77, 0).p;
+    rig.mode = 'surface';
+    rig.az = -Math.PI / 2;
+    rig.el = 0.35;
+    rig.dist = 300;
+    rig.update(vec(rover), new THREE.Vector3(), 0);
+    clock = 1000;
+    rig.switchMode('globe', 1500);
+    // Close-up pose: 45 degrees over the horizon at 4 km, 2.83 km above the site
+    const up = unit(sub(rover, mars.c));
+    rig.minDist = 0.2;
+    rig.dist = 4;
+    rig.az = 0;
+    rig.el = Math.PI / 4;
+    const pos = (ms: number) => { rig.update(vec(rover), new THREE.Vector3(), 1000 + ms); return [cam.position.x, cam.position.y, cam.position.z] as V3; };
+    let prev = pos(0);
+    let worst = 0;
+    for (let ms = 16; ms <= 1700; ms += 16) {
+      const p = pos(ms);
+      if (ms > 1450) worst = Math.max(worst, len(sub(p, prev)));
+      prev = p;
+    }
+    // the last frames only change by what the blend itself moves: no jump of the 1.3 km the floor used to add at the end
+    expect(worst).toBeLessThan(0.8);
+    expect(altitudeOf(prev, mars)).toBeCloseTo(4 * Math.sin(Math.PI / 4), 0);
+    void up;
+  });
+});
+
+describe('review follow-ups: floor of an ellipsoid body, the body under the view', () => {
+  it('the floor follows the longest drawn semi-axis (Phobos 13 km, Amalthea 125 km) and clears it above the mean sphere', () => {
+    const phobos = defaultBodies.get('PHOBOS');
+    expect(drawnRadiusKm('PHOBOS', phobos.radiusKm)).toBe(13);
+    const sag = 13 * (1 - Math.cos(Math.PI / 128));
+    expect(altitudeFloorKm('PHOBOS', phobos.radiusKm)).toBeCloseTo(Math.max(MIN_FLOOR_KM, 4 * sag + (13 - phobos.radiusKm)), 12);
+    expect(altitudeFloorKm('PHOBOS', phobos.radiusKm)).toBeGreaterThan(13 - phobos.radiusKm);
+    const am = defaultBodies.get('AMALTHEA');
+    expect(altitudeFloorKm('AMALTHEA', am.radiusKm)).toBeGreaterThan(125 - am.radiusKm);
+    expect(drawnRadiusKm('MOON', 1737.4)).toBe(1737.4); // a sphere: the registry radius
+  });
+
+  it('the body the view centre hits first, null when it hits none', () => {
+    const bodies = [
+      { id: 'EARTH', c: [0, 0, 0] as V3, radiusKm: 6378 },
+      { id: 'MOON', c: [384_400, 0, 0] as V3, radiusKm: 1737.4 },
+    ];
+    // a camera near the Moon looking at the Earth: the Earth, though the frame might be the Moon
+    expect(firstBodyHit([380_000, 0, 0], [-1, 0, 0], bodies)).toBe('EARTH');
+    expect(firstBodyHit([0, 20_000, 0], [1, 0, 0], bodies)).toBeNull();
+    // both on the ray: the nearer one
+    expect(firstBodyHit([500_000, 0, 0], [-1, 0, 0], bodies)).toBe('MOON');
+    // behind the camera is no hit
+    expect(firstBodyHit([-50_000, 0, 0], [-1, 0, 0], bodies)).toBeNull();
   });
 });

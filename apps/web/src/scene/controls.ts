@@ -7,6 +7,8 @@ import {
 import { Damper, frameDt, type SmoothParams } from '../lib/smoothing';
 
 const MAX_EL = 1.5;
+/** Lowest floor a blend towards a pose under the body's floor uses, km (10 m: never the ground itself). */
+const MIN_BLEND_FLOOR_KM = 0.01;
 
 export interface FlyOptions {
   dist: number;
@@ -76,7 +78,8 @@ export class OrbitRig {
   offsetFrame: (() => LocalBasis | null) | null = null;
 
   private flight: { t0: number; dur: number; from: THREE.Vector3; fromDist: number; fromAz: number; fromEl: number; to: FlyOptions } | null = null;
-  private blend: { t0: number; dur: number; pos: THREE.Vector3; up: THREE.Vector3; fresh: boolean } | null = null;
+  /** `c`: the ground body's centre when the transition began; the start pose is carried with the body's own motion since (see `update`) */
+  private blend: { t0: number; dur: number; pos: THREE.Vector3; up: THREE.Vector3; fresh: boolean; c: V3 } | null = null;
   private pointers = new Map<number, { x: number; y: number }>();
   private readonly orbitD = new Damper(2);
   private readonly panD = new Damper(2);
@@ -156,6 +159,11 @@ export class OrbitRig {
     return this.flight !== null || this.blend !== null;
   }
 
+  /** A mode transition is running (the owner keeps `surfaceBody` fresh while it does: the body it goes round moves). */
+  get blending(): boolean {
+    return this.blend !== null;
+  }
+
   /** The body the altitude floor and the vertical refer to now: the surface view's body (also while blending in or out of it), else the Earth. */
   private get ground(): SurfaceBody {
     return this.mode === 'surface' || this.blend ? this.surfaceBody : EARTH_BODY;
@@ -200,12 +208,15 @@ export class OrbitRig {
    */
   switchMode(mode: RigMode, durationMs = 1500): void {
     this.stopInertia();
+    // the ground body belongs to the surface view: a transition between two other modes (the first-person view) goes round the Earth
+    if (mode !== 'surface' && this.mode !== 'surface') this.surfaceBody = EARTH_BODY;
     this.blend = {
       t0: performance.now(),
       dur: durationMs,
       pos: this.camera.position.clone(),
       up: this.camera.up.clone(),
       fresh: true,
+      c: [this.surfaceBody.c[0], this.surfaceBody.c[1], this.surfaceBody.c[2]],
     };
     this.flight = null;
     this.pan.set(0, 0, 0);
@@ -269,6 +280,8 @@ export class OrbitRig {
       this.natUp.set(0, 0, 1);
     }
 
+    const g0 = this.ground;
+    let floorNow = g0.floorKm;
     const b = this.blend;
     if (b) {
       const u = Math.min(1, (now - b.t0) / b.dur);
@@ -279,7 +292,11 @@ export class OrbitRig {
       const endTarget = tup(this.target);
       const end = this.endPos.copy(this.target).add(this.natOffset);
       const gb = this.surfaceBody;
-      const pos = blendPosition(tup(b.pos), tup(end), k, gb.floorKm, endTarget, gb);
+      // the body moves (Mars 40 to 60 km in a 1.5 s blend): the start pose is carried with it, so the path stays round the body as it is now
+      const from: V3 = [b.pos.x + gb.c[0] - b.c[0], b.pos.y + gb.c[1] - b.c[1], b.pos.z + gb.c[2] - b.c[2]];
+      // a destination that legitimately sits under the floor (the Close-up of a rover, 2.8 km up over Mars) is not lifted to it
+      floorNow = Math.min(gb.floorKm, Math.max(altitudeOf(tup(end), gb), MIN_BLEND_FLOOR_KM));
+      const pos = blendPosition(from, tup(end), k, floorNow, endTarget, gb);
       this.camera.position.set(pos[0], pos[1], pos[2]);
       const up = slerpDir(tup(b.up), tup(this.natUp), k);
       this.camera.up.set(up[0], up[1], up[2]);
@@ -293,11 +310,11 @@ export class OrbitRig {
     // never closer to the ground than the body's floor (the Earth's 3 km), whatever the mode or pan did: lift radially from the
     // body's centre and keep `dist` honest
     const p = this.camera.position;
-    const g = this.ground;
+    const g = g0;
     const alt = altitudeOf(tup(p), g);
     const rc = Math.hypot(p.x - g.c[0], p.y - g.c[1], p.z - g.c[2]);
-    if (alt < g.floorKm && rc > 0) {
-      const s = (rc + (g.floorKm - alt)) / rc;
+    if (alt < floorNow && rc > 0) {
+      const s = (rc + (floorNow - alt)) / rc;
       p.set(g.c[0] + (p.x - g.c[0]) * s, g.c[1] + (p.y - g.c[1]) * s, g.c[2] + (p.z - g.c[2]) * s);
       if (!this.blend) this.dist = Math.max(this.minDist, p.distanceTo(this.target));
     }

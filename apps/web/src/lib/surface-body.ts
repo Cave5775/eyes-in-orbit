@@ -1,6 +1,7 @@
 import { defaultBodies, fixedToGeodetic, geodeticToFixed, surfaceShape, type Vec3 } from '@eio/core';
 import { EARTH_BODY, MIN_ALT_KM, type SurfaceBody, type V3 } from './camera';
-import { bodyAxes, traverseWorld, type BodyAxes } from './traverse';
+import { bodyAxes, type BodyAxes } from './traverse';
+import { baseEllipsoid, shapeOf } from './body-shape';
 
 /**
  * The ground of the surface-aligned view for ANY drawn body with a radius (pure, no three.js). One rule builds it: the body's
@@ -16,17 +17,25 @@ export const FLOOR_SAG_FACTOR = 4;
 /** Absolute lower bound of the floor, km (10 m): below this the float64-to-float32 camera-relative upload is the limit, not the mesh. */
 export const MIN_FLOOR_KM = 0.01;
 
+/** The longest semi-axis the body is drawn with, km: its `BODY_SHAPES` ellipsoid (also a mesh's fallback), else the registry radius. */
+export function drawnRadiusKm(bodyId: string, radiusKm: number): number {
+  const e = baseEllipsoid(shapeOf(bodyId));
+  return e ? Math.max(radiusKm, ...e.radiiKm) : radiusKm;
+}
+
 /**
- * The lowest the camera may be above a body's ground, km. The Earth keeps its 3 km (`MIN_ALT_KM`, 25 times the sag of its
- * 512 x 256 mesh). Every other body is the 128 x 64 sphere, whose facets sag by R (1 - cos(pi / 128)) = 3.0e-4 R from the true
- * sphere between vertices (the Moon 0.52 km, Mars 1.0 km, Vesta 0.08 km); the floor is `FLOOR_SAG_FACTOR` (4) times that, so the
- * camera is always above the drawn mesh, with the same kind of margin the Earth has, scaling with the body instead of the
- * Earth's size (1.2e-3 R: the Moon 2.1 km, Mars 4.1 km, Ceres 0.57 km, never under `MIN_FLOOR_KM`).
+ * The lowest the camera may be above a body's ground (its mean-radius sphere), km. The Earth keeps its 3 km (`MIN_ALT_KM`, 25
+ * times the sag of its 512 x 256 mesh). Every other body is the 128 x 64 sphere, whose facets sag by R (1 - cos(pi / 128)) = 3.0e-4 R
+ * from the true surface between vertices (the Moon 0.52 km, Mars 1.0 km, Vesta 0.08 km), R being the longest semi-axis it is drawn
+ * with (`drawnRadiusKm`: Phobos 13 km, not its 11.1 km mean). The floor is `FLOOR_SAG_FACTOR` (4) times that sag plus how far the
+ * longest semi-axis stands above the mean sphere, so the camera is above the drawn mesh with the same kind of margin the Earth
+ * has, scaling with the body (1.2e-3 R: the Moon 2.1 km, Mars 4.1 km, Ceres 0.57 km, never under `MIN_FLOOR_KM`).
  */
 export function altitudeFloorKm(bodyId: string, radiusKm: number): number {
   if (bodyId === 'EARTH') return MIN_ALT_KM;
-  const sag = radiusKm * (1 - Math.cos(Math.PI / SPHERE_WIDTH_SEGMENTS));
-  return Math.max(MIN_FLOOR_KM, FLOOR_SAG_FACTOR * sag);
+  const drawn = drawnRadiusKm(bodyId, radiusKm);
+  const sag = drawn * (1 - Math.cos(Math.PI / SPHERE_WIDTH_SEGMENTS));
+  return Math.max(MIN_FLOOR_KM, FLOOR_SAG_FACTOR * sag + (drawn - radiusKm));
 }
 
 /** Whether the surface view can stand on this registry body: it has a radius and is not the Sun. */
@@ -54,11 +63,32 @@ export function surfaceBodyAt(bodyId: string, tMs: number): SurfaceBody | null {
 }
 
 /** Scene (Earth-inertial) position of a point given by planetocentric/geodetic `lat`, `lon` (rad) and height `alt` (km) over the body's shape. */
-export function groundPointWorld(bodyId: string, a: BodyAxes, lat: number, lon: number, alt: number): V3 {
+export function groundPointWorld(bodyId: string, a: BodyAxes, lat: number, lon: number, alt: number, out: V3 = [0, 0, 0]): V3 {
   const f = geodeticToFixed({ lat, lon, alt }, surfaceShape(defaultBodies.get(bodyId)));
-  const out = new Float64Array(3);
-  traverseWorld(Float64Array.from(f), 1, a, out);
-  return [out[0], out[1], out[2]];
+  out[0] = a.o[0] + f[0] * a.ex[0] + f[1] * a.ey[0] + f[2] * a.ez[0];
+  out[1] = a.o[1] + f[0] * a.ex[1] + f[1] * a.ey[1] + f[2] * a.ez[1];
+  out[2] = a.o[2] + f[0] * a.ex[2] + f[1] * a.ey[2] + f[2] * a.ez[2];
+  return out;
+}
+
+/**
+ * The id of the nearest body a ray from `origin` along the unit `dir` hits (spheres of their radius at their centres), or null when it
+ * hits none: the body "under the view centre" for a free camera, so `S` stands on what the camera is looking at.
+ */
+export function firstBodyHit(origin: V3, dir: V3, bodies: readonly { id: string; c: V3; radiusKm: number }[]): string | null {
+  let best: string | null = null, bt = Infinity;
+  for (const b of bodies) {
+    const o: V3 = [origin[0] - b.c[0], origin[1] - b.c[1], origin[2] - b.c[2]];
+    const bq = o[0] * dir[0] + o[1] * dir[1] + o[2] * dir[2];
+    const disc = bq * bq - (o[0] * o[0] + o[1] * o[1] + o[2] * o[2] - b.radiusKm * b.radiusKm);
+    if (disc <= 0) continue;
+    const t = -bq - Math.sqrt(disc);
+    if (t > 0 && t < bt) {
+      bt = t;
+      best = b.id;
+    }
+  }
+  return best;
 }
 
 /** The inverse: latitude, longitude (rad) and height (km) of a scene position over the body's shape. */
