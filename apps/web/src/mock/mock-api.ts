@@ -10,6 +10,7 @@ const MOCK_TILES: Record<string, string> = Object.fromEntries(
     .map(([path, url]) => [path.slice(path.lastIndexOf('/') + 1, -'.png'.length).toUpperCase(), url]),
 );
 import { mockDescription } from './describe';
+import { mockMinorPlanetChunk, mockMinorPlanetIndex } from './minor-planets';
 import {
   mockAscentSeries, mockBodies, mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockObservatories, mockSatellites,
 } from './generators';
@@ -42,6 +43,8 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
   ];
 
   return {
+    minorPlanetIndex: async () => mockMinorPlanetIndex(nowMs),
+    minorPlanetChunk: async (k) => mockMinorPlanetChunk(k),
     credentials: async () => creds.map((c) => ({ ...c })),
     saveCredentials: async (values) => {
       for (const c of creds) {

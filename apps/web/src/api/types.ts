@@ -5,6 +5,19 @@ import type {
 import type { SearchHit } from '../lib/filters';
 import type { MmgisLayer } from '@eio/core';
 
+/** What `GET /api/minor-planets` answers (docs/CONTRACT.md). */
+export interface MinorPlanetIndex {
+  count: number;
+  chunkSize: number;
+  chunks: { chunk: number; count: number; hFirst: number | null; hLast: number | null }[];
+  fetchedAt: number;
+  stale: boolean;
+  skipped: number;
+  epochMin: number | null;
+  epochMax: number | null;
+  credit: string;
+}
+
 /** REST surface of the server contract (also implemented by the offline mock). */
 export interface Api {
   /** `GET /api/entities`: everything (or what changed after `since`), or one page with `page` (`limit` records after `offset` matches; the answer carries `next` unless it is the last page). */
@@ -27,6 +40,10 @@ export interface Api {
   traverse(entityId: string): Promise<RoverTraverse | null>;
   /** Address of a Mars map tile (`GET /api/tiles/mmgis/...`, core `MMGIS_LAYERS`), or null when there is none (the mock has a few). */
   mapTile(layer: Pick<MmgisLayer, 'mission' | 'id'>, z: number, x: number, y: number): string | null;
+  /** `GET /api/minor-planets`: the index of the stored MPCORB orbits (chunks by H), or null when the server has none yet (or does not know the route). */
+  minorPlanetIndex(): Promise<MinorPlanetIndex | null>;
+  /** `GET /api/minor-planets?chunk=k`: chunk k as an `MPCB` container (core `mpcorb.ts`), already gunzipped by the browser. */
+  minorPlanetChunk(k: number): Promise<Uint8Array>;
   /** API keys and logins the local server can use (`GET /api/credentials`); secrets are reported as set / not set only. */
   credentials(): Promise<CredentialInfo[]>;
   /** `PUT /api/credentials`: a string sets a value, `null` removes the UI value. Resolves with the new state. */

@@ -5,7 +5,7 @@ import { createMockApi } from '../mock/mock-api';
 import { setTextMatcher, useStore } from '../state/store';
 import { bodyEntityRecords, localTilePath } from '@eio/core';
 import { PAGE_SIZE, loadPaged } from '../lib/paging';
-import type { Api } from './types';
+import type { Api, MinorPlanetIndex } from './types';
 import { StreamClient } from './stream';
 
 async function getJson<T>(path: string, timeoutMs = 20_000): Promise<T> {
@@ -34,6 +34,12 @@ const restApi: Api = {
   health: () => getJson('/api/health', 4_000),
   traverse: (entityId) => getJson<RoverTraverse>(`/api/traverse/${encodeURIComponent(entityId)}`, 15_000).catch(() => null),
   mapTile: (layer, z, x, y) => localTilePath(layer, z, x, y),
+  minorPlanetIndex: () => getJson<MinorPlanetIndex>('/api/minor-planets', 15_000).catch(() => null),
+  minorPlanetChunk: async (k) => {
+    const res = await fetch(`/api/minor-planets?chunk=${k}`, { signal: AbortSignal.timeout(120_000) });
+    if (!res.ok) throw new Error(`minor planet chunk ${k}: HTTP ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  },
   ascent: (launchId) => getJson<AscentSeries>(`/api/telemetry/${encodeURIComponent(launchId)}`, 8_000).catch(() => null),
   credentials: async () => (await getJson<{ credentials: CredentialInfo[] }>('/api/credentials', 8_000)).credentials,
   saveCredentials: async (values) => {

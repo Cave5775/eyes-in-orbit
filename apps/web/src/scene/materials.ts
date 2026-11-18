@@ -473,3 +473,56 @@ export function createStarMaterial(pixelRatio: number): THREE.ShaderMaterial {
       }`,
   });
 }
+
+/**
+ * The minor planet cloud (scene/minor-planets.ts): a lean points material. One `uOffset` per draw (a cell's anchor minus the camera,
+ * float64 on the CPU, then rounded once), the float32 `position` is the point's offset from the anchor (floating origin, lib/minor-planets.ts).
+ * Size and brightness come from H (`aH`, hundredths from -10): 2 px and full alpha for H <= 9, 1 px and 0.35 for H >= 20, linear between
+ * (the same rule as `pointLook`); no per-point colour, glyph or scope flag. It SHARES the occluder and disc-cone uniform objects of the
+ * entity point material (`shared` = its uniforms), so the same slots hide it and `POINT_HIDE_GLSL` is the same code: a point behind a drawn
+ * body, or over a small far body's disc, is not drawn.
+ */
+export function createMinorPlanetMaterial(shared: Record<string, THREE.IUniform>, pixelRatio: number): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uPx: { value: pixelRatio },
+      uOffset: { value: new THREE.Vector3() },
+      uColor: { value: new THREE.Color(0.82, 0.76, 0.66) },
+      uOccN: shared.uOccN, uOccS: shared.uOccS, uOccE: shared.uOccE, uOccP: shared.uOccP,
+      uGroup: shared.uGroup, uGroupD: shared.uGroupD, uGroupE: shared.uGroupE,
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    vertexShader: /* glsl */ `
+      attribute float aH;
+      uniform float uPx;
+      uniform vec3 uOffset;
+      uniform int uOccN;
+      uniform vec4 uOccS[${MAX_OCCLUDERS}];
+      uniform vec2 uOccE[${MAX_OCCLUDERS}];
+      uniform vec3 uOccP[${MAX_OCCLUDERS}];
+      uniform vec4 uGroup[${GROUP_SLOTS}];
+      uniform float uGroupD[${GROUP_SLOTS}];
+      uniform vec2 uGroupE[${GROUP_SLOTS}];
+      varying float vAlpha;
+      ${POINT_HIDE_GLSL}
+      void main() {
+        vec3 rel = position + uOffset;
+        float h = aH * 0.01 - 10.0;
+        float f = aH > 65534.0 ? 1.0 : clamp((h - 9.0) / 11.0, 0.0, 1.0);
+        vAlpha = 1.0 - 0.65 * f;
+        gl_PointSize = (2.0 - f) * uPx;
+        gl_Position = projectionMatrix * viewMatrix * vec4(rel, 1.0);
+        if (bodyHides(rel) || discHides(rel)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        float a = (1.0 - smoothstep(0.5, 1.0, length(gl_PointCoord * 2.0 - 1.0))) * vAlpha;
+        if (a < 0.03) discard;
+        gl_FragColor = vec4(uColor, a);
+      }`,
+  });
+}

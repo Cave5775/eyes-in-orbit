@@ -11,6 +11,7 @@ import { scopeLabel } from '../lib/scope';
 import { skyCoversScene } from '../lib/sky-mode';
 import { modelDef } from '../scene/models/registry';
 import { LabelLayer, type LabelItem } from '../scene/LabelLayer';
+import { minorPlanetRecord } from '../scene/minor-planets';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { usePanels } from '../state/panels';
 import { api } from '../api/client';
@@ -124,6 +125,12 @@ export function SceneView() {
     };
     const ctl = new SceneController(host.current!, {
       onPick: (id) => store.getState().selectObject(id),
+      // a point of the minor planet cloud: a lightweight entity made for just this point, selected through the one selection route
+      onPickMinorPlanet: (orbit) => {
+        const rec = minorPlanetRecord(orbit, Date.now());
+        store.getState().upsertEntities([rec]);
+        store.getState().selectObject(rec.id);
+      },
       tileUrl: (layer, z, x, y) => api.mapTile(layer, z, x, y),
       onPickMany: (ids, total, x, y) => {
         const ents = store.getState().entities;
@@ -201,12 +208,14 @@ export function SceneView() {
     ctl.setDetailEnabled(v0.detail);
     ctl.setLabelsEnabled(v0.labels);
     ctl.setSunShading(v0.sunShading);
+    ctl.setMinorPlanets(v0.minorPlanets, () => api);
     ctl.setScopeMode(v0.scopeAll ? 'all' : 'auto');
     ctl.setSurfaceAuto(v0.surfaceAuto);
     const unsubView = useView.subscribe((v, p) => {
       if (v.detail !== p.detail) ctl.setDetailEnabled(v.detail);
       if (v.labels !== p.labels) ctl.setLabelsEnabled(v.labels);
       if (v.sunShading !== p.sunShading) ctl.setSunShading(v.sunShading);
+      if (v.minorPlanets !== p.minorPlanets) ctl.setMinorPlanets(v.minorPlanets, () => api);
       if (v.scopeAll !== p.scopeAll) ctl.setScopeMode(v.scopeAll ? 'all' : 'auto');
       if (v.surfaceAuto !== p.surfaceAuto) ctl.setSurfaceAuto(v.surfaceAuto);
     });
