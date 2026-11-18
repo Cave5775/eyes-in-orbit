@@ -234,14 +234,38 @@ describe('matchesType (the type tag: a category id or a kind)', () => {
 });
 
 describe('the list holds every body entity', () => {
-  it('all 50 pass an empty query and a hide term, in browse order', async () => {
+  it('all 62 pass an empty query and a hide term, in browse order', async () => {
     const { classify, isDrawn } = await import('../src/lib/query');
     const { browseOrder } = await import('../src/lib/filters');
     const ordered = [...bodies].sort(browseOrder);
-    expect(ordered.length).toBe(50);
+    expect(ordered.length).toBe(62);
     for (const q of [{ terms: [] as never[] }, { terms: [{ key: 'body' as const, value: 'jupiter', effect: 'hide' as const }] }]) {
-      expect(ordered.filter((r) => isDrawn(classify(r, q))).length).toBe(50);
+      expect(ordered.filter((r) => isDrawn(classify(r, q))).length).toBe(62);
     }
-    expect(categoryCounts(bodies).find(([id]) => id === 'bodies')?.[1]).toBe(50);
+    expect(categoryCounts(bodies).find(([id]) => id === 'bodies')?.[1]).toBe(62);
+  });
+});
+
+describe('the asteroid kind (named asteroids, Dimorphos)', () => {
+  it('Vesta ... Arrokoth are kind asteroid, category bodies (scenery), the body colour, view class body and the label "asteroid"', async () => {
+    const { colorKeyOf, kindLabel } = await import('../src/lib/entity');
+    const { viewClass } = await import('../src/lib/view-class');
+    const asteroids = bodies.filter((b) => b.kind === 'asteroid');
+    expect(asteroids.map((b) => b.id).sort()).toEqual(['body-apophis', 'body-arrokoth', 'body-bennu', 'body-eros', 'body-hygiea', 'body-itokawa', 'body-pallas', 'body-psyche', 'body-ryugu', 'body-vesta', 'body-didymos'].sort());
+    for (const a of asteroids) {
+      expect(categoryOf(a), a.id).toBe('bodies');
+      expect(colorKeyOf(a), a.id).toBe(colorKeyOf(byId('body-ceres')));
+      expect(viewClass(a), a.id).toBe('body');
+      expect(typeOf(a), a.id).toBe('asteroid');
+      expect(kindLabel(a.kind), a.id).toBe('asteroid');
+    }
+    // the moon of an asteroid is a moon
+    expect(byId('body-dimorphos').kind).toBe('moon');
+    expect(categoryOf(byId('body-dimorphos'))).toBe('bodies');
+    // type:asteroid and the plural find them; a bare record of that kind (not a body entity) is a body category too
+    expect(normaliseType('asteroids')).toBe('asteroid');
+    expect(matchesType(byId('body-vesta'), 'asteroid')).toBe(true);
+    expect(matchesType(byId('body-ceres'), 'asteroid')).toBe(false);
+    expect(categoryOf({ kind: 'asteroid' })).toBe('bodies');
   });
 });

@@ -124,7 +124,7 @@ export interface SkyMarker {
   /** entity id (`body-mars`) */
   id: string;
   name: string;
-  /** entity kind: `star`, `planet`, `dwarf_planet` or `moon` */
+  /** entity kind: `star`, `planet`, `dwarf_planet`, `asteroid` or `moon` */
   kind: string;
   /** J2000, topocentric */
   raDeg: number;
@@ -147,7 +147,7 @@ export interface SelectOptions {
   isStreamed?: (bodyId: string, tMs: number) => boolean;
 }
 
-const KINDS: ReadonlySet<string> = new Set(['star', 'planet', 'dwarf_planet', 'moon']);
+const KINDS: ReadonlySet<string> = new Set(['star', 'planet', 'dwarf_planet', 'asteroid', 'moon']);
 
 const rel: V3 = [0, 0, 0];
 const tmpRd: RaDec = { raDeg: 0, decDeg: 0 };
@@ -203,7 +203,7 @@ export function selectBodies(records: Iterable<EntityRecord>, opts: SelectOption
 const MOON_ENTITY = bodyEntityId('MOON');
 
 /**
- * Importance of a marker, smaller wins: the Sun (kind `star`) 0, the Moon 1, planets 2, dwarf planets 3, other moons 4. The
+ * Importance of a marker, smaller wins: the Sun (kind `star`) 0, the Moon 1, planets 2, dwarf planets 3, asteroids 4, other moons 5. The
  * Moon is told by its entity id (a kind `moon` of the Earth); the other moons rank last whichever planet they belong to.
  */
 export function skyRank(m: Pick<SkyMarker, 'id' | 'kind'>): number {
@@ -211,7 +211,8 @@ export function skyRank(m: Pick<SkyMarker, 'id' | 'kind'>): number {
   if (m.id === MOON_ENTITY) return 1;
   if (m.kind === 'planet') return 2;
   if (m.kind === 'dwarf_planet') return 3;
-  return 4;
+  if (m.kind === 'asteroid') return 4;
+  return 5;
 }
 
 /** A marker with its screen position, px. */
@@ -227,7 +228,7 @@ const px: [number, number] = [0, 0];
 
 /**
  * The markers that stay readable: project each, drop those outside the view (more than `LABEL_H` px beyond the viewport), and
- * where two are closer than `LABEL_H` px keep the one of the higher rank (`skyRank`: Sun, Moon, planets, dwarf planets, moons),
+ * where two are closer than `LABEL_H` px keep the one of the higher rank (`skyRank`: Sun, Moon, planets, dwarf planets, asteroids, moons),
  * then the nearer to the observer (no magnitudes are stored: for planets nearer is only a proxy for brighter). Returns the
  * kept ones in rank order, written into `out` (cleared first) so a per-frame caller can reuse the array. `fovDeg` is the
  * view's field of view; a non-positive or non-finite one means the view is not set up yet and nothing is placed.

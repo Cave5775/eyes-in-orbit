@@ -23,6 +23,8 @@ export interface SurfaceBody {
   pole: V3;
   floorKm: number;
 }
+/** Near clip plane of the render camera, km (SceneController): anything nearer than this to the camera is clipped. */
+export const CAMERA_NEAR_KM = 0.005;
 /** Farthest the camera may be from its target. Everything is drawn at its real distance (Voyager 1 is ~2.5e10 km out). */
 export const MAX_DIST_KM = 1e11;
 

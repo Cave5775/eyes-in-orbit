@@ -107,6 +107,19 @@ export const BODY_STYLES: Record<string, BodyStyle> = {
   PROTEUS: { color: '#6d6b69', noise: 0.3 },
   NIX: { color: '#b8b2aa', noise: 0.15 },
   HYDRA: { color: '#c8c4bd', noise: 0.15 },
+  // named asteroids: display colours only (Vesta basaltic grey-buff, the C and B types dark, S types buff, Bennu and Ryugu near black)
+  VESTA: { color: '#a8a095', noise: 0.3 },
+  PALLAS: { color: '#8c8f93', noise: 0.25 },
+  HYGIEA: { color: '#5f5c59', noise: 0.25 },
+  PSYCHE: { color: '#9a9690', noise: 0.3 },
+  BENNU: { color: '#4b4846', noise: 0.35 },
+  RYUGU: { color: '#4f4c4a', noise: 0.35 },
+  DIDYMOS: { color: '#a8a095', noise: 0.25 },
+  DIMORPHOS: { color: '#9d968c', noise: 0.25 },
+  APOPHIS: { color: '#b0a89c', noise: 0.25 },
+  EROS: { color: '#b09a80', noise: 0.3 },
+  ITOKAWA: { color: '#a99a86', noise: 0.3 },
+  ARROKOTH: { color: '#a8603f', noise: 0.2 },
 };
 
 /** The style of a body: its entry, or the neutral grey. */

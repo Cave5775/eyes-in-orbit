@@ -15,7 +15,7 @@ import { focusTarget } from '../lib/focus-target';
 import { isSurfaceFixed, viewClass } from '../lib/view-class';
 import { EARTH_CENTRE, centreLabel, distanceFromCentre, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, EARTH_BODY, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceBody, type SurfaceFrame, type V3 } from '../lib/camera';
+import { CAMERA_NEAR_KM, NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, EARTH_BODY, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceBody, type SurfaceFrame, type V3 } from '../lib/camera';
 import { loadSurfacePref, shouldAutoSurface, surfaceBodyFor } from '../lib/surface';
 import { firstBodyHit, groundPointWorld, hasSurface, surfaceBodyFromAxes, worldToGround } from '../lib/surface-body';
 import { FP_FOV_START, clampFov, clampFpEl, firstPersonLookDir, firstPersonStart, focusActionInFirstPerson, releaseHold, selectionEndsFirstPerson, type FirstPersonSaved } from '../lib/first-person';
@@ -68,7 +68,7 @@ const PICK_RADIUS_PX = 11;
 const MIN_FIT_RADIUS_KM = 1.5;
 const FIT_MARGIN = 1.3;
 /** Render camera clip planes. The scene uses a logarithmic depth buffer, so these only bound what is clipped, not depth precision. */
-const NEAR_KM = 0.005;
+const NEAR_KM = CAMERA_NEAR_KM;
 const FAR_KM = 1e13;
 
 export interface PathLabel {
