@@ -13,7 +13,8 @@ import type { Store } from './store';
  * A row is fresh for 90 days (the mosaics change with a new folder name, which is part of the key); after that a conditional
  * request renews it, and when NASA cannot be asked (OFFLINE=1, the limiter, an error) the stale row is served. The store keeps
  * at most `maxBytes` of tiles (least recently used out first). A tile NASA refuses (403 from S3 for a missing key, 404) is not
- * asked for again for 30 minutes.
+ * asked for again for 30 minutes; it does not count against the source (a clipped mosaic has absent edge tiles). An answer is
+ * read with a 2 MB cap, and the 20 s timeout covers the body too.
  */
 
 export const TILE_SOURCE = 'mmgis-tiles';
@@ -22,6 +23,10 @@ export const TILE_TTL_MS = 90 * 86_400_000;
 export const TILE_CACHE_MAX_BYTES = 300 * 1024 * 1024;
 /** a tile that failed is answered from memory this long */
 export const TILE_NEGATIVE_MS = 30 * 60_000;
+/** a tile answer larger than this is refused (the real ones are 50 to 140 kB) */
+export const TILE_MAX_BYTES = 2 * 1024 * 1024;
+/** the negative cache is pruned beyond this many entries */
+const MAX_FAILED = 2000;
 /** every this many stored tiles the size cap is checked */
 const TRIM_EVERY = 25;
 
@@ -87,20 +92,45 @@ export class MmgisTiles {
     try {
       return await p;
     } catch (err) {
-      if (stale && !(err instanceof TileMissingError)) return stale;
+      if (stale) return stale; // even a refusal: the stored copy is still the best there is
       throw err;
     }
   }
 
+  /** At most `concurrency` jobs at once; a finished job hands its slot straight to the next waiter (no window for a newcomer). */
   private async slot<T>(job: () => Promise<T>): Promise<T> {
     if (this.active >= (this.opts.concurrency ?? 2)) await new Promise<void>((resolve) => this.waiting.push(resolve));
-    this.active++;
+    else this.active++;
     try {
       return await job();
     } finally {
-      this.active--;
-      this.waiting.shift()?.();
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.active--;
     }
+  }
+
+  private remember(key: string, err: Error): void {
+    const now = this.now();
+    this.failed.delete(key);
+    this.failed.set(key, { until: now + TILE_NEGATIVE_MS, err });
+    if (this.failed.size <= MAX_FAILED) return;
+    for (const [k, v] of this.failed) if (v.until <= now) this.failed.delete(k);
+    // still too many: the oldest go first (insertion order)
+    for (const k of this.failed.keys()) {
+      if (this.failed.size <= MAX_FAILED) break;
+      this.failed.delete(k);
+    }
+  }
+
+  /** Tiles remembered as failed. */
+  get failedCount(): number {
+    return this.failed.size;
+  }
+
+  /** Jobs holding a slot (for tests). */
+  get activeCount(): number {
+    return this.active;
   }
 
   private download(layer: MmgisLayer, z: number, x: number, y: number, key: string, storedAt?: number): Promise<TileResult> {
@@ -109,9 +139,8 @@ export class MmgisTiles {
         const headers: Record<string, string> = { 'user-agent': USER_AGENT, accept: 'image/png' };
         if (storedAt !== undefined) headers['if-modified-since'] = new Date(storedAt).toUTCString();
         // user-triggered: it may wait up to 2 s for the spacing (the 2-wide queue above bounds the crowd), never longer
-        const r = await guardedFetch(this.opts.limiter, TILE_SOURCE, mmgisTileUrl(layer, z, x, y), {
-          headers, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 20_000),
-        }, { mode: 'demand', fetch: this.opts.fetch, waitMs: 2000 });
+        const signal = AbortSignal.timeout(this.opts.timeoutMs ?? 20_000);
+        const r = await guardedFetch(this.opts.limiter, TILE_SOURCE, mmgisTileUrl(layer, z, x, y), { headers, signal }, { mode: 'demand', fetch: this.opts.fetch, waitMs: 2000 });
         if ('limited' in r) throw new LimitedError(TILE_SOURCE, r.retryAt, r.reason, r.kind, r.blockKind);
         const res = r.response;
         const now = this.now();
@@ -124,7 +153,7 @@ export class MmgisTiles {
         }
         if (res.status === 403 || res.status === 404) throw new TileMissingError(`HTTP ${res.status} from MMGIS for ${layer.mission}/${layer.id} tile ${z}/${x}/${y}: no such tile`);
         if (!res.ok) throw new Error(`HTTP ${res.status} from MMGIS for ${layer.mission}/${layer.id} tile ${z}/${x}/${y}`);
-        const buf = Buffer.from(await res.arrayBuffer());
+        const buf = await readCapped(res, TILE_MAX_BYTES, signal, `${layer.mission}/${layer.id} tile ${z}/${x}/${y}`);
         if (!isPng(buf)) throw new Error(`MMGIS answered ${layer.mission}/${layer.id} tile ${z}/${x}/${y} with something that is not a PNG (${res.headers.get('content-type') ?? 'no type'}, ${buf.length} bytes)`);
         this.opts.store.setBlob(key, buf, TILE_TTL_MS, now);
         if (++this.stored % TRIM_EVERY === 0) this.opts.store.trimBlobs(TILE_KEY_PREFIX, this.opts.maxBytes ?? TILE_CACHE_MAX_BYTES);
@@ -132,7 +161,7 @@ export class MmgisTiles {
         return { data: buf, fromCache: false, stale: false };
       } catch (err) {
         // a refused request says nothing about the tile; a failed one is remembered so a retrying client does not repeat it
-        if (!(err instanceof LimitedError)) this.failed.set(key, { until: this.now() + TILE_NEGATIVE_MS, err: err as Error });
+        if (!(err instanceof LimitedError)) this.remember(key, err as Error);
         throw err;
       }
     });
@@ -142,6 +171,30 @@ export class MmgisTiles {
   stats(): { count: number; bytes: number } {
     return this.opts.store.blobStats(TILE_KEY_PREFIX);
   }
+}
+
+/** The body of `res`, refused past `max` bytes (Content-Length first, then while reading) or once `signal` has fired. */
+export async function readCapped(res: Response, max: number, signal: AbortSignal, what: string): Promise<Buffer> {
+  const declared = Number(res.headers.get('content-length') ?? NaN);
+  if (Number.isFinite(declared) && declared > max) throw new Error(`MMGIS answered ${what} with ${declared} bytes (cap ${max})`);
+  if (!res.body) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let n = 0;
+  try {
+    for (;;) {
+      if (signal.aborted) throw new Error(`MMGIS ${what}: timed out while reading the answer`);
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.byteLength;
+      if (n > max) throw new Error(`MMGIS answered ${what} with more than ${max} bytes`);
+      parts.push(value);
+    }
+  } catch (err) {
+    void reader.cancel().catch(() => {});
+    throw err;
+  }
+  return Buffer.concat(parts, n);
 }
 
 const NUM = /^\d{1,7}$/;

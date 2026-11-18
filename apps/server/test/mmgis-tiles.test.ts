@@ -3,7 +3,7 @@ import { inflateSync } from 'node:zlib';
 import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { mmgisLayer, tmsOf } from '@eio/core';
-import { MmgisTiles, TILE_KEY_PREFIX, TILE_NEGATIVE_MS, TILE_TTL_MS, registerMmgisTiles, tileKey } from '../src/mmgis-tiles';
+import { MmgisTiles, TILE_KEY_PREFIX, TILE_MAX_BYTES, TILE_NEGATIVE_MS, TILE_TTL_MS, readCapped, registerMmgisTiles, tileKey } from '../src/mmgis-tiles';
 import { Limiter } from '../src/net/limiter';
 import { LIMITS } from '../src/net/limits';
 import { Store } from '../src/store';
@@ -139,16 +139,81 @@ describe('GET /api/tiles/mmgis/:mission/:layer/:z/:x/:y.png', () => {
     await app.close();
   });
 
-  it('5 refusals within 10 min stop the source for an hour', async () => {
+  it('absent tiles (20 distinct 403s, the real limiter table) never block the source; the next existing tile is fetched', async () => {
     const store = new Store(':memory:');
-    const limiter = new Limiter(store, { limits: { 'mmgis-tiles': { ...LIMITS['mmgis-tiles'], minSpacingMs: 0 } } });
-    const refused = vi.fn<typeof fetch>(async () => new Response('denied', { status: 403 }));
-    const tiles = new MmgisTiles({ store, limiter, fetch: refused });
+    let t = Date.now();
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => t, sleep: async (ms) => void (t += ms) });
+    const f = vi.fn<typeof fetch>(async (url) => (String(url).endsWith('/11/1463/1130.png') ? png() : new Response('<Error><Code>AccessDenied</Code></Error>', { status: 403 })));
+    const tiles = new MmgisTiles({ store, limiter, fetch: f, now: () => t });
     const l = mmgisLayer('M20', 'syrtis')!;
-    for (let x = 0; x < 5; x++) await expect(tiles.get(l, 12, 2816 + x, 2234)).rejects.toThrow(/no such tile/);
-    await expect(tiles.get(l, 12, 2830, 2234)).rejects.toThrow(/until/);
-    expect(refused).toHaveBeenCalledTimes(5);
-    expect(limiter.status('mmgis-tiles')!.blockedUntil).toBeGreaterThan(Date.now() + 55 * 60_000);
+    for (let x = 0; x < 20; x++) await expect(tiles.get(l, 12, 2816 + x, 2234)).rejects.toThrow(/no such tile/);
+    expect(limiter.status('mmgis-tiles')?.blockedUntil).toBeUndefined();
+    const ok = await tiles.get(mmgisLayer('M20', 'color')!, 11, 1463, 1130);
+    expect(ok!.data.equals(PNG)).toBe(true);
+    expect(f).toHaveBeenCalledTimes(21);
+  });
+
+  it('server errors back off the source; a stale copy is served even when the refresh is refused', async () => {
+    const store = new Store(':memory:');
+    const limiter = new Limiter(store, { limits: LIMITS });
+    const failing = vi.fn<typeof fetch>(async () => new Response('bad gateway', { status: 502 }));
+    const tiles = new MmgisTiles({ store, limiter, fetch: failing });
+    await expect(tiles.get(mmgisLayer('M20', 'color')!, 11, 1463, 1130)).rejects.toThrow(/HTTP 502/);
+    expect(limiter.status('mmgis-tiles')!.blockedUntil).toBeGreaterThan(Date.now() + 50_000);
+
+    const key = tileKey(mmgisLayer('M20', 'color')!, 11, 1464, 1130);
+    const store2 = new Store(':memory:');
+    store2.setBlob(key, PNG, TILE_TTL_MS, Date.now() - TILE_TTL_MS - 1);
+    const refused = vi.fn<typeof fetch>(async () => new Response('denied', { status: 403 }));
+    const t2 = new MmgisTiles({ store: store2, limiter: noLimits(), fetch: refused });
+    for (let i = 0; i < 2; i++) {
+      const r = await t2.get(mmgisLayer('M20', 'color')!, 11, 1464, 1130);
+      expect(r).toMatchObject({ stale: true });
+    }
+    expect(refused).toHaveBeenCalledTimes(1); // the second answer came from the negative cache
+  });
+
+  it('refuses answers over 2 MB (declared or streamed) and a body read after the timeout', async () => {
+    const big = vi.fn<typeof fetch>(async () => new Response(new Uint8Array(16), { status: 200, headers: { 'content-length': String(TILE_MAX_BYTES + 1) } }));
+    await expect(new MmgisTiles({ store: new Store(':memory:'), limiter: noLimits(), fetch: big }).get(mmgisLayer('M20', 'color')!, 11, 1463, 1130)).rejects.toThrow(/cap/);
+    const chunk = new Uint8Array(1024 * 1024);
+    const stream = () => new ReadableStream<Uint8Array>({ pull(c) { c.enqueue(chunk); } }); // endless, no content-length
+    await expect(readCapped(new Response(stream()), TILE_MAX_BYTES, AbortSignal.timeout(10_000), 't')).rejects.toThrow(/more than 2097152 bytes/);
+    await expect(readCapped(new Response(stream()), TILE_MAX_BYTES, AbortSignal.abort(), 't')).rejects.toThrow(/timed out/);
+    expect((await readCapped(png(), TILE_MAX_BYTES, AbortSignal.timeout(10_000), 't')).equals(PNG)).toBe(true);
+  });
+
+  it('never runs more downloads than its concurrency, however the requests arrive', async () => {
+    let running = 0, most = 0;
+    const f = vi.fn<typeof fetch>(async () => {
+      running++;
+      most = Math.max(most, running);
+      await new Promise((r) => setTimeout(r, Math.random() * 5));
+      running--;
+      return png();
+    });
+    const tiles = new MmgisTiles({ store: new Store(':memory:'), limiter: noLimits(), fetch: f, concurrency: 2 });
+    const l = mmgisLayer('M20', 'syrtis')!;
+    const all: Promise<unknown>[] = [];
+    for (let i = 0; i < 12; i++) {
+      all.push(tiles.get(l, 12, 2816 + i, 2234).then(() => tiles.get(l, 12, 2816 + i, 2235)));
+      if (i % 3 === 0) await Promise.resolve();
+    }
+    await Promise.all(all);
+    expect(f).toHaveBeenCalledTimes(24);
+    expect(most).toBe(2);
+    expect(tiles.activeCount).toBe(0);
+  });
+
+  it('the negative cache is pruned past 2000 tiles', async () => {
+    const refused = vi.fn<typeof fetch>(async () => new Response('denied', { status: 404 }));
+    const tiles = new MmgisTiles({ store: new Store(':memory:'), limiter: noLimits(), fetch: refused, concurrency: 8 });
+    const l = mmgisLayer('M20', 'syrtis')!;
+    const jobs: Promise<unknown>[] = [];
+    for (let x = 2816; x <= 2944; x++) for (let y = 2221; y < 2238; y++) jobs.push(tiles.get(l, 12, x, y).catch(() => null));
+    await Promise.all(jobs);
+    expect(refused.mock.calls.length).toBeGreaterThan(2000);
+    expect(tiles.failedCount).toBeLessThanOrEqual(2000);
   });
 
   it('one download for simultaneous requests of the same tile', async () => {
