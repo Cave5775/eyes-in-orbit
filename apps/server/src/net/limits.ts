@@ -122,6 +122,14 @@ export const LIMITS: Record<string, SourceLimit> = {
     blockOn: { 429: 15 * MIN, 503: 15 * MIN },
     backoff: { baseMs: MIN, maxMs: HOUR, statuses: [500, 502, 503, 504] },
   },
+  // Minor Planet Center MPCORB (apps/server/src/connectors/minor-planets.ts): one ~70 MB gz download a month (cache TTL 30 days, conditional
+  // request), so 2 attempts an hour is far more than needed; 403/429/503 block for hours, failures back off from 1 h to 12 h
+  mpcorb: {
+    label: 'Minor Planet Center MPCORB', policy: 'unpublished (https://www.minorplanetcenter.net/iau/MPCORB.html: the file is updated daily, software may include it with the header and credit)',
+    minSpacingMs: 60_000, perHour: 2, perDay: 6, maxWaitMs: 0,
+    blockOn: { 403: 6 * HOUR, 429: 6 * HOUR, 503: 3 * HOUR },
+    backoff: { baseMs: HOUR, maxMs: 12 * HOUR },
+  },
   other: { label: 'Other hosts', policy: 'unpublished', minSpacingMs: 1000, perHour: 120 },
 };
 
@@ -144,6 +152,7 @@ export function sourceForUrl(url: string): string {
   if (is('gibs.earthdata.nasa.gov')) return 'gibs';
   if (is('mast.stsci.edu')) return 'mast';
   if (is('mars.nasa.gov')) return 'mmgis';
+  if (is('minorplanetcenter.net') || is('minorplanetcenter.org')) return 'mpcorb';
   return 'other';
 }
 
@@ -151,5 +160,5 @@ export function sourceForUrl(url: string): string {
 export const FEED_SOURCE: Record<string, string> = {
   celestrak: 'celestrak', spacetrack: 'spacetrack:query', launchlibrary: 'll2', snapi: 'snapi', dsn: 'dsn',
   horizons: 'horizons', 'horizons-bodies': 'horizons', 'iss-rest': 'wheretheiss', 'iss-live': 'iss-live',
-  wikipedia: 'wikimedia', discos: 'discos', 'surface-sites': 'mmgis',
+  wikipedia: 'wikimedia', discos: 'discos', 'surface-sites': 'mmgis', 'minor-planets': 'mpcorb',
 };

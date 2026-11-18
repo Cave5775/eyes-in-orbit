@@ -60,6 +60,12 @@ export const FEED_CATALOG: Record<string, FeedInfo> = {
     source: 'LROC (Arizona State University), PDS Geosciences Node, NASA MMGIS',
     link: 'https://github.com/NASA-AMMOS/MMGIS',
   },
+  'minor-planets': {
+    name: 'Minor planets',
+    provides: 'About 1.4 million asteroid orbits (osculating elements at their epochs, so positions are approximate) drawn as a point cloud; no labels or orbit lines, a click shows the designation and H.',
+    source: 'Minor Planet Center (IAU), MPCORB',
+    link: 'https://www.minorplanetcenter.net/iau/MPCORB.html',
+  },
   observatories: {
     name: 'Ground observatories',
     provides: 'Mauna Kea, Paranal and Rubin as fixed ground points (offline list; coordinates cited in the connector).',

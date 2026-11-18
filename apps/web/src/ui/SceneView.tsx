@@ -11,6 +11,8 @@ import { scopeLabel } from '../lib/scope';
 import { skyCoversScene } from '../lib/sky-mode';
 import { modelDef } from '../scene/models/registry';
 import { LabelLayer, type LabelItem } from '../scene/LabelLayer';
+import { minorPlanetRecord } from '../scene/minor-planets';
+import { rememberPicked } from '../lib/minor-planet-recent';
 import { SceneController, type PathLabel, type SceneStats } from '../scene/SceneController';
 import { usePanels } from '../state/panels';
 import { api } from '../api/client';
@@ -56,6 +58,9 @@ function isTyping(e: KeyboardEvent): boolean {
   const t = e.target as HTMLElement | null;
   return !!t && (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t.isContentEditable);
 }
+
+/** ids of the lightweight minor planet entities made by picks, most recent first (lib/minor-planet-recent.ts) */
+let pickedRecent: string[] = [];
 
 export function SceneView() {
   const host = useRef<HTMLDivElement>(null);
@@ -124,6 +129,16 @@ export function SceneView() {
     };
     const ctl = new SceneController(host.current!, {
       onPick: (id) => store.getState().selectObject(id),
+      // a point of the minor planet cloud: a lightweight entity made for just this point, selected through the one selection route
+      onPickMinorPlanet: (orbit) => {
+        const rec = minorPlanetRecord(orbit, Date.now());
+        store.getState().upsertEntities([rec]);
+        store.getState().selectObject(rec.id);
+        // only the last few stay in the catalogue (and the selection, whatever it is)
+        const r = rememberPicked(pickedRecent, rec.id, store.getState().selectedId);
+        pickedRecent = r.recent;
+        store.getState().removeEntities(r.evict);
+      },
       tileUrl: (layer, z, x, y) => api.mapTile(layer, z, x, y),
       onPickMany: (ids, total, x, y) => {
         const ents = store.getState().entities;
@@ -201,6 +216,7 @@ export function SceneView() {
     ctl.setDetailEnabled(v0.detail);
     ctl.setLabelsEnabled(v0.labels);
     ctl.setSunShading(v0.sunShading);
+    ctl.setMinorPlanets(v0.minorPlanets, () => api);
     ctl.setScopeMode(v0.scopeAll ? 'all' : 'auto');
     ctl.setSurfaceAuto(v0.surfaceAuto);
     ctl.setSmoothCamera(v0.smoothCamera);
@@ -208,6 +224,7 @@ export function SceneView() {
       if (v.detail !== p.detail) ctl.setDetailEnabled(v.detail);
       if (v.labels !== p.labels) ctl.setLabelsEnabled(v.labels);
       if (v.sunShading !== p.sunShading) ctl.setSunShading(v.sunShading);
+      if (v.minorPlanets !== p.minorPlanets) ctl.setMinorPlanets(v.minorPlanets, () => api);
       if (v.scopeAll !== p.scopeAll) ctl.setScopeMode(v.scopeAll ? 'all' : 'auto');
       if (v.surfaceAuto !== p.surfaceAuto) ctl.setSurfaceAuto(v.surfaceAuto);
       if (v.smoothCamera !== p.smoothCamera) ctl.setSmoothCamera(v.smoothCamera);

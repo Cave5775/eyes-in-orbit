@@ -24,7 +24,10 @@ export interface OrbitLineSpec {
   role: OrbitRole;
 }
 
-export type OrbitRec = Pick<EntityRecord, 'id' | 'bodyId' | 'parentId' | 'provider' | 'render' | 'createdAt' | 'updatedAt'>;
+export type OrbitRec = Pick<EntityRecord, 'id' | 'bodyId' | 'parentId' | 'provider' | 'render' | 'createdAt' | 'updatedAt'> & { group?: string };
+
+/** The group of the lightweight entities made for picked minor planets (scene/minor-planets.ts): they get an orbit line only while selected, never as a dimmed child of the Sun. */
+const MINOR_PLANET_GROUP = 'minor-planets';
 
 const isBodyRec = (rec: OrbitRec): boolean => rec.provider?.type === 'body';
 
@@ -60,7 +63,7 @@ export function orbitLines<R extends OrbitRec>(recs: ReadonlyMap<string, R>, sel
   const group = (rec: R): number => (isBodyRec(rec) ? 0 : rec.render?.orbitLine ? 1 : 2);
   const children: R[] = [];
   for (const rec of recs.values()) {
-    if (rec.id === sel.id || isSurfaceFixed(rec)) continue;
+    if (rec.id === sel.id || isSurfaceFixed(rec) || rec.group === MINOR_PLANET_GROUP) continue;
     if (isBodyRec(rec) ? rec.parentId !== sel.id || !rec.render?.orbitLine : rec.bodyId !== selBody || !(rec.render?.orbitLine || hasOrbitProvider(rec))) continue;
     if (visible(rec)) children.push(rec);
   }

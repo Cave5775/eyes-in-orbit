@@ -14,6 +14,8 @@ export interface ViewState {
   detail: boolean;
   /** day / night shading from the Sun on bodies and models; off lights everything evenly (View menu) */
   sunShading: boolean;
+  /** the minor planet point cloud (MPC MPCORB), View menu "Minor planets"; remembered, default on */
+  minorPlanets: boolean;
   scopeAll: boolean;
   surface: boolean;
   /** focusing an object near the Earth switches to the surface view (Settings; the last S / Surface also sets it) */
@@ -34,6 +36,7 @@ export interface ViewState {
   toggleDetail(): void;
   setDetail(on: boolean): void;
   toggleSunShading(): void;
+  toggleMinorPlanets(): void;
   toggleScope(): void;
   setSurface(on: boolean): void;
   setSmoothCamera(on: boolean): void;
@@ -49,6 +52,7 @@ export const LABELS_KEY = 'eio.labels';
 export const DETAIL_KEY = 'eio.detail';
 export const SUN_SHADING_KEY = 'eio.sunShading';
 export const SMOOTH_CAMERA_KEY = 'eio.smoothCamera';
+export const MINOR_PLANETS_KEY = 'eio.minorPlanets';
 export { SKY_TRANSITION_KEY };
 export { SURFACE_PREF_KEY };
 
@@ -95,6 +99,7 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
     labels: loadFlag(LABELS_KEY, storage),
     detail: loadFlag(DETAIL_KEY, storage),
     sunShading: loadFlag(SUN_SHADING_KEY, storage),
+    minorPlanets: loadFlag(MINOR_PLANETS_KEY, storage),
     scopeAll: false,
     surface: false,
     surfaceAuto: loadFlag(SURFACE_PREF_KEY, storage),
@@ -117,6 +122,11 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
       const sunShading = !get().sunShading;
       saveFlag(SUN_SHADING_KEY, sunShading, storage);
       set({ sunShading });
+    },
+    toggleMinorPlanets: () => {
+      const minorPlanets = !get().minorPlanets;
+      saveFlag(MINOR_PLANETS_KEY, minorPlanets, storage);
+      set({ minorPlanets });
     },
     toggleScope: () => set({ scopeAll: !get().scopeAll }),
     setSurface: (surface) => { if (get().surface !== surface) set({ surface }); },

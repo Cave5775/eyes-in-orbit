@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import {
-  DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci,
+  DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci, sunPositionEci,
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm, type RoverTraverse,
 } from '@eio/core';
 import { localTilePath, type MmgisLayer } from '@eio/core';
 import { listedParent } from '../lib/listed-parent';
+import type { Api } from '../api/types';
+import type { PickedOrbit } from '../lib/minor-planets';
+import { MINOR_PLANET_PROBE, MinorPlanetLayer } from './minor-planets';
 import { modelViewDirection } from '../lib/attitude';
 import { bodyPickScan, gatherWithBodies } from '../lib/body-scene';
 import { selectedBodyEntityId } from '../lib/body-textures';
@@ -89,6 +92,8 @@ export interface SceneCallbacks {
    * and calls onPick. onPick is not called for a click that opens the list.
    */
   onPickMany?(ids: string[], total: number, x: number, y: number): void;
+  /** A click on empty space hit a point of the minor planet cloud (MPC MPCORB): its orbit, to become a lightweight entity and be selected through `selectObject`. */
+  onPickMinorPlanet?(orbit: PickedOrbit): void;
   /**
    * The cursor is on the selected launch's drawn trajectory (a planned flight with real sample times) and nothing above it
    * in the pick order is: `tMs` is the sim time of the nearest point of the line, `x`/`y` the cursor and `sx`/`sy` that point,
@@ -245,6 +250,8 @@ export class SceneController {
   private patchDir = new THREE.Vector3();
   private stars: THREE.Points;
   private pointMat: THREE.ShaderMaterial;
+  /** the minor planet point cloud (scene/minor-planets.ts) */
+  private minor!: MinorPlanetLayer;
   private sats: PointSet;
   private dyn: PointSet;
   private pads: PointSet;
@@ -412,6 +419,7 @@ export class SceneController {
     this.rig.el = 0.35;
 
     this.pointMat = createPointMaterial(dpr);
+    this.minor = new MinorPlanetLayer(this.scene, this.pointMat.uniforms, dpr);
 
     // stars follow the camera (they sit on the unit sphere around the render origin) and are pinned to the far plane
     const NSTAR = 2600;
@@ -1455,6 +1463,7 @@ export class SceneController {
     this.cleanup.forEach((fn) => fn());
     this.rig.destroy();
     this.propagator.dispose();
+    this.minor.dispose();
     this.models.dispose();
     this.celestial.dispose();
     this.detail.dispose();
@@ -1808,6 +1817,22 @@ export class SceneController {
     return { ids: r.items.map((i) => i.id), total: r.total };
   }
 
+  /** Pick the minor planet cloud at a screen point (CSS px in the container); true when a point was hit (the orbit arrives asynchronously). */
+  private pickMinorPlanet(px: number, py: number): boolean {
+    const w = this.container.clientWidth, h = this.container.clientHeight;
+    const v = new THREE.Vector3((px / w) * 2 - 1, 1 - (py / h) * 2, 0.5).unproject(this.rcam).normalize();
+    const pxPerRad = h / (2 * Math.tan((this.camera.fov * DEG) / 2));
+    // the same two tests the point shader applies: a drawn body in front, a small far body's disc over it
+    const cones = this.discCones;
+    return this.minor.pick([v.x, v.y, v.z], PICK_RADIUS_PX / pxPerRad, (x, y, z) => this.occludedRel(x, y, z) || hiddenByDisc(x, y, z, cones), (o) => { if (o) this.cb.onPickMinorPlanet?.(o); });
+  }
+
+  /** View menu "Minor planets": draw the cloud or not (it is fetched the first time it is on). */
+  setMinorPlanets(on: boolean, getApi?: () => Api): void {
+    this.minor.setEnabled(on);
+    if (on && getApi) this.minor.load(getApi);
+  }
+
   /** What hover lands on: the nearest visible object, or the body whose disc the hidden objects are over. */
   private pick(px: number, py: number): string | null {
     return this.pickAll(px, py, 1, false, true).ids[0] ?? null;
@@ -1864,6 +1889,8 @@ export class SceneController {
           return;
         }
       }
+      // nothing else under the cursor: the nearest drawn point of the minor planet cloud, if any (its orbit comes back from the worker)
+      if (ids.length === 0 && this.cb.onPickMinorPlanet && this.pickMinorPlanet(p.x, p.y)) return;
       if (ids.length === 1 || (ids.length > 1 && !this.cb.onPickMany)) this.cb.onPick(ids[0]);
       else if (ids.length > 1) {
         this.setHover(null);
@@ -2068,6 +2095,14 @@ export class SceneController {
       u.uGroup.value[i].set(g.x, g.y, g.z, g.sinR);
       u.uGroupD.value[i] = g.dist;
       u.uGroupE.value[i].set(g.shell, g.back);
+    });
+
+    // the minor planet cloud: hidden when `classify()` hides (or the query leaves out) a representative minor planet record or the scope drops it (no rule of its own);
+    // per-cell offsets in float64 (anchor + Sun - camera), culling and detail, a new worker pass when its positions are visibly old
+    this.minor.setHidden(!isDrawn(classify(MINOR_PLANET_PROBE, this.query, this.ctx)) || !inScope({ parent: 'SUN', keep: false, kind: 'asteroid' }, this.scopeBodySet, this.scopeMode));
+    const dirV = cam.getWorldDirection(this.patchDir);
+    this.minor.update({
+      origin: f.origin, dir: [dirV.x, dirV.y, dirV.z], sun: sunPositionEci(t), simMs: t, fovRad: cam.fov * DEG, aspect: cam.aspect, heightPx: this.container.clientHeight,
     });
 
     this.celestial.applyScope(this.bodyScoped, this.camera.fov, this.container.clientHeight); // another planet's moons: no glyph, label or pick

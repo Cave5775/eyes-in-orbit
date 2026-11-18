@@ -25,6 +25,7 @@ import { snapi } from './connectors/snapi';
 import { spacetrack } from './connectors/spacetrack';
 import { observatories } from './connectors/observatories';
 import { surfaceSites } from './connectors/surface-sites';
+import { MinorPlanetData, minorPlanets, registerMinorPlanets } from './connectors/minor-planets';
 import { notam, satnogs, webcastOcr } from './connectors/stubs';
 import { Http } from './http';
 import { Hub } from './hub';
@@ -32,7 +33,7 @@ import { Store } from './store';
 import { registerStream } from './ws';
 
 const CONNECTORS: Connector[] = [
-  bodies, flightclub, celestrak, launchlibrary, snapi, surfaceSites, dsn, horizons, horizonsBodies, observatories, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
+  bodies, flightclub, celestrak, launchlibrary, snapi, surfaceSites, dsn, horizons, horizonsBodies, observatories, minorPlanets, issRest, issLive, spacetrack, satnogs, notam, webcastOcr,
 ];
 
 async function main(): Promise<void> {
@@ -43,7 +44,7 @@ async function main(): Promise<void> {
   setBackoffLog(backoffLogIn(config.dataDir));
   const store = new Store(join(config.dataDir, 'cache.sqlite'));
   // CelesTrak rows are the fallback while CelesTrak blocks us, so they are kept at any age
-  store.prune(30 * 86_400_000, Date.now(), [CELESTRAK_CACHE_PREFIX]);
+  store.prune(30 * 86_400_000, Date.now(), [CELESTRAK_CACHE_PREFIX, 'mpcorb:']);
   const http = new Http(store, { offline: config.offline });
   const hub = new Hub();
   const off = new Set(config.disabledConnectors);
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
     },
   }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline, limiter: http.limiter }), describe, new ArchiveImagesService({ store, http }));
   registerMmgisTiles(app, new MmgisTiles({ store, limiter: http.limiter, offline: config.offline }));
+  registerMinorPlanets(app, new MinorPlanetData(store));
   await registerStream(app, hub);
 
   await app.listen({ port: config.port, host: config.host });

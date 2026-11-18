@@ -52,43 +52,12 @@ export function setOccluderUniforms(u: Record<string, THREE.IUniform>, set: Occl
 }
 
 /**
- * Per-point colour, pixel size (0 hides), glyph and scope flag; screen-space sized so 12k objects stay legible.
- * Positions arrive camera-relative (floating origin). Points are NOT depth tested: a sprite has one depth for all its
- * pixels, so against a body's depth it was half clipped at the limb (and z-fought on the ground). Instead the vertex
- * shader hides a point whose line of sight crosses any drawn body (analytic ray test against the occluder slots) and `aShow` (scope policy, 0/1) hides
- * out-of-scope points. `aShow >= 1.5` (2) marks a point exempt from the small-disc hiding: `uGroup[i]` is a body's cone
- * (xyz unit direction from the camera, w the sine of its angular radius, > 1 = off) and `uGroupD[i]` the distance to its
- * centre and `uGroupE[i]` the radius of a shell about it (the body's own system, LEO for the Earth) and how far behind the centre
- * plane the cone still hides; a non-exempt point inside a cone and nearer than the body (plus that depth), or inside the shell, is not drawn (lib/disc-hide.ts has the same test for picking).
+ * The two GLSL functions every point material uses to hide a camera-relative point: `discHides` (small far body cones) and `bodyHides`
+ * (any drawn body in front), over the uniforms `uOccN uOccS uOccE uOccP uGroup uGroupD uGroupE` declared by the material. Shared by the
+ * entity point material and the minor planet cloud (`createMinorPlanetMaterial`), so the two cannot disagree.
  */
-export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uPx: { value: pixelRatio },
-      ...occlusionUniforms(),
-      uGroup: { value: Array.from({ length: GROUP_SLOTS }, () => { const g = offGroup(); return new THREE.Vector4(g.x, g.y, g.z, g.sinR); }) },
-      uGroupD: { value: new Array<number>(GROUP_SLOTS).fill(0) },
-      uGroupE: { value: Array.from({ length: GROUP_SLOTS }, () => new THREE.Vector2(0, 0)) },
-    },
-    transparent: true,
-    depthWrite: false,
-    depthTest: false,
-    vertexShader: /* glsl */ `
-      attribute vec3 aColor;
-      attribute float aSize;
-      attribute float aGlyph;
-      attribute float aShow;
-      uniform float uPx;
-      uniform int uOccN;
-      uniform vec4 uOccS[${MAX_OCCLUDERS}];
-      uniform vec2 uOccE[${MAX_OCCLUDERS}];
-      uniform vec3 uOccP[${MAX_OCCLUDERS}];
-      uniform vec4 uGroup[${GROUP_SLOTS}];
-      uniform float uGroupD[${GROUP_SLOTS}];
-      uniform vec2 uGroupE[${GROUP_SLOTS}];
-      varying vec3 vColor;
-      varying float vGlyph;
-      // Small, far body (disc radius <= GROUP_DISC_PX): inside its pick cone and nearer than its centre, or within its shell -> not drawn.
+export const POINT_HIDE_GLSL = /* glsl */ `
+// Small, far body (disc radius <= GROUP_DISC_PX): inside its pick cone and nearer than its centre, or within its shell -> not drawn.
       // Same maths as hiddenByDisc in lib/disc-hide.ts; the sine of the miss angle is |cross(u, dir)| (no cancellation).
       bool discHides(vec3 rel) {
         float L = length(rel);
@@ -127,6 +96,46 @@ export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
         }
         return false;
       }
+`;
+
+/**
+ * Per-point colour, pixel size (0 hides), glyph and scope flag; screen-space sized so 12k objects stay legible.
+ * Positions arrive camera-relative (floating origin). Points are NOT depth tested: a sprite has one depth for all its
+ * pixels, so against a body's depth it was half clipped at the limb (and z-fought on the ground). Instead the vertex
+ * shader hides a point whose line of sight crosses any drawn body (analytic ray test against the occluder slots) and `aShow` (scope policy, 0/1) hides
+ * out-of-scope points. `aShow >= 1.5` (2) marks a point exempt from the small-disc hiding: `uGroup[i]` is a body's cone
+ * (xyz unit direction from the camera, w the sine of its angular radius, > 1 = off) and `uGroupD[i]` the distance to its
+ * centre and `uGroupE[i]` the radius of a shell about it (the body's own system, LEO for the Earth) and how far behind the centre
+ * plane the cone still hides; a non-exempt point inside a cone and nearer than the body (plus that depth), or inside the shell, is not drawn (lib/disc-hide.ts has the same test for picking).
+ */
+export function createPointMaterial(pixelRatio: number): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uPx: { value: pixelRatio },
+      ...occlusionUniforms(),
+      uGroup: { value: Array.from({ length: GROUP_SLOTS }, () => { const g = offGroup(); return new THREE.Vector4(g.x, g.y, g.z, g.sinR); }) },
+      uGroupD: { value: new Array<number>(GROUP_SLOTS).fill(0) },
+      uGroupE: { value: Array.from({ length: GROUP_SLOTS }, () => new THREE.Vector2(0, 0)) },
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    vertexShader: /* glsl */ `
+      attribute vec3 aColor;
+      attribute float aSize;
+      attribute float aGlyph;
+      attribute float aShow;
+      uniform float uPx;
+      uniform int uOccN;
+      uniform vec4 uOccS[${MAX_OCCLUDERS}];
+      uniform vec2 uOccE[${MAX_OCCLUDERS}];
+      uniform vec3 uOccP[${MAX_OCCLUDERS}];
+      uniform vec4 uGroup[${GROUP_SLOTS}];
+      uniform float uGroupD[${GROUP_SLOTS}];
+      uniform vec2 uGroupE[${GROUP_SLOTS}];
+      varying vec3 vColor;
+      varying float vGlyph;
+      ${POINT_HIDE_GLSL}
       void main() {
         vColor = aColor;
         vGlyph = aGlyph;
@@ -461,6 +470,81 @@ export function createStarMaterial(pixelRatio: number): THREE.ShaderMaterial {
         float a = (1.0 - smoothstep(0.3, 1.0, d)) * vB;
         gl_FragColor = vec4(vec3(0.8, 0.86, 1.0), a);
         gl_FragDepth = 1.0;
+      }`,
+  });
+}
+
+/** Cell offsets per texture row (a row is `CELL_TEX_W` texels of RGBA float: camera-relative anchor xyz and the end slot of the cell's drawn points). */
+export const CELL_TEX_W = 1024;
+
+/** The float texture that carries one texel per cell: rgb = anchor + Sun - camera (float64 on the CPU, rounded once), a = the first slot NOT drawn. */
+export function createCellTexture(cells: number): THREE.DataTexture {
+  const h = Math.max(1, Math.ceil(cells / CELL_TEX_W));
+  const t = new THREE.DataTexture(new Float32Array(CELL_TEX_W * h * 4), CELL_TEX_W, h, THREE.RGBAFormat, THREE.FloatType);
+  t.minFilter = THREE.NearestFilter;
+  t.magFilter = THREE.NearestFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+
+/**
+ * The minor planet cloud (scene/minor-planets.ts): ONE draw call for the whole cloud. Each vertex carries its float32 offset from its cell's
+ * anchor (`position`), its cell number (`aCell`) and H (`aH`, hundredths from -10). The CPU writes one texel per cell each frame
+ * (`createCellTexture`: anchor + Sun - camera in float64, then rounded once, and the end slot of the cell's drawn points, the level of
+ * detail); the vertex shader fetches it (`texelFetch`), drops the vertex when its slot (`gl_VertexID`) is past the end, and adds the offset.
+ * Only camera-relative per-cell offsets reach the GPU: no absolute float32 position (docs/frames.md).
+ * Size and brightness from H: 2 px and full alpha for H <= 9, 1 px and 0.35 for H >= 20, linear between (`pointLook`). It SHARES the
+ * occluder and disc-cone uniform objects of the entity point material (`shared` = its uniforms), so the same slots hide it and
+ * `POINT_HIDE_GLSL` is the same code: a point behind a drawn body, or over a small far body's disc, is not drawn. The occluder arrays are
+ * uploaded once per frame, for this one draw.
+ */
+export function createMinorPlanetMaterial(shared: Record<string, THREE.IUniform>, pixelRatio: number): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uPx: { value: pixelRatio },
+      uCells: { value: createCellTexture(1) },
+      uColor: { value: new THREE.Color(0.82, 0.76, 0.66) },
+      uOccN: shared.uOccN, uOccS: shared.uOccS, uOccE: shared.uOccE, uOccP: shared.uOccP,
+      uGroup: shared.uGroup, uGroupD: shared.uGroupD, uGroupE: shared.uGroupE,
+    },
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    vertexShader: /* glsl */ `
+      attribute float aH;
+      attribute float aCell;
+      uniform float uPx;
+      uniform sampler2D uCells;
+      uniform int uOccN;
+      uniform vec4 uOccS[${MAX_OCCLUDERS}];
+      uniform vec2 uOccE[${MAX_OCCLUDERS}];
+      uniform vec3 uOccP[${MAX_OCCLUDERS}];
+      uniform vec4 uGroup[${GROUP_SLOTS}];
+      uniform float uGroupD[${GROUP_SLOTS}];
+      uniform vec2 uGroupE[${GROUP_SLOTS}];
+      varying float vAlpha;
+      ${POINT_HIDE_GLSL}
+      void main() {
+        int cell = int(aCell);
+        vec4 c = texelFetch(uCells, ivec2(cell % ${CELL_TEX_W}, cell / ${CELL_TEX_W}), 0);
+        // level of detail: a cell draws its first (brightest) points only; the rest are dropped before any other work
+        if (float(gl_VertexID) >= c.w) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vAlpha = 0.0; return; }
+        vec3 rel = position + c.xyz;
+        float h = aH * 0.01 - 10.0;
+        float f = aH > 65534.0 ? 1.0 : clamp((h - 9.0) / 11.0, 0.0, 1.0);
+        vAlpha = 1.0 - 0.65 * f;
+        gl_PointSize = (2.0 - f) * uPx;
+        gl_Position = projectionMatrix * viewMatrix * vec4(rel, 1.0);
+        if (bodyHides(rel) || discHides(rel)) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        float a = (1.0 - smoothstep(0.5, 1.0, length(gl_PointCoord * 2.0 - 1.0))) * vAlpha;
+        if (a < 0.03) discard;
+        gl_FragColor = vec4(uColor, a);
       }`,
   });
 }
