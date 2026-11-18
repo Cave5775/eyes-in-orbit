@@ -112,6 +112,15 @@ export const LIMITS: Record<string, SourceLimit> = {
     blockOn: { 403: 6 * HOUR, 429: 3 * HOUR },
     backoff: { baseMs: 30 * MIN, maxMs: 12 * HOUR },
   },
+  // NASA MMGIS map tiles for the Mars surface patch (apps/server/src/mmgis-tiles.ts): on demand, kept in SQLite for 90 days, so a
+  // tile is asked for once. Static files on S3 behind CloudFront: 4 per second at most (2 at a time), 1200 per hour; 429/503 block,
+  // and 5 refusals (403, also what S3 answers for a missing key) within 10 min stop the source for an hour
+  'mmgis-tiles': {
+    label: 'NASA MMGIS map tiles', policy: 'unpublished (NASA public data, https://github.com/NASA-AMMOS/MMGIS)',
+    minSpacingMs: 250, perHour: 1200, maxWaitMs: 2000,
+    blockOn: { 429: 15 * MIN, 503: 15 * MIN },
+    failureStop: { count: 5, windowMs: 10 * MIN, blockMs: HOUR },
+  },
   other: { label: 'Other hosts', policy: 'unpublished', minSpacingMs: 1000, perHour: 120 },
 };
 

@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import Fastify from 'fastify';
 import { loadLiveTelemetry, registerApi } from './api';
 import { ImageryCache } from './imagery';
+import { MmgisTiles, registerMmgisTiles } from './mmgis-tiles';
 import { backoffLogIn, setBackoffLog } from './backoff-log';
 import { rateLimitsOffWarning } from './net/limiter';
 import { loadConfig, loadDotEnv } from './config';
@@ -64,6 +65,7 @@ async function main(): Promise<void> {
       describe.syncHealth();
     },
   }, new ImageryCache(join(config.dataDir, 'imagery'), { offline: config.offline, limiter: http.limiter }), describe, new ArchiveImagesService({ store, http }));
+  registerMmgisTiles(app, new MmgisTiles({ store, limiter: http.limiter, offline: config.offline }));
   await registerStream(app, hub);
 
   await app.listen({ port: config.port, host: config.host });

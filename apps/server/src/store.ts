@@ -25,6 +25,8 @@ export class Store {
     this.db = new DatabaseSync(file);
     if (file !== ':memory:') this.db.exec('PRAGMA journal_mode = WAL');
     this.db.exec('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, fetchedAt INTEGER NOT NULL, ttl INTEGER NOT NULL)');
+    // binary rows (map tiles): the bytes as fetched, with the same TTL columns and the last use for the size cap (`trimBlobs`)
+    this.db.exec('CREATE TABLE IF NOT EXISTS blob (key TEXT PRIMARY KEY, data BLOB NOT NULL, fetchedAt INTEGER NOT NULL, ttl INTEGER NOT NULL, usedAt INTEGER NOT NULL)');
   }
 
   get<T = unknown>(key: string): CacheRow<T> | undefined {
@@ -48,6 +50,43 @@ export class Store {
 
   delete(key: string): void {
     this.db.prepare('DELETE FROM kv WHERE key = ?').run(key);
+  }
+
+  /** A binary row (`setBlob`); marks it used at `now` (at most once a minute, so reads stay reads). */
+  getBlob(key: string, now = Date.now()): CacheRow<Buffer> | undefined {
+    const row = this.db.prepare('SELECT data, fetchedAt, ttl, usedAt FROM blob WHERE key = ?').get(key) as
+      { data: Uint8Array; fetchedAt: number; ttl: number; usedAt: number } | undefined;
+    if (!row) return undefined;
+    if (now - row.usedAt > 60_000) this.db.prepare('UPDATE blob SET usedAt = ? WHERE key = ?').run(now, key);
+    return { value: Buffer.from(row.data.buffer, row.data.byteOffset, row.data.byteLength), fetchedAt: row.fetchedAt, ttlMs: row.ttl };
+  }
+
+  setBlob(key: string, data: Uint8Array, ttlMs: number, fetchedAt = Date.now()): void {
+    this.db
+      .prepare('INSERT INTO blob (key, data, fetchedAt, ttl, usedAt) VALUES (?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data, fetchedAt = excluded.fetchedAt, ttl = excluded.ttl, usedAt = excluded.usedAt')
+      .run(key, data, fetchedAt, ttlMs, fetchedAt);
+  }
+
+  /** Count and bytes of the binary rows whose key starts with `prefix`. */
+  blobStats(prefix: string): { count: number; bytes: number } {
+    const r = this.db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(data)), 0) AS b FROM blob WHERE key LIKE ? ESCAPE '\\'").get(likePrefix(prefix)) as { n: number; b: number };
+    return { count: Number(r.n), bytes: Number(r.b) };
+  }
+
+  /** Over `maxBytes`, delete the least recently used binary rows under `prefix` down to 90 % of it; returns the rows deleted. */
+  trimBlobs(prefix: string, maxBytes: number): number {
+    let { bytes } = this.blobStats(prefix);
+    if (bytes <= maxBytes) return 0;
+    const rows = this.db.prepare("SELECT key, LENGTH(data) AS size FROM blob WHERE key LIKE ? ESCAPE '\\' ORDER BY usedAt ASC").all(likePrefix(prefix)) as { key: string; size: number }[];
+    const del = this.db.prepare('DELETE FROM blob WHERE key = ?');
+    let n = 0;
+    for (const r of rows) {
+      if (bytes <= maxBytes * 0.9) break;
+      del.run(r.key);
+      bytes -= Number(r.size);
+      n++;
+    }
+    return n;
   }
 
   /**
