@@ -3,6 +3,7 @@ import type {
   RoverTraverse, TelemetryPoint,
 } from '@eio/core';
 import type { SearchHit } from '../lib/filters';
+import type { MmgisLayer } from '@eio/core';
 
 /** REST surface of the server contract (also implemented by the offline mock). */
 export interface Api {
@@ -24,6 +25,8 @@ export interface Api {
   ascent(launchId: string): Promise<AscentSeries | null>;
   /** The whole traverse of a Mars rover (`GET /api/traverse/:entityId`); null when unknown or not cached yet. */
   traverse(entityId: string): Promise<RoverTraverse | null>;
+  /** Address of a Mars map tile (`GET /api/tiles/mmgis/...`, core `MMGIS_LAYERS`), or null when there is none (the mock has a few). */
+  mapTile(layer: Pick<MmgisLayer, 'mission' | 'id'>, z: number, x: number, y: number): string | null;
   /** API keys and logins the local server can use (`GET /api/credentials`); secrets are reported as set / not set only. */
   credentials(): Promise<CredentialInfo[]>;
   /** `PUT /api/credentials`: a string sets a value, `null` removes the UI value. Resolves with the new state. */

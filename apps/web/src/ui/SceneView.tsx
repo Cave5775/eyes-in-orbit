@@ -114,6 +114,7 @@ export function SceneView() {
     };
     const ctl = new SceneController(host.current!, {
       onPick: (id) => store.getState().selectObject(id),
+      tileUrl: (layer, z, x, y) => api.mapTile(layer, z, x, y),
       onPickMany: (ids, total, x, y) => {
         const ents = store.getState().entities;
         const items: PickItem[] = [];
