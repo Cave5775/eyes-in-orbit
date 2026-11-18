@@ -31,6 +31,11 @@ export interface DsnTarget extends Partial<HorizonsSpec> {
   horizons: string;
   /** extra entity attrs (static, survive the DSN connector's attr refresh) */
   attrs?: NonNullable<NewEntity['attrs']>;
+  /**
+   * The mission ended on this UTC date (`YYYY-MM-DD`; cite the source in a comment at the entry). An ended target stays in the table
+   * as the record, but `activeTargets()` leaves it out: no Horizons request, no entity, no DSN link attrs. Retiring a spacecraft is one field.
+   */
+  ended?: string;
 }
 
 /** The effective Horizons request/frame settings of a target: its overrides on top of `DEFAULT_HORIZONS`. */
@@ -73,7 +78,8 @@ export const DSN_TARGETS: Record<string, DsnTarget> = {
   // Mars orbiters: Mars-centred like LRO (a 2 h orbit cannot be resolved in 30 min Earth-centred steps)
   MRO: marsOrbiter({ name: 'Mars Reconnaissance Orbiter', horizons: '-74' }, 5), // 112 min
   ODY: marsOrbiter({ name: 'Mars Odyssey', horizons: '-53' }, 5), // 118 min
-  MVN: marsOrbiter({ name: 'MAVEN', horizons: '-202' }, 10), // 4.5 h, 150 x 6200 km
+  // MAVEN: contact lost 2025-12-06, mission declared over (not recoverable) 2026-06-03 per https://science.nasa.gov/mission/maven/
+  MVN: { ...marsOrbiter({ name: 'MAVEN', horizons: '-202' }, 10), ended: '2026-06-03' }, // was 4.5 h, 150 x 6200 km
   NHPC: { name: 'New Horizons', horizons: '-98' },
   JNO: { name: 'Juno', horizons: '-61' },
   // Moon-centred (Horizons 500@301), ICRF axes ~ MOON:inertial; window -1 d .. +3 d at 5 min = 1153 rows (~170 kB)
@@ -99,6 +105,9 @@ export const DSN_TARGETS: Record<string, DsnTarget> = {
   EUCL: { name: 'Euclid', horizons: '-680', attrs: observatoryAttrs(SPACE_OBSERVATORY_META.euclid) },
 };
 
+/** The targets still operating: every consumer that requests, registers or lists probes iterates this, never `DSN_TARGETS` directly. */
+export const activeTargets = (): [string, DsnTarget][] => Object.entries(DSN_TARGETS).filter(([, t]) => !t.ended);
+
 /** DSN spacecraft codes of the targets that stand on a surface (`MSL`, `M20`): their entity is a surface site, the DSN feed adds attrs to it. */
 export const DSN_SURFACE_CODES: readonly string[] = SURFACE_SITES.flatMap((s) => (s.dsn ? [s.dsn] : []));
 
@@ -109,7 +118,7 @@ export const DSN_SURFACE_CODES: readonly string[] = SURFACE_SITES.flatMap((s) =>
 export const surfaceRoverEntities = (): NewEntity[] => SURFACE_SITES.filter((s) => s.dsn).map((s) => surfaceSiteRecord(s));
 
 /** Every DSN spacecraft code whose entity carries DSN link attrs: the Horizons targets and the surface rovers. */
-export const dsnCodes = (): string[] => [...Object.keys(DSN_TARGETS), ...DSN_SURFACE_CODES];
+export const dsnCodes = (): string[] => [...activeTargets().map(([c]) => c), ...DSN_SURFACE_CODES];
 
 /** The three DSN complexes are listed as observatories (radio) without sky imagery. */
 export const DSN_STATION_OBSERVATORY: ObservatoryMeta = { site: 'ground', bands: ['radio'], surveys: [] };

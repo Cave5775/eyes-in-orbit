@@ -3,7 +3,7 @@ import { observatoryAttrs, type DsnLink, type DsnSnapshot } from '@eio/core';
 import type { Connector } from '../connector';
 import type { NewEntity } from '../hub';
 import { LimitedError } from '../net/limiter';
-import { DSN_STATIONS, DSN_STATION_OBSERVATORY, DSN_TARGETS, dsnCodes, probeEntity, probeId, surfaceRoverEntities } from './dsn-targets';
+import { DSN_STATIONS, DSN_STATION_OBSERVATORY, activeTargets, dsnCodes, probeEntity, probeId, surfaceRoverEntities } from './dsn-targets';
 
 const POLL_MS = 5000;
 /** The second URL is tried only once the source has failed this many requests in a row (persisted by the limiter). */
@@ -110,7 +110,7 @@ export const dsn: Connector = {
         render: { colorKey: 'ground', glyph: 'square', label: true },
         attrs: observatoryAttrs(DSN_STATION_OBSERVATORY),
       })),
-      ...Object.keys(DSN_TARGETS).map(probeEntity),
+      ...activeTargets().map(([code]) => probeEntity(code)),
       // the Mars rovers stand on the surface: their entity is the surface-site one, kept if the surface-sites connector already registered it
       ...surfaceRoverEntities().filter((r) => !ctx.hub.graph.get(r.id)),
     );

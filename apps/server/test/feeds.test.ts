@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { EntityGraph, bodyEntityRecords, convert, norm } from '@eio/core';
 import { complexOfDish, parseDsn, probeAttrs } from '../src/connectors/dsn';
-import { DEFAULT_HORIZONS, DSN_TARGETS, horizonsSpecOf, probeEntity } from '../src/connectors/dsn-targets';
-import { HORIZONS_FUTURE_DAYS, HORIZONS_PAST_DAYS, horizonsCacheKey, horizonsUrl, parseHorizonsVectors } from '../src/connectors/horizons';
+import { DEFAULT_HORIZONS, DSN_TARGETS, activeTargets, dsnCodes, horizonsSpecOf, probeEntity } from '../src/connectors/dsn-targets';
+import { HORIZONS_FUTURE_DAYS, HORIZONS_PAST_DAYS, horizonsCacheKey, horizonsUrl, horizons, parseHorizonsVectors } from '../src/connectors/horizons';
 import { decodeUpdate, issTimestampMs, telemetryPoint } from '../src/connectors/iss-live';
 import { normalizeIssFix } from '../src/connectors/iss-rest';
 import { newsUrl, normalizeArticle, parseArticles } from '../src/connectors/snapi';
 
 /** Mars orbiters: code -> [Horizons id, step in minutes] */
-const MARS_ORBITERS: Record<string, [string, number]> = { MRO: ['-74', 5], ODY: ['-53', 5], MVN: ['-202', 10], TGO: ['-143', 5], MEX: ['-41', 10] };
+const MARS_ORBITERS: Record<string, [string, number]> = { MRO: ['-74', 5], ODY: ['-53', 5], TGO: ['-143', 5], MEX: ['-41', 10] };
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
 
@@ -113,7 +113,7 @@ describe('horizons', () => {
 
   it('leaves every default target geocentric with 30 min steps and a -3 d .. +7 d window', () => {
     const plain = horizonsUrl('-31', NOW);
-    for (const [code, target] of Object.entries(DSN_TARGETS)) {
+    for (const [code, target] of activeTargets()) {
       if (code === 'LRO' || code in MARS_ORBITERS) continue;
       const spec = horizonsSpecOf(target);
       expect(spec, code).toEqual(DEFAULT_HORIZONS);
@@ -146,6 +146,26 @@ describe('horizons', () => {
       attrs: { trackCentre: 'Moon' },
     });
     expect(String(probeEntity('LRO').attrs?.trackNote)).toMatch(/Moon-centred/);
+  });
+
+  it('MAVEN has ended (declared over 2026-06-03): no Horizons request, no entity, no DSN attrs; the record stays in the table', () => {
+    expect(DSN_TARGETS.MVN).toMatchObject({ horizons: '-202', ended: '2026-06-03' });
+    expect(activeTargets().map(([c]) => c)).not.toContain('MVN');
+    expect(dsnCodes()).not.toContain('MVN');
+    expect(activeTargets().length).toBe(Object.keys(DSN_TARGETS).length - 1);
+    // every other target is still scheduled
+    for (const [code, t] of Object.entries(DSN_TARGETS)) if (code !== 'MVN') expect(t.ended, code).toBeUndefined();
+  });
+
+  it('the Horizons connector asks only for active targets', async () => {
+    const urls: string[] = [];
+    const ctx = {
+      cachedFetch: async (_k: string, url: string) => { urls.push(url); return { value: [[0, 1, 2, 3, 0, 0, 0], [1, 1, 2, 3, 0, 0, 0]], fromCache: false }; },
+      hub: { graph: new Map(), upsert: () => {} }, log: () => {}, health: {}, softFail: () => {},
+    };
+    await horizons.run!(ctx as never);
+    expect(urls.length).toBe(activeTargets().length);
+    expect(urls.map((u) => new URL(u).searchParams.get('COMMAND'))).not.toContain("'-202'");
   });
 
   it('fetches every Mars orbiter Mars-centred (500@499, MARS:inertial, bodyId MARS) with a step that resolves its orbit', () => {

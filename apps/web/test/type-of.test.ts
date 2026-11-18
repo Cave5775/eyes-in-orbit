@@ -6,7 +6,7 @@ import { textHitsOf } from '../src/lib/text-match';
 import { NO_FOCUS, classify, isDrawn, termFromWord, type Query } from '../src/lib/query';
 import { typeOf, viewClass } from '../src/lib/view-class';
 import { mockGroundAndProbes } from '../src/mock/generators';
-import { DSN_TARGETS, probeEntity } from '../../server/src/connectors/dsn-targets';
+import { activeTargets, probeEntity } from '../../server/src/connectors/dsn-targets';
 
 const T = Date.UTC(2026, 9, 22);
 const sampled = (frame: string, r: number): EntityRecord['provider'] => ({
@@ -45,13 +45,13 @@ describe('typeOf: the type shown and queried comes from the same rule as the cat
 
   it('every DSN target of the server: the type is a satellite exactly when the category is satellites', () => {
     const sat: string[] = [];
-    for (const code of Object.keys(DSN_TARGETS)) {
+    for (const [code] of activeTargets()) {
       const e = probeEntity(code) as EntityRecord;
       expect(e.kind, code).toBe('probe'); // the stored kind does not change
       expect(typeOf(e) === 'satellite', code).toBe(categoryOf(e) === 'satellites');
       if (typeOf(e) === 'satellite') sat.push(code);
     }
-    expect(sat.sort()).toEqual(['LRO', 'MEX', 'MRO', 'MVN', 'ODY', 'TGO']);
+    expect(sat.sort()).toEqual(['LRO', 'MEX', 'MRO', 'ODY', 'TGO']);
   });
 
   it('the mock catalogue agrees', () => {
