@@ -684,6 +684,8 @@ video.stream-frame { background: #000; object-fit: contain; }
 .frame-hint { color: var(--warn); font-size: 11.5px; }
 .panel-head .seg { margin-left: auto; flex: none; }
 .panel-head .seg + .mono { margin-left: 8px; }
+.panel-head .sort-select { flex: none; margin-left: 8px; max-width: 76px; background: transparent; color: var(--ink-2); border: 1px solid var(--rule-2); border-radius: var(--r-1); padding: 1px 2px; font-size: 11.5px; font-weight: 500; }
+.panel-head .sort-select + .mono { margin-left: 8px; }
 .row.tree-body, .row.tree-group { cursor: default; }
 .row.tree-group { color: var(--ink-2); cursor: pointer; }
 .row.tree-group:hover { color: var(--ink); }

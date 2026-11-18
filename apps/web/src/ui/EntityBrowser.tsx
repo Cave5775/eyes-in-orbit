@@ -2,11 +2,13 @@ import { bodyEntityId, bodyOf, defaultBodies, type EntityRecord } from '@eio/cor
 import { listedParent } from '../lib/listed-parent';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { BODY_CATEGORY_KINDS, CATEGORIES, categoryCounts, categoryLabel } from '../lib/browser-ui';
-import { buildTreeRows, revealKeys, revealRowIndex, stickyAncestors, type TreeBody } from '../lib/entity-tree';
+import { buildTreeRows, revealKeys, revealRowIndex, stickyAncestors, type BodyGroups, type TreeBody } from '../lib/entity-tree';
+import { bodyGroupLabel, bodyGroupOrder, registryBodyKinds } from '../lib/body-groups';
+import { listComparator, loadSortMode, saveSortMode, SORT_MODES, parseSortMode, type SortInfo, type SortMode } from '../lib/list-sort';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { browseOrder, facetCounts, jumpTarget, searchHitOf, type SearchHit } from '../lib/filters';
 import { typeOf } from '../lib/view-class';
-import { isEarthCentre } from '../lib/frame';
+import { centreStateEci, graphLookup, isEarthCentre } from '../lib/frame';
 import { buildLaunchGroups, launchMembers } from '../lib/launch-group';
 import {
   NO_FOCUS, findTerm, hasHide, isDrawn, classify, queryActive, tagTerms, termFromWord, termWord, textOf, type Ctx, type Query, type Term,
@@ -15,8 +17,11 @@ import {
   acceptTag, activeTag, backspaceRemovesChip, parseQuery, splitCommitted, suggestTags, type TagKey, type TagSuggestion,
 } from '../lib/search-tags';
 import { perf } from '../lib/perf';
-import { runtime } from '../state/runtime';
+import { focusesSearch } from '../lib/focus-search';
+import { skyCoversScene } from '../lib/sky-mode';
+import { clock, ensureInGraph, graph, runtime } from '../state/runtime';
 import { useStore } from '../state/store';
+import { useView } from '../state/view';
 import { VirtualList, type VirtualListHandle } from './VirtualList';
 
 const ROW_H = 28;
@@ -27,7 +32,10 @@ const MODE_KEY = 'eio.browser';
 type Mode = 'tree' | 'list';
 
 /** The body tree the entity tree nests under (SUN > EARTH > MOON, SUN > MARS). */
-const TREE_BODIES: TreeBody[] = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId }));
+const REGISTRY_KINDS = registryBodyKinds(defaultBodies.all());
+const TREE_BODIES: TreeBody[] = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId, kind: REGISTRY_KINDS.get(b.id), radiusKm: b.radiusKm }));
+/** the bodies that orbit a body sit in folders by kind (Planets, Dwarf planets, Moons, Asteroids; lib/body-groups.ts) */
+const BODY_GROUPS_OPT: BodyGroups = { of: (b) => b.kind ?? 'other', label: bodyGroupLabel, order: bodyGroupOrder };
 
 function loadMode(): Mode {
   try {
@@ -78,11 +86,19 @@ export function EntityBrowser() {
   /** the free text and the tag word being typed; the finished tag words are terms of the query (the chips) */
   const [input, setInput] = useState(() => textOf(query));
   const [mode, setModeState] = useState<Mode>(loadMode);
+  const [sort, setSortState] = useState<SortMode>(loadSortMode);
+  const setSort = (m: SortMode) => {
+    setSortState(m);
+    saveSortMode(m);
+  };
   const [help, setHelp] = useState(false);
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  /** bumped when the main-thread graph gained the records a distance sort reads, so the sort is taken again */
+  const [graphTick, setGraphTick] = useState(0);
   /** explicit open / closed choices of tree nodes by row key; they win over the defaults (see buildTreeRows) */
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const setMode = (m: Mode) => {
@@ -108,6 +124,25 @@ export function EntityBrowser() {
   const ownSelect = useRef<string | null>(null);
   /** the entity whose row is still to be scrolled to once the expansion has reached the list */
   const [revealId, setRevealId] = useState<string | null>(null);
+
+  // Enter (nothing else wants it: not in a field, a row, a button or a link; not in the Sky view) goes to the search field
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const panel = panelRef.current;
+      const ctx = {
+        skyCovers: skyCoversScene(useView.getState().sky.phase),
+        // the panel is not on screen, or a popover / menu / dialog (Settings, View, Data streams, scene help, the pick list) is open
+        panelHidden: !panel || panel.getClientRects().length === 0,
+        popoverOpen: !!document.querySelector('.popover, [aria-modal="true"]'),
+      };
+      if (!focusesSearch(e, ctx)) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // the typed text is the text term of the query. Typing is debounced; the chips (terms) apply at once.
   const lastInput = useRef(input);
@@ -153,30 +188,85 @@ export function EntityBrowser() {
     return out;
   }, [shape, ordered, query, textHits, textIds]);
 
+  /**
+   * The sort of the lists, inside each group. Distance is from the centre of the frame at the time the sort, the frame or the
+   * catalogue's shape last changed (the list does not reshuffle while the clock runs); it is only known for objects the main
+   * thread can place (the bodies, the selection), the rest fall back to the name (lib/list-sort.ts).
+   */
+  const sorters = useMemo(() => {
+    const t = clock.now();
+    const lookup = graphLookup(graph);
+    const cache = new Map<string, SortInfo>();
+    // the centre's state is read once per pass, not once per object (null until the graph holds the frame's record: see the effect below)
+    const centre = sort === 'distance' ? centreStateEci(frame, t, lookup) : null;
+    const infoOf = (id: string): SortInfo => {
+      let i = cache.get(id);
+      if (i) return i;
+      const rec = entities.get(id);
+      const radius = rec?.attrs?.radiusKm;
+      i = { radiusKm: typeof radius === 'number' ? radius : undefined };
+      if (centre && rec) {
+        const s = lookup(id, t);
+        if (s) i.distanceKm = Math.hypot(s.r[0] - centre.r[0], s.r[1] - centre.r[1], s.r[2] - centre.r[2]);
+      }
+      cache.set(id, i);
+      return i;
+    };
+    return {
+      item: listComparator<{ id: string; name: string }>(sort, (r) => infoOf(r.id)),
+      body: listComparator<TreeBody>(sort, (b) => {
+        const i = b.entityId ? infoOf(b.entityId) : {};
+        return { ...i, radiusKm: i.radiusKm ?? b.radiusKm };
+      }),
+    };
+  }, [sort, frame, shape, graphTick]);
+  /** the rows in the chosen order, sorted once per change of the rows, the sort or the frame (LIST draws them, the tree groups them in this order) */
+  const listRows = useMemo(() => (sorters.item ? [...rows].sort(sorters.item) : rows), [rows, sorters]);
+
   // the tree: the same filtered, ordered rows, nested under their primary body and flattened to the rows that are open
   const pick = (id: string) => {
     ownSelect.current = id;
     selectObject(id);
   };
 
+  /** the registry bodies as tree nodes: with their entity (so a node can select it even when a filter hides its row) and its kind */
+  const treeBodies = useMemo(() => TREE_BODIES.map((b): TreeBody => {
+    const entityId = bodyEntityId(b.id);
+    const rec = entities.get(entityId);
+    return rec ? { ...b, entityId, kind: rec.kind || b.kind } : b;
+  }), [shape]);
+
+  // a distance sort needs the frame's record and the body entities in the main-thread graph (the scene adds them too): add what is
+  // missing here, outside the memo, and take the sort again. A frame locked to an object whose record arrives later is caught by `shape`.
+  useEffect(() => {
+    if (sort !== 'distance') return;
+    let added = false;
+    const ensure = (rec: EntityRecord | undefined) => {
+      if (rec?.provider && graph.get(rec.id) !== rec) {
+        ensureInGraph(rec);
+        added = true;
+      }
+    };
+    ensure(entities.get(frame));
+    for (const b of treeBodies) if (b.entityId) ensure(entities.get(b.entityId));
+    if (added) setGraphTick((n) => n + 1);
+  }, [sort, frame, shape, treeBodies]);
+
   const treeRows = useMemo(() => {
     if (mode !== 'tree') return [];
-    // a body that has an entity in the catalog carries it, so the node can select it even when a filter hides its row
-    const bodies = TREE_BODIES.map((b) => {
-      const entityId = bodyEntityId(b.id);
-      return entities.has(entityId) ? { ...b, entityId } : b;
-    });
+    const bodies = treeBodies;
     const recOf = (r: { id: string }) => entities.get(r.id);
     const frameRec = entities.get(frame);
     const t0 = perf.on ? performance.now() : 0;
-    const built = buildTreeRows(rows, {
+    const built = buildTreeRows(listRows, {
       bodies, frameId: frame, frameBodyId: frameRec ? bodyOf(frameRec) ?? frameRec.bodyId : undefined,
       openAll: filtering, skeleton: !filtering, overrides, kindName: kindLabel, bodyOf: (r) => { const e = recOf(r); return e && listedParent(e); },
       standsForBody: (r) => { const p = recOf(r)?.provider; return p?.type === 'body' ? p.bodyId : undefined; },
+      bodyGroups: BODY_GROUPS_OPT, sortBodies: sorters.body,
     });
     if (perf.on) perf.time('tree', performance.now() - t0);
     return built;
-  }, [mode, rows, shape, frame, filtering, overrides]);
+  }, [mode, listRows, shape, frame, filtering, overrides, treeBodies, sorters]);
 
   /** the rows pinned at the top of the tree while a row is the first in view: its ancestors (the body chain and the kind group) */
   const stickyOf = useCallback((first: number) => stickyAncestors(treeRows, first), [treeRows]);
@@ -198,7 +288,7 @@ export function EntityBrowser() {
       return;
     }
     if (mode === 'tree') {
-      const keys = revealKeys({ ...rec, kind: typeOf(rec) }, { bodies: TREE_BODIES, bodyOf: (r) => listedParent(r as EntityRecord) });
+      const keys = revealKeys({ ...rec, kind: typeOf(rec) }, { bodies: treeBodies, bodyOf: (r) => listedParent(r as EntityRecord), bodyGroups: BODY_GROUPS_OPT });
       setOverrides((o) => (keys.every((k) => o.get(k) === true) ? o : new Map([...o, ...keys.map((k): [string, boolean] => [k, true])])));
     }
     setRevealId(rec.id);
@@ -207,11 +297,11 @@ export function EntityBrowser() {
 
   useEffect(() => {
     if (revealId === null) return;
-    const i = mode === 'tree' ? revealRowIndex(treeRows, revealId) : rows.findIndex((r) => r.id === revealId);
+    const i = mode === 'tree' ? revealRowIndex(treeRows, revealId) : listRows.findIndex((r) => r.id === revealId);
     if (i < 0) return; // the expansion has not reached the list yet
     listRef.current?.reveal(i);
     setRevealId(null);
-  }, [revealId, mode, treeRows, rows]);
+  }, [revealId, mode, treeRows, listRows]);
   useEffect(() => setRevealId(null), [filterKey]);
   // collapsing a node (a pinned header too) shrinks the list under the scroll position: keep the node's own row in view
   useEffect(() => {
@@ -338,10 +428,10 @@ export function EntityBrowser() {
         <div key={r.key} className="row tree-group" style={{ height: ROW_H, paddingLeft: pad }}>
           <button className="tree-group-name" aria-expanded={r.open} onClick={() => setOpen(r.key, !r.open)}>
             <span className="tree-chev" aria-hidden="true">{r.open ? '▾' : '▸'}</span>
-            <span className="row-name">{kindLabel(r.kind)}</span>
+            <span className="row-name">{r.label ?? kindLabel(r.kind)}</span>
           </button>
           <span className="tree-count mono">{r.count.toLocaleString('en-US')}</span>
-          {!BODY_CATEGORY_KINDS.has(r.kind) && eyeButton(['type', r.kind.toLowerCase()], `every ${kindLabel(r.kind)}`)}
+          {!r.label && !BODY_CATEGORY_KINDS.has(r.kind) && eyeButton(['type', r.kind.toLowerCase()], `every ${kindLabel(r.kind)}`)}
         </div>
       );
     }
@@ -385,13 +475,18 @@ export function EntityBrowser() {
   };
 
   return (
-    <aside className="panel left">
+    <aside className="panel left" ref={panelRef}>
       <div className="panel-head">
         <span>Objects</span>
         <span className="seg" role="group" aria-label="Entity view">
           <button className={mode === 'tree' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'tree'} onClick={() => setMode('tree')} title="Group objects under the body they orbit (Sun, Earth, Moon, Mars)">Tree</button>
           <button className={mode === 'list' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'list'} onClick={() => setMode('list')} title="One flat list">List</button>
         </span>
+        <select
+          className="sort-select" value={sort} aria-label="Sort the list within each group" title="Sort the list within each group"
+          onChange={(e) => setSort(parseSortMode(e.target.value))}>
+          {SORT_MODES.map((m) => <option key={m.id} value={m.id} title={m.hint}>{m.id === 'default' ? 'Sort' : m.label}</option>)}
+        </select>
         <span className="mono dim">{rows.length.toLocaleString('en-US')}{query.terms.length ? '' : ` / ${entities.size.toLocaleString('en-US')}`}</span>
       </div>
       <div className="search">
@@ -475,10 +570,10 @@ export function EntityBrowser() {
           <VirtualList
             key="list"
             ref={listRef}
-            count={rows.length}
+            count={listRows.length}
             rowHeight={ROW_H}
             render={(i) => {
-              const r = rows[i];
+              const r = listRows[i];
               return entityRow(r.id, r.name, r.kind, 0, r.id);
             }}
           />
