@@ -474,19 +474,36 @@ export function createStarMaterial(pixelRatio: number): THREE.ShaderMaterial {
   });
 }
 
+/** Cell offsets per texture row (a row is `CELL_TEX_W` texels of RGBA float: camera-relative anchor xyz and the end slot of the cell's drawn points). */
+export const CELL_TEX_W = 1024;
+
+/** The float texture that carries one texel per cell: rgb = anchor + Sun - camera (float64 on the CPU, rounded once), a = the first slot NOT drawn. */
+export function createCellTexture(cells: number): THREE.DataTexture {
+  const h = Math.max(1, Math.ceil(cells / CELL_TEX_W));
+  const t = new THREE.DataTexture(new Float32Array(CELL_TEX_W * h * 4), CELL_TEX_W, h, THREE.RGBAFormat, THREE.FloatType);
+  t.minFilter = THREE.NearestFilter;
+  t.magFilter = THREE.NearestFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+
 /**
- * The minor planet cloud (scene/minor-planets.ts): a lean points material. One `uOffset` per draw (a cell's anchor minus the camera,
- * float64 on the CPU, then rounded once), the float32 `position` is the point's offset from the anchor (floating origin, lib/minor-planets.ts).
- * Size and brightness come from H (`aH`, hundredths from -10): 2 px and full alpha for H <= 9, 1 px and 0.35 for H >= 20, linear between
- * (the same rule as `pointLook`); no per-point colour, glyph or scope flag. It SHARES the occluder and disc-cone uniform objects of the
- * entity point material (`shared` = its uniforms), so the same slots hide it and `POINT_HIDE_GLSL` is the same code: a point behind a drawn
- * body, or over a small far body's disc, is not drawn.
+ * The minor planet cloud (scene/minor-planets.ts): ONE draw call for the whole cloud. Each vertex carries its float32 offset from its cell's
+ * anchor (`position`), its cell number (`aCell`) and H (`aH`, hundredths from -10). The CPU writes one texel per cell each frame
+ * (`createCellTexture`: anchor + Sun - camera in float64, then rounded once, and the end slot of the cell's drawn points, the level of
+ * detail); the vertex shader fetches it (`texelFetch`), drops the vertex when its slot (`gl_VertexID`) is past the end, and adds the offset.
+ * Only camera-relative per-cell offsets reach the GPU: no absolute float32 position (docs/frames.md).
+ * Size and brightness from H: 2 px and full alpha for H <= 9, 1 px and 0.35 for H >= 20, linear between (`pointLook`). It SHARES the
+ * occluder and disc-cone uniform objects of the entity point material (`shared` = its uniforms), so the same slots hide it and
+ * `POINT_HIDE_GLSL` is the same code: a point behind a drawn body, or over a small far body's disc, is not drawn. The occluder arrays are
+ * uploaded once per frame, for this one draw.
  */
 export function createMinorPlanetMaterial(shared: Record<string, THREE.IUniform>, pixelRatio: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uPx: { value: pixelRatio },
-      uOffset: { value: new THREE.Vector3() },
+      uCells: { value: createCellTexture(1) },
       uColor: { value: new THREE.Color(0.82, 0.76, 0.66) },
       uOccN: shared.uOccN, uOccS: shared.uOccS, uOccE: shared.uOccE, uOccP: shared.uOccP,
       uGroup: shared.uGroup, uGroupD: shared.uGroupD, uGroupE: shared.uGroupE,
@@ -496,8 +513,9 @@ export function createMinorPlanetMaterial(shared: Record<string, THREE.IUniform>
     depthTest: false,
     vertexShader: /* glsl */ `
       attribute float aH;
+      attribute float aCell;
       uniform float uPx;
-      uniform vec3 uOffset;
+      uniform sampler2D uCells;
       uniform int uOccN;
       uniform vec4 uOccS[${MAX_OCCLUDERS}];
       uniform vec2 uOccE[${MAX_OCCLUDERS}];
@@ -508,7 +526,11 @@ export function createMinorPlanetMaterial(shared: Record<string, THREE.IUniform>
       varying float vAlpha;
       ${POINT_HIDE_GLSL}
       void main() {
-        vec3 rel = position + uOffset;
+        int cell = int(aCell);
+        vec4 c = texelFetch(uCells, ivec2(cell % ${CELL_TEX_W}, cell / ${CELL_TEX_W}), 0);
+        // level of detail: a cell draws its first (brightest) points only; the rest are dropped before any other work
+        if (float(gl_VertexID) >= c.w) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vAlpha = 0.0; return; }
+        vec3 rel = position + c.xyz;
         float h = aH * 0.01 - 10.0;
         float f = aH > 65534.0 ? 1.0 : clamp((h - 9.0) / 11.0, 0.0, 1.0);
         vAlpha = 1.0 - 0.65 * f;

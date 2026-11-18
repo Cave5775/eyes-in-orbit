@@ -11,5 +11,5 @@ export type MpToWorker =
   | { type: 'clear' };
 
 export type MpFromWorker =
-  | { type: 'cells'; seq: number; simMs: number; total: number; cells: BeltCell[]; offsets: Float32Array; h: Uint16Array; index: Uint32Array; ms: number }
+  | { type: 'cells'; seq: number; simMs: number; total: number; cells: BeltCell[]; offsets: Float32Array; h: Uint16Array; index: Uint32Array; cell: Uint32Array; ms: number }
   | { type: 'orbit'; req: number; orbit: PickedOrbit | null };

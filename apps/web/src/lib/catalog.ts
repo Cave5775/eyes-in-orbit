@@ -27,6 +27,12 @@ export class Catalog implements ReadonlyMap<string, EntityRecord> {
     return new Catalog(this.map, this.version + 1);
   }
 
+  /** Delete `ids` from the shared map and return the next view (this one stops seeing them too). */
+  without(ids: Iterable<string>): Catalog {
+    for (const id of ids) this.map.delete(id);
+    return new Catalog(this.map, this.version + 1);
+  }
+
   get size(): number {
     return this.map.size;
   }

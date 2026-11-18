@@ -7,7 +7,7 @@ import { localTilePath, type MmgisLayer } from '@eio/core';
 import { listedParent } from '../lib/listed-parent';
 import type { Api } from '../api/types';
 import type { PickedOrbit } from '../lib/minor-planets';
-import { MinorPlanetLayer } from './minor-planets';
+import { MINOR_PLANET_PROBE, MinorPlanetLayer } from './minor-planets';
 import { modelViewDirection } from '../lib/attitude';
 import { bodyPickScan, gatherWithBodies } from '../lib/body-scene';
 import { selectedBodyEntityId } from '../lib/body-textures';
@@ -1693,18 +1693,15 @@ export class SceneController {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     const v = new THREE.Vector3((px / w) * 2 - 1, 1 - (py / h) * 2, 0.5).unproject(this.rcam).normalize();
     const pxPerRad = h / (2 * Math.tan((this.camera.fov * DEG) / 2));
-    return this.minor.pick([v.x, v.y, v.z], PICK_RADIUS_PX / pxPerRad, (x, y, z) => this.occludedRel(x, y, z), (o) => { if (o) this.cb.onPickMinorPlanet?.(o); });
+    // the same two tests the point shader applies: a drawn body in front, a small far body's disc over it
+    const cones = this.discCones;
+    return this.minor.pick([v.x, v.y, v.z], PICK_RADIUS_PX / pxPerRad, (x, y, z) => this.occludedRel(x, y, z) || hiddenByDisc(x, y, z, cones), (o) => { if (o) this.cb.onPickMinorPlanet?.(o); });
   }
 
   /** View menu "Minor planets": draw the cloud or not (it is fetched the first time it is on). */
   setMinorPlanets(on: boolean, getApi?: () => Api): void {
     this.minor.setEnabled(on);
     if (on && getApi) this.minor.load(getApi);
-  }
-
-  /** Cloud statistics for the perf overlay and tests. */
-  minorPlanetStats(): MinorPlanetLayer['stats'] {
-    return this.minor.stats;
   }
 
   /** What hover lands on: the nearest visible object, or the body whose disc the hidden objects are over. */
@@ -1967,7 +1964,9 @@ export class SceneController {
       u.uGroupE.value[i].set(g.shell, g.back);
     });
 
-    // the minor planet cloud: per-cell offsets in float64 (anchor + Sun - camera), culling and detail, a new worker pass when its positions are visibly old
+    // the minor planet cloud: hidden when `classify()` hides (or the query leaves out) a representative minor planet record or the scope drops it (no rule of its own);
+    // per-cell offsets in float64 (anchor + Sun - camera), culling and detail, a new worker pass when its positions are visibly old
+    this.minor.setHidden(!isDrawn(classify(MINOR_PLANET_PROBE, this.query, this.ctx)) || !inScope({ parent: 'SUN', keep: false, kind: 'asteroid' }, this.scopeBodySet, this.scopeMode));
     const dirV = cam.getWorldDirection(this.patchDir);
     this.minor.update({
       origin: f.origin, dir: [dirV.x, dirV.y, dirV.z], sun: sunPositionEci(t), simMs: t, fovRad: cam.fov * DEG, aspect: cam.aspect, heightPx: this.container.clientHeight,

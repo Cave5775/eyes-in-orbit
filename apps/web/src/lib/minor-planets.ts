@@ -27,8 +27,12 @@ export const CELL_FAR_KM = 8 * AU_KM;
 export const NEAR_LIMIT_KM = 8 * AU_KM;
 /** Worst error of a point from its offset's float32 rounding, km (half a step at 2^26..2^27 km). */
 export const CELL_ERROR_KM = 4;
-/** Cap on the speed of a minor planet used by the drift rule, km/s (the fastest near-Earth objects are about 40 km/s at perihelion; the belt moves 17-20). */
-export const MAX_SPEED_KM_S = 30;
+/**
+ * Bound on the speed of a minor planet used by the drift rule, km/s: vis-viva at a perihelion of 0.15 AU is 104 km/s for a = 1 AU, the belt
+ * moves 17-20 km/s and a near-Earth object up to 40. Sungrazers (q < 0.15 AU, a few hundred objects) are faster and lag by more than the
+ * rule assumes between passes.
+ */
+export const MAX_SPEED_KM_S = 100;
 
 const GM = SUN.gm;
 
@@ -96,6 +100,8 @@ export interface BeltResult {
   h: Uint16Array;
   /** orbit index (over all the chunks, in file order) of each slot */
   index: Uint32Array;
+  /** cell number of each slot (the vertex attribute: the shader looks the cell's offset up in a texture) */
+  cell: Uint32Array;
   /** how long the pass took, ms */
   ms: number;
 }
@@ -149,7 +155,7 @@ export function propagateBelt(chunks: readonly UnpackedOrbits[], tMs: number): B
     next[c] = at;
     at += counts[c];
   }
-  const offsets = new Float32Array(n * 3), h = new Uint16Array(n), index = new Uint32Array(n);
+  const offsets = new Float32Array(n * 3), h = new Uint16Array(n), index = new Uint32Array(n), cell = new Uint32Array(n);
   k = 0;
   for (const u of chunks) {
     for (let i = 0; i < u.count; i++, k++) {
@@ -159,9 +165,10 @@ export function propagateBelt(chunks: readonly UnpackedOrbits[], tMs: number): B
       offsets[s * 3 + 2] = pos[k * 3 + 2] - anchors[c * 3 + 2];
       h[s] = u.h[i];
       index[s] = k;
+      cell[s] = c;
     }
   }
-  return { simMs: tMs, cells, offsets, h, index, ms: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0 };
+  return { simMs: tMs, cells, offsets, h, index, cell, ms: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0 };
 }
 
 // ------------------------------------------------------------------ level of detail and culling
@@ -189,42 +196,65 @@ export function sphereInCone(rel: Vec3, radiusKm: number, dir: Vec3, halfRad: nu
 
 // ------------------------------------------------------------------ when to run again
 
-/** A pass is never started within this many ms of the last one's end, unless the clock jumped. */
+/** The shortest gap between a pass's end and the next one's start, ms (a seek or a new chunk). */
 export const MIN_RERUN_MS = 1500;
-/** A change of sim time larger than this (a seek, a rate change that moved the clock far) reruns at once. */
+/** The shortest gap between two DRIFT passes, ms: a pass costs a second of worker time, about 60 MB of allocations, a 25 MB transfer and a 22 MB GPU upload. */
+export const MIN_DRIFT_RERUN_MS = 20_000;
+/** A pass is not started again before this many times its own duration has passed (a slow machine passes less often). */
+export const COST_FACTOR = 15;
+/** A change of sim time larger than this (a seek, a rate change that moved the clock far) reruns without waiting for the drift gap. */
 export const JUMP_MS = 24 * 3600_000;
-/** Allowed drift, screen pixels: positions older than this many pixels of motion at the nearest drawn cell are replaced. */
+/** Allowed drift, screen pixels: positions older than this many pixels of motion at the nearest drawn points are replaced. */
 export const DRIFT_PX = 0.5;
 
+/**
+ * Distance to the nearest point when the camera is INSIDE a populated cell (so the cell's own surface says nothing): the expected
+ * nearest-neighbour distance of `count` points spread over a cube of edge `edgeKm`, 0.55 (V / n)^(1/3). 1 AU cell with 50,000 points: 2e6 km.
+ */
+export function insideNearestKm(count: number, edgeKm: number): number {
+  return 0.55 * Math.cbrt((edgeKm * edgeKm * edgeKm) / Math.max(1, count));
+}
+
 export interface RerunInput {
-  /** sim time now, and the time of the positions on show (null: none yet) */
+  /** sim time now, and the time of the positions on show (null: none yet or new orbits arrived) */
   simMs: number;
   atMs: number | null;
-  /** distance from the camera to the nearest drawn cell's surface, km (floored by the caller) */
+  /** distance from the camera to the nearest drawn points, km (`cellNearestKm` over the drawn cells, floored by the caller) */
   nearestKm: number;
   fovRad: number;
   viewportPx: number;
-  /** wall time since the last pass ended, ms */
+  /** wall time since the last pass ended, ms, and how long that pass took, ms */
   sinceLastMs: number;
+  lastPassMs: number;
   running: boolean;
 }
 
 /**
  * Does the cloud need a new pass? Only when it is wrong by a visible amount: a minor planet moves at most `MAX_SPEED_KM_S`, so the
- * positions are `|dt| * v` km off; that is compared with half a pixel at the nearest drawn cell. At 1x real time and the whole belt in view
- * (pixel 1e5 km) a pass is due about every half hour; a camera near one asteroid (pixel 1 km) wants passes as often as `MIN_RERUN_MS` allows.
- * A jump of the clock is rerun at once.
+ * positions are `|dt| * v` km off; that is compared with half a pixel at the nearest drawn points. Never closer than
+ * `max(MIN_DRIFT_RERUN_MS, COST_FACTOR * lastPassMs)` after the last pass (the cost of a pass: a second of worker time, 60 MB allocated, 25 MB moved, 22 MB uploaded):
+ * with nothing within 1e8 km (a pixel of 1e5 km) a pass is due every 8 minutes at 1x, with the camera inside a belt cell (the nearest points
+ * 2e6 km away, a pixel of 2e3 km) every 20 s, the floor. A jump of the clock (more than a day) skips the drift gap but still waits
+ * `max(MIN_RERUN_MS, 3 * lastPassMs)`, so a clock running a day per second does not chain passes back to back; new orbits (`atMs` null) wait
+ * `max(MIN_RERUN_MS, 2 * lastPassMs)`.
  */
 export function rerunDue(i: RerunInput): 'first' | 'jump' | 'drift' | null {
   if (i.running) return null;
-  if (i.atMs === null) return 'first';
+  if (i.atMs === null) return i.sinceLastMs >= Math.max(MIN_RERUN_MS, 2 * i.lastPassMs) ? 'first' : null;
   const dt = Math.abs(i.simMs - i.atMs);
   if (dt === 0) return null;
-  if (dt > JUMP_MS) return 'jump';
-  if (i.sinceLastMs < MIN_RERUN_MS) return null;
+  if (dt > JUMP_MS) return i.sinceLastMs >= Math.max(MIN_RERUN_MS, 3 * i.lastPassMs) ? 'jump' : null;
+  if (i.sinceLastMs < Math.max(MIN_DRIFT_RERUN_MS, COST_FACTOR * i.lastPassMs)) return null;
   const pixelKm = (i.nearestKm * i.fovRad) / Math.max(1, i.viewportPx);
   return (dt / 1000) * MAX_SPEED_KM_S > DRIFT_PX * pixelKm ? 'drift' : null;
 }
+
+/**
+ * What a pass that has just finished leaves as the time of the positions on show: its own time, unless orbits were handed to the worker
+ * after the pass began (`total` < `loaded`): those are not in it, so `null` makes the next frame ask for a pass that has them.
+ */
+export const shownAtMs = (simMs: number, total: number, loaded: number): number | null => (total >= loaded ? simMs : null);
+
 
 // ------------------------------------------------------------------ picking
 

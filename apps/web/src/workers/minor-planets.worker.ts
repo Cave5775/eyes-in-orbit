@@ -17,8 +17,8 @@ ctx.onmessage = (ev: MessageEvent<MpToWorker>) => {
     chunks.length = 0;
   } else if (m.type === 'run') {
     const r = propagateBelt(chunks, m.simMs);
-    const out: MpFromWorker = { type: 'cells', seq: m.seq, simMs: r.simMs, total: r.index.length, cells: r.cells, offsets: r.offsets, h: r.h, index: r.index, ms: r.ms };
-    ctx.postMessage(out, [r.offsets.buffer, r.h.buffer, r.index.buffer]);
+    const out: MpFromWorker = { type: 'cells', seq: m.seq, simMs: r.simMs, total: r.index.length, cells: r.cells, offsets: r.offsets, h: r.h, index: r.index, cell: r.cell, ms: r.ms };
+    ctx.postMessage(out, [r.offsets.buffer, r.h.buffer, r.index.buffer, r.cell.buffer]);
   } else {
     let at = m.index;
     let orbit = null;

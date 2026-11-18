@@ -3,7 +3,7 @@ import {
   MPCORB_SAMPLE, AU_KM, OrbitBuilder, SUN, keplerFromDegrees, keplerState, orbitAt, precessDir, readContainer, readMpcorb, DEG, type MpcOrbit, type UnpackedOrbits,
 } from '@eio/core';
 import {
-  CELL_ERROR_KM, CELL_FAR_KM, CELL_NEAR_KM, JUMP_MS, MIN_RERUN_MS, cellDrawCount, eclipticToDate, orbitPosition, pickBelt, pickedOrbit, pointLook,
+  CELL_ERROR_KM, CELL_FAR_KM, CELL_NEAR_KM, JUMP_MS, cellDrawCount, insideNearestKm, shownAtMs, eclipticToDate, orbitPosition, pickBelt, pickedOrbit, pointLook,
   propagateBelt, rerunDue, sphereInCone,
 } from '../src/lib/minor-planets';
 
@@ -145,23 +145,44 @@ describe('level of detail and culling', () => {
 });
 
 describe('when to run again', () => {
-  const base = { simMs: T, atMs: T, nearestKm: 1e8, fovRad: 45 * DEG, viewportPx: 800, sinceLastMs: 1e6, running: false };
-  it('runs first, never while running, and rarely at 1x real time with the belt in view', () => {
+  const base = { simMs: T, atMs: T, nearestKm: 1e8, fovRad: 45 * DEG, viewportPx: 800, sinceLastMs: 1e6, lastPassMs: 1100, running: false };
+  it('runs first, never while running, and rarely at 1x real time with nothing near', () => {
     expect(rerunDue({ ...base, atMs: null })).toBe('first');
     expect(rerunDue({ ...base, atMs: null, running: true })).toBeNull();
     expect(rerunDue(base)).toBeNull();
-    // pixel = 1e8 * 0.785 / 800 = 98 000 km; half of it at 30 km/s is 1630 s
-    expect(rerunDue({ ...base, simMs: T + 600_000 })).toBeNull();
-    expect(rerunDue({ ...base, simMs: T + 2_000_000 })).toBe('drift');
+    // pixel = 1e8 * 0.785 / 800 = 98 000 km; half of it at 100 km/s is 490 s
+    expect(rerunDue({ ...base, simMs: T + 300_000 })).toBeNull();
+    expect(rerunDue({ ...base, simMs: T + 600_000 })).toBe('drift');
   });
-  it('a close camera wants new positions sooner, but not within the minimum interval', () => {
-    const near = { ...base, nearestKm: 1e5, simMs: T + 20_000 };
-    expect(rerunDue(near)).toBe('drift');
-    expect(rerunDue({ ...near, sinceLastMs: MIN_RERUN_MS - 1 })).toBeNull();
+  it('with the camera inside a belt cell the nearest points are a spacing away, not the 1e5 km floor: a drift pass is due after about 20 s, not on every pass', () => {
+    // a 1 AU cell with 50,000 points: nearest about 2.3e6 km (the floor of the old rule was 1e5 km)
+    const near = insideNearestKm(50_000, CELL_NEAR_KM);
+    expect(near).toBeGreaterThan(2e6);
+    expect(near).toBeLessThan(2.6e6);
+    const inside = { ...base, nearestKm: near };
+    // 2 s after a pass: nothing (the old rule fired here); 10 s: still the cost gap; 25 s at 1x (25 s * 100 km/s = 2500 km > half a pixel of 1.1e3 km): due
+    expect(rerunDue({ ...inside, simMs: T + 2_000, sinceLastMs: 2_000 })).toBeNull();
+    expect(rerunDue({ ...inside, simMs: T + 10_000, sinceLastMs: 10_000 })).toBeNull();
+    expect(rerunDue({ ...inside, simMs: T + 25_000, sinceLastMs: 25_000 })).toBe('drift');
+    // the floor on its own (1e5 km) would have asked as soon as the gap allowed, with 100 km of drift
+    expect(rerunDue({ ...base, nearestKm: 1e5, simMs: T + 1_000, sinceLastMs: 25_000 })).toBe('drift');
   });
-  it('a jump of the clock reruns at once', () => {
-    expect(rerunDue({ ...base, simMs: T + JUMP_MS + 1, sinceLastMs: 0 })).toBe('jump');
-    expect(rerunDue({ ...base, simMs: T - 5 * JUMP_MS, sinceLastMs: 0 })).toBe('jump');
+  it('the gap grows with the cost of a pass: a slow machine passes less often', () => {
+    const slow = { ...base, nearestKm: 1e6, simMs: T + 3_600_000, lastPassMs: 4000 };
+    expect(rerunDue({ ...slow, sinceLastMs: 40_000 })).toBeNull(); // 15 * 4 s = 60 s
+    expect(rerunDue({ ...slow, sinceLastMs: 61_000 })).toBe('drift');
+  });
+  it('a jump of the clock skips the drift gap but not the pass cost: a clock running a day per second does not chain passes', () => {
+    expect(rerunDue({ ...base, simMs: T + JUMP_MS + 1, sinceLastMs: 5_000 })).toBe('jump');
+    expect(rerunDue({ ...base, simMs: T - 5 * JUMP_MS, sinceLastMs: 5_000 })).toBe('jump');
+    expect(rerunDue({ ...base, simMs: T + JUMP_MS + 1, sinceLastMs: 3_000 })).toBeNull(); // 3 x the 1.1 s pass: 3.3 s
+    expect(rerunDue({ ...base, simMs: T + JUMP_MS + 1, sinceLastMs: 3_400 })).toBe('jump');
+  });
+  it('new orbits wait for twice the last pass, and a pass that missed a chunk leaves the positions as not shown', () => {
+    expect(rerunDue({ ...base, atMs: null, sinceLastMs: 1_000 })).toBeNull();
+    expect(rerunDue({ ...base, atMs: null, sinceLastMs: 2_300 })).toBe('first');
+    expect(shownAtMs(T, 65_536, 65_536)).toBe(T);
+    expect(shownAtMs(T, 65_536, 131_072)).toBeNull();
   });
 });
 

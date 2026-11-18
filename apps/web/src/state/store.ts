@@ -85,6 +85,8 @@ interface State {
    * the remembered frame is not restored yet, because its entity may be on a later page; `catalogLoaded` does it.
    */
   upsertEntities(records: EntityRecord[], replace?: boolean, partial?: boolean): void;
+  /** Drop entities from the catalogue (the lightweight minor planet entities that are no longer selected); the selection is never removed. */
+  removeEntities(ids: string[]): void;
   /**
    * What the last merge changed: the records it carried and the catalogue map they were merged into (`base`). A consumer that last
    * saw `base` can apply just `records` instead of walking the whole catalogue; anyone else takes `entities`. Null after a replace.
@@ -312,8 +314,21 @@ export const useStore = create<State>((set, get) => ({
   entityChange: null,
   catalogShape: 0,
 
+  removeEntities(ids) {
+    const s = get();
+    const gone = ids.filter((id) => id !== s.selectedId && s.entities.has(id));
+    if (!gone.length) return;
+    const prev = s.entities;
+    set({ entities: (prev instanceof Catalog ? prev : Catalog.of(prev.values())).without(gone), entityChange: null, catalogShape: s.catalogShape + 1 });
+  },
   upsertEntities(records, replace = false, partial = false) {
     const t0 = perf.on ? performance.now() : 0;
+    // a full reload (a reconnect) keeps the selected minor planet: its record exists only here, the server does not know it
+    if (replace) {
+      const sel = get().selectedId;
+      const keep = sel?.startsWith('mpc-') ? get().entities.get(sel) : undefined;
+      if (keep && keep.group === 'minor-planets' && !records.some((r) => r.id === keep.id)) records = [...records, keep];
+    }
     // a merge writes into the shared map and hands out a new view (lib/catalog.ts): no copy of the catalogue; `prev` is read
     // before, since an older view sees the merge too
     const prev = get().entities;
