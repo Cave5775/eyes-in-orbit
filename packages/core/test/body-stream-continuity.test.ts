@@ -9,20 +9,26 @@ const OFFSET_V: Vec3 = [1e-3, 0, -1e-3]; // km/s
 
 const orbiting = new BodyRegistry().all().filter((b) => b.parentId && b.orbit).map((b) => b.id);
 
-/** A stream of the body's own Kepler orbit plus a constant offset, over a window of ±halfMs around T. */
-function streamed(id: string): { reg: BodyRegistry; fresh: BodyRegistry; start: number; end: number; periodMs: number } {
+/**
+ * A stream of the body's own Kepler orbit plus a constant offset, over a window of ±halfMs around T. The offset is the one above
+ * for every orbit of 10,000 km or more and shrinks in proportion for a smaller one (Dimorphos circles Didymos at 1.2 km: an error
+ * of 3e5 km is no Horizons-minus-Kepler error of that body).
+ */
+function streamed(id: string): { reg: BodyRegistry; fresh: BodyRegistry; start: number; end: number; periodMs: number; offR: Vec3 } {
   const fresh = new BodyRegistry(), reg = new BodyRegistry();
+  const k = Math.min(1, fresh.get(id).orbit!.a / 1e4);
+  const offR = OFFSET_R.map((x) => x * k) as Vec3, offV = OFFSET_V.map((x) => x * k) as Vec3;
   const periodMs = bodyPeriodSec(fresh.get(id), fresh)! * 1000;
   const halfMs = Math.min(2 * YEAR_MS, periodMs * 0.02);
   const n = 41;
   const samples: Sample[] = Array.from({ length: n }, (_, k) => {
     const t = T - halfMs + (k * 2 * halfMs) / (n - 1);
     const s = bodyStateInParent(fresh.get(id), t, fresh)!;
-    return [t, s.r[0] + OFFSET_R[0], s.r[1] + OFFSET_R[1], s.r[2] + OFFSET_R[2], s.v[0] + OFFSET_V[0], s.v[1] + OFFSET_V[1], s.v[2] + OFFSET_V[2]];
+    return [t, s.r[0] + offR[0], s.r[1] + offR[1], s.r[2] + offR[2], s.v[0] + offV[0], s.v[1] + offV[1], s.v[2] + offV[2]];
   });
   const parent = reg.get(id).parentId!;
   expect(setBodyStream(id, { frame: `${parent}:inertial`, samples }, reg)).toBe(true);
-  return { reg, fresh, start: samples[0][0], end: samples[n - 1][0], periodMs };
+  return { reg, fresh, start: samples[0][0], end: samples[n - 1][0], periodMs, offR };
 }
 
 describe('a streamed body continues smoothly past its sample window', () => {
@@ -39,22 +45,22 @@ describe('a streamed body continues smoothly past its sample window', () => {
   });
 
   it.each(orbiting)('%s: the correction fades to the plain Kepler orbit and does nothing inside the window', (id) => {
-    const { reg, fresh, start, end, periodMs } = streamed(id);
+    const { reg, fresh, start, end, periodMs, offR } = streamed(id);
     const st = (r: BodyRegistry, t: number) => bodyStateInParent(r.get(id), t, r)!;
     const fade = periodMs * STREAM_FADE_PERIOD_FRACTION;
     // at the edge the offset is the whole correction, at the end of the fade none is left
-    expect(dist(st(reg, end + 1).r, st(fresh, end + 1).r)).toBeGreaterThan(0.99 * dist(OFFSET_R, [0, 0, 0]));
+    expect(dist(st(reg, end + 1).r, st(fresh, end + 1).r)).toBeGreaterThan(0.99 * dist(offR, [0, 0, 0]));
     for (const t of [end + fade, end + 2 * fade, start - fade, start - 3 * fade]) {
       expect(dist(st(reg, t).r, st(fresh, t).r), `${id} at ${(t - T) / YEAR_MS} y`).toBeLessThan(1e-6);
       expect(dist(st(reg, t).v, st(fresh, t).v)).toBeLessThan(1e-8); // float noise of the Kepler solver, 1.1e-9 km/s for Larissa
     }
     // halfway through the fade: strictly between (smoothstep gives half the offset)
     const mid = dist(st(reg, end + fade / 2).r, st(fresh, end + fade / 2).r);
-    expect(mid).toBeGreaterThan(0.4 * dist(OFFSET_R, [0, 0, 0]));
-    expect(mid).toBeLessThan(0.6 * dist(OFFSET_R, [0, 0, 0]));
+    expect(mid).toBeGreaterThan(0.4 * dist(offR, [0, 0, 0]));
+    expect(mid).toBeLessThan(0.6 * dist(offR, [0, 0, 0]));
     // inside the window: the stream (Kepler + offset, to the Hermite error)
     const tIn = T + (end - start) / 7;
-    expect(dist(st(reg, tIn).r, [0, 1, 2].map((k) => st(fresh, tIn).r[k] + OFFSET_R[k]))).toBeLessThan(1 + 1e-6 * Math.hypot(...st(fresh, tIn).r));
+    expect(dist(st(reg, tIn).r, [0, 1, 2].map((k) => st(fresh, tIn).r[k] + offR[k]))).toBeLessThan(1 + 1e-6 * Math.hypot(...st(fresh, tIn).r));
   });
 
   it('is C1: the velocity matches the derivative of the position through the fade', () => {

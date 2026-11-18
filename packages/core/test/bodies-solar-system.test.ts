@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   BodyProvider, BodyRegistry, DEFAULT_BODY_LIST, EntityGraph, bodyDepth, bodyEntityRecords, bodyOf, bodyPeriodSec, bodyStateEci,
   bodyStateInParent, compareHierarchy, convert, defaultBodies, entityRank, equatorToInertialMatrix, isBodyEntity, isOrbitable,
-  mulMV, precessDir, providerFromSpec, setBodyStream, eclipticToEquatorial, DEG, type Sample,
+  mulMV, precessDir, providerFromSpec, setBodyStream, eclipticToEquatorial, DEG, NO_ROTATION, type Sample,
 } from '../src';
 
 const DAY = 86400;
@@ -18,9 +18,11 @@ const MOONS: Record<string, string[]> = {
   NEPTUNE: ['TRITON', 'DESPINA', 'GALATEA', 'LARISSA', 'PROTEUS'], PLUTO: ['CHARON', 'NIX', 'HYDRA'],
 };
 /** Moons whose orbit is given in the ecliptic of J2000 (SSD frame `ecliptic`) with all six elements: far out, eccentric, no rotation model. */
-const ECLIPTIC_MOONS: Record<string, string> = { HIMALIA: 'JUPITER', NEREID: 'NEPTUNE', PHOEBE: 'SATURN', JANUS: 'SATURN', EPIMETHEUS: 'SATURN' };
+const ECLIPTIC_MOONS: Record<string, string> = { HIMALIA: 'JUPITER', NEREID: 'NEPTUNE', PHOEBE: 'SATURN', JANUS: 'SATURN', EPIMETHEUS: 'SATURN', DIMORPHOS: 'DIDYMOS' };
+/** The named asteroids (entity kind `asteroid`), appended after the 50 earlier bodies in this order; Dimorphos, their moon, is last. */
+const ASTEROIDS = ['VESTA', 'PALLAS', 'HYGIEA', 'PSYCHE', 'BENNU', 'RYUGU', 'DIDYMOS', 'APOPHIS', 'EROS', 'ITOKAWA', 'ARROKOTH'];
 /** Moons with no GM in any source (the SSD page lists Nereid as 0.00000, Puck has no row): GM 0 means "not determined". */
-const NO_GM = ['NEREID', 'PUCK'];
+const NO_GM = ['NEREID', 'PUCK', 'BENNU', 'APOPHIS', 'ARROKOTH'];
 /** The original 35 bodies in registry order: entityRank uses the index, so new bodies are only ever appended. */
 const FIRST_35 = ['SUN', 'EARTH', 'MOON', 'MARS', 'MERCURY', 'VENUS', 'JUPITER', 'SATURN', 'URANUS', 'NEPTUNE', 'CERES', 'PLUTO', 'ERIS', 'HAUMEA', 'MAKEMAKE',
   'PHOBOS', 'DEIMOS', 'IO', 'EUROPA', 'GANYMEDE', 'CALLISTO', 'MIMAS', 'ENCELADUS', 'TETHYS', 'DIONE', 'RHEA', 'TITAN', 'IAPETUS',
@@ -29,9 +31,10 @@ const FIRST_35 = ['SUN', 'EARTH', 'MOON', 'MARS', 'MERCURY', 'VENUS', 'JUPITER',
 describe('the solar system registry', () => {
   const bodies = defaultBodies.all();
 
-  it('has 50 bodies with unique ids, every one with a known parent, radius > 0 and GM > 0 (but Nereid and Puck, GM not determined)', () => {
-    expect(bodies).toHaveLength(50);
+  it('has 62 bodies with unique ids, every one with a known parent, radius > 0 and GM > 0 (but Nereid, Puck, Bennu, Apophis and Arrokoth, GM not determined)', () => {
+    expect(bodies).toHaveLength(62);
     expect(DEFAULT_BODY_LIST.slice(0, 35).map((b) => b.id)).toEqual(FIRST_35);
+    expect(DEFAULT_BODY_LIST.slice(50).map((b) => b.id)).toEqual([...ASTEROIDS, 'DIMORPHOS']);
     expect(new Set(bodies.map((b) => b.id)).size).toBe(bodies.length);
     expect(new Set(bodies.map((b) => b.name)).size).toBe(bodies.length);
     for (const b of bodies) {
@@ -46,7 +49,7 @@ describe('the solar system registry', () => {
         expect(b.orbit, b.id).toBeDefined();
         expect(b.orbit!.a, b.id).toBeGreaterThan(0);
         expect(b.orbit!.e, b.id).toBeGreaterThanOrEqual(0);
-        if (!ECLIPTIC_MOONS[b.id]) expect(b.orbit!.e, b.id).toBeLessThan(0.5);
+        if (!ECLIPTIC_MOONS[b.id] && !ASTEROIDS.includes(b.id)) expect(b.orbit!.e, b.id).toBeLessThan(0.5);
         else expect(b.orbit!.e, b.id).toBeLessThan(1);
         // a moon is outside its planet's surface and inside a few million km (Phoebe and the two ecliptic-frame irregulars reach 5 to 13 million)
         if (b.parentId !== 'SUN') {
@@ -66,7 +69,8 @@ describe('the solar system registry', () => {
     expect(defaultBodies.lineage('IO').map((b) => b.id)).toEqual(['IO', 'JUPITER', 'SUN']);
     expect(defaultBodies.lineage('CHARON').map((b) => b.id)).toEqual(['CHARON', 'PLUTO', 'SUN']);
     for (const [m, planet] of Object.entries(ECLIPTIC_MOONS)) expect(defaultBodies.lineage(m).map((b) => b.id), m).toEqual([m, planet, 'SUN']);
-    expect(bodies.filter((b) => b.parentId === 'SUN')).toHaveLength(PLANETS.length + DWARFS.length);
+    for (const id of ASTEROIDS) expect(defaultBodies.get(id).parentId, id).toBe('SUN');
+    expect(bodies.filter((b) => b.parentId === 'SUN')).toHaveLength(PLANETS.length + DWARFS.length + ASTEROIDS.length);
   });
 
   it('keeps the original four first with unchanged ids, radii and ranks', () => {
@@ -98,11 +102,17 @@ describe('the solar system registry', () => {
     near('NEREID', 360.133039, 0.01); near('DESPINA', 0.3347, 0.03); near('GALATEA', 0.4292, 0.03); near('LARISSA', 0.5549, 0.03); near('PROTEUS', 1.1229, 0.03);
     // Pluto's GM in the registry is the Pluto-Charon system, which is what circumbinary Nix and Hydra feel
     near('NIX', 24.85, 0.03); near('HYDRA', 38.20, 0.03);
+    // the named asteroids: PER (Julian years) of each Horizons record, 2026-11-17; Dimorphos 11.92177 h (its pre-impact period, same record)
+    const years = (id: string, per: number) => near(id, per * 365.25, 0.002);
+    years('VESTA', 3.62997); years('PALLAS', 4.61784); years('HYGIEA', 5.56552); years('PSYCHE', 4.99982); years('BENNU', 1.19548);
+    years('RYUGU', 1.29748); years('DIDYMOS', 2.10533); years('APOPHIS', 0.88606); years('EROS', 1.76102); years('ITOKAWA', 1.52138);
+    years('ARROKOTH', 296.30944);
+    near('DIMORPHOS', 11.92177 / 24, 0.01);
   });
 
-  it('gives rotation where the IAU report has it: Eris, Haumea, Makemake and the moons without a model (Himalia, Hyperion, Nereid, Nix, Hydra) render unrotated', () => {
+  it('gives rotation where the IAU report has it: Eris, Haumea, Makemake, the moons without a model (Himalia, Hyperion, Nereid, Nix, Hydra) and the asteroids without one render unrotated', () => {
     const none = bodies.filter((b) => b.rotation.kind === 'linear' && b.rotation.rateDegPerDay === 0).map((b) => b.id);
-    expect(none.sort()).toEqual(['ERIS', 'HAUMEA', 'HIMALIA', 'HYDRA', 'HYPERION', 'MAKEMAKE', 'NEREID', 'NIX']);
+    expect(none.sort()).toEqual(['APOPHIS', 'ARROKOTH', 'BENNU', 'DIMORPHOS', 'ERIS', 'HAUMEA', 'HIMALIA', 'HYDRA', 'HYGIEA', 'HYPERION', 'MAKEMAKE', 'NEREID', 'NIX', 'PSYCHE', 'RYUGU']);
     for (const b of bodies.filter((x) => !none.includes(x.id) && x.id !== 'EARTH')) {
       const r = b.rotation;
       expect(r.kind, b.id).toBe('linear');
@@ -118,7 +128,7 @@ describe('the solar system registry', () => {
   });
 
   it('keeps the ecliptic-frame irregulars (Himalia, Nereid, Phoebe, Janus, Epimetheus) within a(1 -+ e) of their planet and at their SSD inclination to the ecliptic', () => {
-    const tilt = { HIMALIA: 28.611, NEREID: 5.1, PHOEBE: 180 - 173.259, JANUS: 27.984, EPIMETHEUS: 27.738 };
+    const tilt = { HIMALIA: 28.611, NEREID: 5.1, PHOEBE: 180 - 173.259, JANUS: 27.984, EPIMETHEUS: 27.738, DIMORPHOS: 180 - 170.701 };
     const ecl = eclipticToEquatorial([0, 0, 1]); // the ecliptic pole in the equatorial axes
     for (const m of Object.keys(ECLIPTIC_MOONS)) {
       const b = defaultBodies.get(m);
@@ -167,7 +177,13 @@ describe('body entities of the whole system', () => {
     for (const ms of Object.values(MOONS)) for (const m of ms) expect(r[`body-${m.toLowerCase()}`].kind, m).toBe('moon');
     for (const [m, planet] of Object.entries(ECLIPTIC_MOONS)) expect(r[`body-${m.toLowerCase()}`], m).toMatchObject({ kind: 'moon', bodyId: planet, parentId: `body-${planet.toLowerCase()}` });
     expect(r['body-sun'].kind).toBe('star');
-    expect(recs.filter((x) => x.kind === 'moon')).toHaveLength(36);
+    expect(recs.filter((x) => x.kind === 'moon')).toHaveLength(37); // the Moon, 35 of the planets and Pluto, and Dimorphos
+    // a small body of the Sun is an `asteroid` (also Arrokoth, a Kuiper-belt object: the registry has no other small-body kind); its own moon is a `moon`
+    for (const id of ASTEROIDS) expect(r[`body-${id.toLowerCase()}`], id).toMatchObject({ kind: 'asteroid', bodyId: 'SUN', parentId: 'body-sun' });
+    expect(recs.filter((x) => x.kind === 'asteroid')).toHaveLength(11);
+    expect(r['body-dimorphos']).toMatchObject({ kind: 'moon', bodyId: 'DIDYMOS', parentId: 'body-didymos' });
+    expect(entityRank(r['body-dimorphos'])).toBe(2061);
+    expect(entityRank(r['body-vesta'])).toBe(1050);
   });
 
   it('nests moons under planets under the Sun: parentId, bodyId and rank', () => {
@@ -194,6 +210,9 @@ describe('body entities of the whole system', () => {
     expect(r['body-pluto'].aliases).toEqual({ body: 'PLUTO', alt: '134340 Pluto' });
     expect(r['body-ceres'].aliases.alt).toBe('1 Ceres');
     expect(r['body-io'].aliases).toEqual({ body: 'IO' });
+    expect(r['body-vesta'].aliases).toEqual({ body: 'VESTA', alt: '4 Vesta' });
+    expect(r['body-apophis'].aliases.alt).toBe('99942 Apophis');
+    expect(r['body-dimorphos'].aliases.alt).toBe('S/2003 (65803) 1');
     for (const rec of recs) {
       expect(isBodyEntity(rec), rec.id).toBe(true);
       expect(isOrbitable(rec), rec.id).toBe(true);
@@ -309,5 +328,68 @@ describe('constants verified against external sources (2026-10-29)', () => {
     for (const id of ['body-nereid', 'body-puck']) expect(recs[id].attrs, id).not.toHaveProperty('gm');
     expect(recs['body-nix'].attrs).toHaveProperty('gm', 0.0015);
     expect(defaultBodies.get('PUCK').radiusKm).toBe(77); // pck00011 BODY715_RADII (the SSD page has no Puck row)
+  });
+});
+
+describe('the named asteroids (constants read 2026-11-17)', () => {
+  const b = (id: string) => defaultBodies.get(id);
+  const rot = (id: string) => b(id).rotation as { poleRaDeg: number; poleDecDeg: number; w0Deg: number; rateDegPerDay: number };
+
+  it('pins radius and GM of the Horizons physical parameters (and the DART records for Didymos and Dimorphos)', () => {
+    const phys = (id: string) => [b(id).radiusKm, b(id).gm];
+    expect(phys('VESTA')).toEqual([261.385, 17.28828]);
+    expect(phys('PALLAS')).toEqual([256.5, 13.63]);
+    expect(phys('HYGIEA')).toEqual([203.56, 7]);
+    expect(phys('PSYCHE')).toEqual([111, 1.601]);
+    expect(phys('BENNU')).toEqual([0.241, 0]); // Horizons: GM n.a.
+    expect(phys('RYUGU')).toEqual([0.448, 3e-8]);
+    expect(phys('APOPHIS')).toEqual([0.17, 0]); // Horizons: GM n.a.
+    expect(phys('EROS')).toEqual([8.42, 4.463e-4]);
+    expect(phys('ITOKAWA')).toEqual([0.165, 2.1e-9]);
+    expect(phys('ARROKOTH')).toEqual([9.948, 0]); // half of the 19.896 km volume equivalent diameter; Horizons has neither radius nor GM
+    expect(phys('DIDYMOS')).toEqual([0.3551, 3.51278e-8]); // volume 0.1876 km^3 -> 0.3551 km
+    expect(phys('DIMORPHOS')).toEqual([0.0728, 3.0268e-10]); // volume 0.001616 km^3 -> 0.0728 km
+    expect(Math.cbrt((3 * 0.1876) / (4 * Math.PI))).toBeCloseTo(0.3551, 4);
+    expect(Math.cbrt((3 * 0.001616) / (4 * Math.PI))).toBeCloseTo(0.0728, 4);
+    for (const id of [...ASTEROIDS, 'DIMORPHOS']) expect(b(id).flattening, id).toBe(0);
+  });
+
+  it('pins the rotation of the four with an IAU model (NAIF pck00011.tpc, BODY2000004, 2000002, 2000433, 2025143) and Didymos (Horizons 920065803); the rest are NO_ROTATION', () => {
+    expect(rot('VESTA')).toMatchObject({ poleRaDeg: 309.031, poleDecDeg: 42.235, w0Deg: 285.39, rateDegPerDay: 1617.3329428 });
+    expect(rot('PALLAS')).toMatchObject({ poleRaDeg: 33, poleDecDeg: -3, w0Deg: 38, rateDegPerDay: 1105.8036 });
+    expect(rot('EROS')).toMatchObject({ poleRaDeg: 11.35, poleDecDeg: 17.22, w0Deg: 326.07, rateDegPerDay: 1639.38864745 });
+    expect(rot('ITOKAWA')).toMatchObject({ poleRaDeg: 90.53, poleDecDeg: -66.3, w0Deg: 0, rateDegPerDay: 712.143 });
+    expect(rot('DIDYMOS')).toMatchObject({ poleRaDeg: 69.32686, poleDecDeg: -72.72455, w0Deg: 0 });
+    expect(24 / (rot('DIDYMOS').rateDegPerDay / 360)).toBeCloseTo(2.26, 3); // the 2.2600 h period of the same record
+    for (const id of ['HYGIEA', 'PSYCHE', 'BENNU', 'RYUGU', 'APOPHIS', 'ARROKOTH', 'DIMORPHOS']) expect(b(id).rotation, id).toBe(NO_ROTATION);
+  });
+
+  it('fallback orbits: Horizons osculating elements (heliocentric ecliptic J2000) at the epoch of each record', () => {
+    const o = (id: string) => b(id).orbit!;
+    const AU = 149_597_870.7;
+    expect(o('VESTA').a / AU).toBeCloseTo(2.361908654, 8);
+    expect(o('VESTA').e).toBe(0.08857261385730482);
+    expect(o('VESTA').epochMs).toBe(Date.UTC(2020, 0, 1)); // JD 2458849.5
+    expect(o('BENNU').epochMs).toBe(Date.UTC(2011, 0, 1)); // JD 2455562.5
+    expect(o('DIDYMOS').epochMs).toBe(Date.UTC(2024, 4, 24, 12)); // JD 2460455.0
+    expect(o('ARROKOTH').epochMs).toBe(Date.UTC(2017, 11, 14)); // JD 2458101.5
+    expect(o('DIDYMOS').i / DEG).toBeCloseTo(3.414218407, 8);
+    for (const id of ASTEROIDS) expect(b(id).orbitPlane, id).toBe('ecliptic');
+    expect(b('DIMORPHOS').orbitPlane).toBe('ecliptic');
+    expect(o('DIMORPHOS').a).toBe(1.1786); // derived from the Horizons state 2026-11-17 and the Didymos GM
+    expect(o('DIMORPHOS').epochMs).toBe(Date.UTC(2026, 10, 17));
+  });
+
+  it('every asteroid is approximate, flagged `asteroid` (the source block in bodies.ts is checked by apps/server/test/horizons-bodies.test.ts)', () => {
+    for (const id of ASTEROIDS) { expect(b(id).approx, id).toBe(true); expect(b(id).asteroid, id).toBe(true); expect(b(id).dwarf, id).toBeUndefined(); }
+    expect(b('DIMORPHOS').asteroid).toBeUndefined();
+  });
+
+  it('Dimorphos orbits the Didymos system within a few Didymos radii, retrograde to the ecliptic, period near 11.9 h', () => {
+    const s = bodyStateInParent(b('DIMORPHOS'), Date.UTC(2026, 10, 17), defaultBodies)!;
+    expect(Math.hypot(...s.r)).toBeGreaterThan(1.1);
+    expect(Math.hypot(...s.r)).toBeLessThan(1.25);
+    expect(bodyPeriodSec(b('DIMORPHOS'))! / 3600).toBeCloseTo(11.9, 1);
+    expect(b('DIMORPHOS').orbit!.i / DEG).toBeGreaterThan(90);
   });
 });

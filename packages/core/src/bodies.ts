@@ -80,6 +80,8 @@ export interface Body {
   ephemeris?: (tMs: number) => { r: Vec3; v: Vec3 };
   /** true when ephemeris/rotation values are only low precision */
   approx?: boolean;
+  /** an asteroid or other small body orbiting the Sun (entity kind `asteroid`; its own moon, Dimorphos, is a `moon`) */
+  asteroid?: boolean;
   /** an IAU dwarf planet (entity kind `dwarf_planet`) */
   dwarf?: boolean;
 }
@@ -212,6 +214,72 @@ export const HAUMEA = dwarf('HAUMEA', 'Haumea', 816, 0, 267.4, NO_ROTATION,
 export const MAKEMAKE = dwarf('MAKEMAKE', 'Makemake', 715, 0, 207, NO_ROTATION,
   osculating(6.787563233624084e9, 0.1645232903, 29.00018553920, 79.27490607393, 296.2809991935, 139.7201624508));
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Named asteroids (added 2026-11-17), Sun-orbiting small bodies: entity kind `asteroid`. Sources, all read 2026-11-17:
+//  - orbit: JPL Horizons small-body record of each object (API request with OBJ_DATA=YES): "IAU76/J2000 helio. ecliptic osc.
+//    elements" of the SBDB solution, at the epoch printed in that record (a different one per body: Vesta 2020-01-01, Pallas
+//    2017-04-27, Hygiea 2018-06-17, Psyche 2017-04-13, Bennu 2011-01-01, Ryugu 2019-09-27, Didymos 2024-05-24.5, Apophis 2021-01-01,
+//    Eros 2004-11-02, Itokawa 2004-01-01, Arrokoth 2017-12-14; Julian date TDB, taken as UTC here). These are OFFLINE
+//    FALLBACKS: two-body propagation from an old epoch drifts (the near-Earth ones by degrees over a decade or two), which
+//    the `horizons-bodies` stream replaces.
+//  - radius (RAD) and GM (the Horizons record's own "Asteroid physical parameters"): Vesta 261.385 km / 17.28828, Pallas 256.5 /
+//    13.63, Hygiea 203.56 / 7, Psyche 111 / 1.601, Bennu 0.241 km, Ryugu 0.448 / 3e-8, Apophis 0.170 km, Eros 8.42 /
+//    4.463e-4, Itokawa 0.165 / 2.1e-9 (km, km^3/s^2). Horizons has no GM for Bennu or Apophis ("n.a."): they carry GM 0, "not
+//    determined" (the entity shows no GM, the sphere-of-influence test skips it; Bennu's measured GM is not entered because it
+//    was not read from a source here). Arrokoth: Horizons has neither radius nor GM; radius 9.948 km is half the volume
+//    equivalent diameter 19.896 km of the Porter (2024) shape model (as listed in the English Wikipedia infobox), GM 0
+//    (Keane et al. 2022 give only a density-dependent mass estimate).
+//  - Didymos and Dimorphos: the Horizons records of the DART/Hera reconstruction (920065803 Didymos primary body, 120065803
+//    Dimorphos, header text of 2026-10-30): Didymos radii 0.39167 x 0.39167 x 0.29195 km, volume 0.1876 km^3 (volume equivalent
+//    radius 0.3551 km), GM 3.51278e-8 km^3/s^2, spin pole RA 69.32686 Dec -72.72455 deg, W0 0, rate 3823.008849557522 deg/day (period
+//    2.26 h); Dimorphos radii 0.09594 x 0.07390 x 0.05856 km, volume 0.001616 km^3 (volume equivalent radius 0.0728 km), GM 3.0268e-10.
+//    The Didymos GM is the primary alone, which `bodyPeriodSec` uses for Dimorphos (the system adds 0.9 %). Dimorphos has a pre-impact
+//    pole and rotation in that record but the DART impact (2022-09-26) changed its spin, and the post-impact model is a dynamic
+//    frame: no fixed model is current, so NO_ROTATION. Its fallback orbit is NOT a printed element set: it is the Horizons state
+//    of Dimorphos about the Didymos system barycentre (centre 500@20065803, ICRF) at 2026-11-17 00:00 TDB, turned into ecliptic
+//    J2000 Kepler elements with the Didymos GM (a 1.1786 km, e 0.0234, i 170.701, node 39.997, argp 268.624, M 0.000 deg; period
+//    11.92 h). Dimorphos is a `moon` entity of an asteroid and orbits the SYSTEM BARYCENTRE in the stream (the
+//    primary wobbles about it by about 0.1 km).
+//  - rotation: IAU WGCCRE 2015 (Archinal et al. 2018), constant terms, read from NAIF pck00011.tpc (BODY2000004 Vesta,
+//    BODY2000002 Pallas, BODY2000433 Eros, BODY2025143 Itokawa: "values are unchanged in the 2015 IAU report"). The kernel gives
+//    no model for Hygiea, Psyche, Bennu, Ryugu, Apophis or Arrokoth, and none is entered: NO_ROTATION. Triaxial radii (NAIF
+//    BODY<n>_RADII, Didymos and Dimorphos from the records above) are in apps/web/src/lib/body-shape.ts.
+//  - flattening is 0 for all of them: they are not oblate spheroids, the triaxial shape is drawn from the ellipsoid table.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const JD_J2000 = 2451545.0;
+/** Heliocentric ecliptic osculating elements from a Horizons small-body record: a (AU), e, i, node, argp, M (deg) at Julian date `jd` (TDB, taken as UTC). */
+function osculatingAt(jd: number, aAu: number, e: number, iDeg: number, nodeDeg: number, argpDeg: number, maDeg: number): KeplerElements {
+  return { a: aAu * AU_KM, e, i: iDeg * DEG, raan: nodeDeg * DEG, argp: argpDeg * DEG, m0: maDeg * DEG, epochMs: J2000_MS + (jd - JD_J2000) * 86_400_000 };
+}
+
+const asteroid = (id: string, name: string, radiusKm: number, gm: number, rotation: BodyRotation, orbit: KeplerElements): Body =>
+  planet(id, name, radiusKm, 0, gm, rotation, orbit, { asteroid: true });
+
+export const VESTA = asteroid('VESTA', 'Vesta', 261.385, 17.28828, linear(309.031, 42.235, 285.39, 1617.3329428),
+  osculatingAt(2458849.5, 2.361908654291772, 0.08857261385730482, 7.14181494423702, 103.8092892453337, 150.8357762126256, 163.3754032354997));
+export const PALLAS = asteroid('PALLAS', 'Pallas', 256.5, 13.63, linear(33, -3, 38, 1105.8036),
+  osculatingAt(2457870.5, 2.773023116113918, 0.2306545322740501, 34.83970334384021, 173.0883296888898, 309.9974922427895, 263.9040941962388));
+export const HYGIEA = asteroid('HYGIEA', 'Hygiea', 203.56, 7, NO_ROTATION,
+  osculatingAt(2458286.5, 3.140498696856402, 0.112654977900141, 3.831604174627114, 283.2130782677748, 312.1526533545334, 96.74817340659773));
+export const PSYCHE = asteroid('PSYCHE', 'Psyche', 111, 1.601, NO_ROTATION,
+  osculatingAt(2457856.5, 2.923911398936447, 0.1354428631790678, 3.098574197998143, 150.2750236911914, 227.3612622931746, 143.3213825593065));
+export const BENNU = asteroid('BENNU', 'Bennu', 0.241, 0, NO_ROTATION,
+  osculatingAt(2455562.5, 1.126391025894812, 0.2037450762416414, 6.03494377024794, 2.06086619569642, 66.22306084084298, 101.7039520024729));
+export const RYUGU = asteroid('RYUGU', 'Ryugu', 0.448, 3e-8, NO_ROTATION,
+  osculatingAt(2458753.5, 1.18958611991287, 0.1903782605596403, 5.884195597891756, 251.5874649641874, 211.4457746039085, 6.047307793310185));
+export const DIDYMOS = asteroid('DIDYMOS', 'Didymos', 0.3551, 3.51278e-8, linear(69.32686, -72.72455, 0, 3823.008849557522),
+  osculatingAt(2460455.0, 1.642635804556402, 0.3832347938481661, 3.414218406992741, 72.98675992294248, 319.5959766697973, 271.8153752968748));
+export const APOPHIS = asteroid('APOPHIS', 'Apophis', 0.170, 0, NO_ROTATION,
+  osculatingAt(2459215.5, 0.9225071817289903, 0.1915216893501022, 3.336751320066756, 204.0389272089208, 126.6520518368553, 127.3225632013606));
+export const EROS = asteroid('EROS', 'Eros', 8.42, 4.463e-4, linear(11.35, 17.22, 326.07, 1639.38864745),
+  osculatingAt(2453311.5, 1.458269315549994, 0.2228078944584026, 10.8291838260782, 304.4010273379536, 178.665326776373, 326.37047603642));
+export const ITOKAWA = asteroid('ITOKAWA', 'Itokawa', 0.165, 2.1e-9, linear(90.53, -66.30, 0, 712.143),
+  osculatingAt(2453005.5, 1.322776970395172, 0.279465894044321, 1.727962095421385, 70.91767938852736, 161.0144462702274, 269.357329363154));
+/** Arrokoth is a Kuiper-belt object (a contact binary, New Horizons 2019): kind `asteroid` too, there is no other small-body kind. */
+export const ARROKOTH = asteroid('ARROKOTH', 'Arrokoth', 9.948, 0, NO_ROTATION,
+  osculatingAt(2458101.5, 44.44519963724322, 0.03868645692376498, 2.45301305206896, 158.939446659904, 176.1507602341478, 313.05859524999));
+
 /**
  * A moon: `a` km, `e`, `iDeg` inclination to the PARENT's equator, mean radius km, GM km^3/s^2. Node, argument of periapsis
  * and mean anomaly are 0 (unknown, see above). Elements are referred to the parent's equator (`orbitPlane: 'equator'`).
@@ -304,6 +372,9 @@ export const GALATEA = moon('GALATEA', 'Galatea', 'NEPTUNE', 62_000, 0.001, 0.0,
 export const LARISSA = moon('LARISSA', 'Larissa', 'NEPTUNE', 73_600, 0.001, 0.2, 96, 0.25484, linear(299.36, 43.41, 179.41, 649.0534470));
 export const PROTEUS = moon('PROTEUS', 'Proteus', 'NEPTUNE', 117_700, 0.001, 0.6, 208, 2.58342, linear(299.27, 42.91, 93.38, 320.7654228));
 
+/** Dimorphos, the moon of Didymos (see the asteroid block above for where its elements come from). */
+export const DIMORPHOS = eclipticMoon('DIMORPHOS', 'Dimorphos', 'DIDYMOS', 1.1786, 0.0234, 170.701, 39.997, 268.624, 0, 0.0728, 3.0268e-10, NO_ROTATION, Date.UTC(2026, 10, 17));
+
 export const NIX = moon('NIX', 'Nix', 'PLUTO', 49_300, 0.015, 0.0, 18.0, 0.0015, NO_ROTATION);
 export const HYDRA = moon('HYDRA', 'Hydra', 'PLUTO', 65_200, 0.009, 0.3, 18.5, 0.0020, NO_ROTATION);
 
@@ -323,6 +394,8 @@ export const DEFAULT_BODY_LIST: Body[] = [
   PUCK,
   NEREID, DESPINA, GALATEA, LARISSA, PROTEUS,
   NIX, HYDRA,
+  VESTA, PALLAS, HYGIEA, PSYCHE, BENNU, RYUGU, DIDYMOS, APOPHIS, EROS, ITOKAWA, ARROKOTH,
+  DIMORPHOS,
 ];
 
 /** The original four-body registry (Sun, Earth, Moon, Mars): for tests that predate the rest of the solar system. */

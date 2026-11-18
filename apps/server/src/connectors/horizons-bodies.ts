@@ -94,7 +94,12 @@ export function moonTarget(bodyId: string, horizons: string, planetNaif: string,
  *   Mercury 199: 2 d, +-1 y (366 rows)       Venus 299: 5 d, +-2 y (293)      Mars 499: 10 d, +-2 y (147)
  *   Jupiter 599: 20 d, +-4 y (147)           Saturn 699: 30 d, +-10 y (244)   Uranus 799, Neptune 899: 60 d, +-10 y (122)
  *   Ceres `1;`: 10 d, +-2 y (147)           Pluto 999, Eris, Haumea, Makemake: 60 d, +-10 y (122)
- * Moons: see `moonTarget`.
+ * Named asteroids (small-body designation with a semicolon, Horizons ids checked 2026-11-17): Vesta `4;`, Pallas `2;`, Hygiea `10;`,
+ *   Psyche `16;` (10 d, +-2 y, 147 rows); Bennu `101955;`, Ryugu `162173;`, Eros `433;` (3 d, +-2 y, 488 rows); Didymos `65803;` (the
+ *   system barycentre), Apophis `99942;`, Itokawa `25143;` (2 d, +-1.5 y, 549 rows: fast near-Earth orbits, e 0.19 to 0.38, whose
+ *   perihelion speed is up to 2.4 times the mean motion); Arrokoth `486958;` (60 d, +-10 y, 122 rows).
+ * Moons: see `moonTarget`. Dimorphos `120065803` is relative to the Didymos system barycentre `500@20065803` (the centre the
+ *   Didymos record itself is on), not the primary body `920065803`: Didymos is drawn at that barycentre.
  *
  * Planet BODY centres are used (599 Jupiter, not the barycentre 5): the entity is drawn at the planet, and the moons are
  * relative to it. The offset between the two is up to the planet's wobble about the system barycentre (Jupiter 7.4e5 km).
@@ -113,6 +118,17 @@ export function buildBodyTargets(registry: BodyRegistry = defaultBodies): BodyTa
     planetTarget('ERIS', '136199;', 60, 10),
     planetTarget('HAUMEA', '136108;', 60, 10),
     planetTarget('MAKEMAKE', '136472;', 60, 10),
+    planetTarget('VESTA', '4;', 10, 2),
+    planetTarget('PALLAS', '2;', 10, 2),
+    planetTarget('HYGIEA', '10;', 10, 2),
+    planetTarget('PSYCHE', '16;', 10, 2),
+    planetTarget('BENNU', '101955;', 3, 2),
+    planetTarget('RYUGU', '162173;', 3, 2),
+    planetTarget('DIDYMOS', '65803;', 2, 1.5),
+    planetTarget('APOPHIS', '99942;', 2, 1.5),
+    planetTarget('EROS', '433;', 3, 2),
+    planetTarget('ITOKAWA', '25143;', 2, 1.5),
+    planetTarget('ARROKOTH', '486958;', 60, 10),
   ];
   const moons: [string, string, string][] = [
     ['PHOBOS', '401', '499'], ['DEIMOS', '402', '499'],
@@ -127,6 +143,8 @@ export function buildBodyTargets(registry: BodyRegistry = defaultBodies): BodyTa
     ['PUCK', '715', '799'],
     ['NEREID', '802', '899'], ['DESPINA', '805', '899'], ['GALATEA', '806', '899'], ['LARISSA', '807', '899'], ['PROTEUS', '808', '899'],
     ['NIX', '902', '999'], ['HYDRA', '903', '999'],
+    // Dimorphos: its own Horizons record (checked 2026-11-17), centred on the Didymos system barycentre (an SPK id, not a planet NAIF)
+    ['DIMORPHOS', '120065803', '20065803'],
   ];
   return [...planets, ...moons.map(([id, cmd, planet]) => moonTarget(id, cmd, planet, registry))];
 }
@@ -163,7 +181,7 @@ export function bodyUrl(t: BodyTarget, nowMs: number): string {
 
 
 /**
- * The body registry's real data stream: JPL Horizons vector tables for the planets, dwarf planets and moons (47
+ * The body registry's real data stream: JPL Horizons vector tables for the planets, dwarf planets, asteroids and moons (59
  * targets, `BODY_TARGETS`). Offline first: the `bodies` connector registers every body with the analytic fallback; this
  * one REPLACES only the provider of the same `body-*` entity: `{type:'body', bodyId, ephemeris:{frame, samples}}`, so the id,
  * kind, parent and hierarchy stay. The provider keeps type `body` on purpose (all the web's body handling, `bodyOf`,

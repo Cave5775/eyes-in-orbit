@@ -10,6 +10,7 @@ import { Hub } from '../src/hub';
 import { Store } from '../src/store';
 
 const IDS = bodyEntityRecords().map((b) => b.id).sort();
+const ASTEROID_IDS = ['vesta', 'pallas', 'hygiea', 'psyche', 'bennu', 'ryugu', 'didymos', 'apophis', 'eros', 'itokawa', 'arrokoth'].map((n) => `body-${n}`);
 
 function setup(env: NodeJS.ProcessEnv = {}) {
   const hub = new Hub(0);
@@ -33,13 +34,13 @@ describe('bodies connector', () => {
     vi.restoreAllMocks();
   });
 
-  it('registers the body entities (50: Sun, 8 planets, 5 dwarf planets, 36 moons) under OFFLINE=1 and runs once', async () => {
+  it('registers the body entities (62: Sun, 8 planets, 5 dwarf planets, 11 asteroids, 36 moons) under OFFLINE=1 and runs once', async () => {
     const { hub, scheduler, get } = setup({ OFFLINE: '1' });
     await scheduler.start();
     // registered by start(), before any timer fires
     expect(hub.graph.all().map((e) => e.id).sort()).toEqual(IDS);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(hub.healthOf('bodies')).toMatchObject({ status: 'ok', runs: 1, note: '50 bodies' });
+    expect(hub.healthOf('bodies')).toMatchObject({ status: 'ok', runs: 1, note: '62 bodies' });
     expect(hub.healthOf('bodies').nextRunAt).toBeUndefined();
     const moon = (await get('/api/entities/body-moon'));
     expect(moon).toMatchObject({
@@ -75,9 +76,13 @@ describe('bodies connector', () => {
     await scheduler.start();
     const ids = (r: { entities: { id: string }[] }) => r.entities.map((e) => e.id).sort();
     expect(ids(await get('/api/entities?group=bodies'))).toEqual(IDS);
-    expect(ids(await get('/api/entities?kind=moon'))).toEqual(IDS.filter((id) => !['body-sun', 'body-mercury', 'body-venus', 'body-earth', 'body-mars', 'body-jupiter', 'body-saturn', 'body-uranus', 'body-neptune', 'body-ceres', 'body-pluto', 'body-eris', 'body-haumea', 'body-makemake'].includes(id)));
+    expect(ids(await get('/api/entities?kind=moon'))).toEqual(IDS.filter((id) => !['body-sun', 'body-mercury', 'body-venus', 'body-earth', 'body-mars', 'body-jupiter', 'body-saturn', 'body-uranus', 'body-neptune', 'body-ceres', 'body-pluto', 'body-eris', 'body-haumea', 'body-makemake', ...ASTEROID_IDS].includes(id)));
     expect(ids(await get('/api/entities?kind=planet'))).toEqual(['body-earth', 'body-jupiter', 'body-mars', 'body-mercury', 'body-neptune', 'body-saturn', 'body-uranus', 'body-venus']);
     expect(ids(await get('/api/entities?kind=dwarf_planet'))).toEqual(['body-ceres', 'body-eris', 'body-haumea', 'body-makemake', 'body-pluto']);
+    expect(ids(await get('/api/entities?kind=asteroid'))).toEqual([...ASTEROID_IDS].sort());
+    expect(ids(await get('/api/entities?kind=moon'))).toContain('body-dimorphos');
+    expect((await get('/api/search?q=apophis'))[0]).toMatchObject({ id: 'body-apophis', kind: 'asteroid' });
+    expect((await get('/api/search?q=99942'))[0].id).toBe('body-apophis');
     expect(ids(await get('/api/entities?kind=star'))).toEqual(['body-sun']);
     expect(ids(await get('/api/entities?q=luna'))).toEqual(['body-moon']);
 
@@ -87,8 +92,8 @@ describe('bodies connector', () => {
     expect((await get('/api/search?q=MARS'))[0].id).toBe('body-mars');
 
     expect((await get('/api/bodies')).map((b: { id: string }) => b.id).slice(0, 4)).toEqual(['SUN', 'EARTH', 'MOON', 'MARS']);
-    expect((await get('/api/bodies')).map((b: { id: string }) => b.id)).toHaveLength(50);
-    expect((await get('/api/health')).entityCount).toBe(50);
+    expect((await get('/api/bodies')).map((b: { id: string }) => b.id)).toHaveLength(62);
+    expect((await get('/api/health')).entityCount).toBe(62);
     expect((await get('/api/search?q=titan'))[0]).toMatchObject({ id: 'body-titan', kind: 'moon' });
     expect((await get('/api/search?q=pluto'))[0]).toMatchObject({ id: 'body-pluto', kind: 'dwarf_planet' });
     scheduler.stop();

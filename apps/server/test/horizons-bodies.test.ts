@@ -14,6 +14,7 @@ import {
   BODY_TARGETS, MOON_STEPS_OVERRIDE, MOON_STEPS_PER_REV, MOON_WINDOW_STEPS, bodyCacheKey, bodyUrl, horizonsBodies, moonTarget, targetRows,
 } from '../src/connectors/horizons-bodies';
 import { parseHorizonsVectors } from '../src/connectors/horizons';
+import { J2000_MS } from '@eio/core';
 import { Http } from '../src/http';
 import { Hub } from '../src/hub';
 import { Store } from '../src/store';
@@ -28,11 +29,12 @@ describe('horizons-bodies targets', () => {
   it('has exactly one target per registry body except the Sun, Earth and the Moon', () => {
     const want = defaultBodies.all().map((b) => b.id).filter((id) => !['SUN', 'EARTH', 'MOON'].includes(id)).sort();
     expect(BODY_TARGETS.map((t) => t.bodyId).sort()).toEqual(want);
-    expect(want).toHaveLength(47);
+    expect(want).toHaveLength(59);
   });
 
   it('centres each body on its parent and states the vectors in the parent inertial frame', () => {
-    const naif: Record<string, string> = { SUN: '10', MARS: '499', JUPITER: '599', SATURN: '699', URANUS: '799', NEPTUNE: '899', PLUTO: '999' };
+    // Didymos: Horizons' own SPK id of the system barycentre (20065803), the centre of Dimorphos (an asteroid has no NAIF body id)
+    const naif: Record<string, string> = { SUN: '10', MARS: '499', JUPITER: '599', SATURN: '699', URANUS: '799', NEPTUNE: '899', PLUTO: '999', DIDYMOS: '20065803' };
     for (const t of BODY_TARGETS) {
       const parent = defaultBodies.get(t.bodyId).parentId!;
       expect(t.frame, t.bodyId).toBe(`${parent}:inertial`);
@@ -68,16 +70,16 @@ describe('horizons-bodies targets', () => {
       expect(Math.abs(targetRows(byBody[id]) - (2 * MOON_WINDOW_STEPS + 1)), id).toBeLessThanOrEqual(1);
     }
     expect(Object.keys(want)).toHaveLength(15);
-    expect(BODY_TARGETS).toHaveLength(47);
+    expect(BODY_TARGETS).toHaveLength(59);
     // the three moons of an eccentric or far orbit are sampled finer than the default 24 steps per revolution
     expect(MOON_STEPS_OVERRIDE).toEqual({ NEREID: 240, HIMALIA: 48, PHOEBE: 48, HYPERION: 36 });
     expect(byBody.NEREID.stepMin).toBe(2160); // 360 d / 240 = 36 h
     expect(byBody.AMALTHEA.stepMin).toBe(30);
   });
 
-  it('request volume: one request per target, 47 per refresh (a refresh uses the 24 h cache, so about 47 a day), 1.5 s apart: about 70 s of requests', () => {
-    expect(BODY_TARGETS.length).toBe(47);
-    expect(BODY_TARGETS.length * 1.5).toBeLessThan(75);
+  it('request volume: one request per target, 59 per refresh (a refresh uses the 24 h cache, so about 59 a day), 1.5 s apart: about 90 s of requests', () => {
+    expect(BODY_TARGETS.length).toBe(59);
+    expect(BODY_TARGETS.length * 1.5).toBeLessThan(90);
   });
 
   it('keeps every response under 150 kB: at most 600 rows (about 210 bytes each in the JSON), moons 401', () => {
@@ -294,6 +296,126 @@ describe('recorded Horizons responses (2026-10-29)', () => {
   });
 });
 
+describe('named asteroids and Dimorphos (Horizons records of 2026-11-17)', () => {
+  const byBody = Object.fromEntries(BODY_TARGETS.map((t) => [t.bodyId, t]));
+  const ASTEROID_IDS = ['vesta', 'pallas', 'hygiea', 'psyche', 'bennu', 'ryugu', 'didymos', 'apophis', 'eros', 'itokawa', 'arrokoth'];
+  const AU = 149_597_870.7;
+  const result = (name: string): string => (JSON.parse(fixture(name)) as { result: string }).result;
+  const num = (s: string): number => Number(s.replace(/,$/, ''));
+
+  it('has the Horizons small-body command ids (record syntax with a semicolon), the Sun body centre and a step that keeps the Hermite error small', () => {
+    const want: Record<string, [string, number, number]> = {
+      VESTA: ['4;', 14_400, 147], PALLAS: ['2;', 14_400, 147], HYGIEA: ['10;', 14_400, 147], PSYCHE: ['16;', 14_400, 147],
+      BENNU: ['101955;', 4320, 488], RYUGU: ['162173;', 4320, 488], EROS: ['433;', 4320, 488],
+      DIDYMOS: ['65803;', 2880, 549], APOPHIS: ['99942;', 2880, 549], ITOKAWA: ['25143;', 2880, 549],
+      ARROKOTH: ['486958;', 86_400, 122],
+    };
+    for (const [id, [cmd, stepMin, rows]] of Object.entries(want)) {
+      expect(byBody[id], id).toMatchObject({ horizons: cmd, center: '500@10', frame: 'SUN:inertial', stepMin });
+      expect(targetRows(byBody[id]), id).toBe(rows);
+      const p = new URL(bodyUrl(byBody[id], NOW)).searchParams;
+      expect(p.get('COMMAND'), id).toBe(`'${cmd}'`);
+      expect(p.get('CENTER'), id).toBe("'500@10'");
+    }
+    expect(Object.keys(want)).toHaveLength(11);
+    // a fast, eccentric orbit moves up to (1 + e)^2 / (1 - e^2)^1.5 times the mean motion at perihelion: the worst case over the real orbit stays small against 5 km
+    for (const id of Object.keys(want)) {
+      const o = defaultBodies.get(id).orbit!;
+      const n = (2 * Math.PI) / bodyPeriodSec(defaultBodies.get(id))!;
+      const peri = (1 + o.e) ** 2 / (1 - o.e * o.e) ** 1.5;
+      const worst = (o.a * (n * byBody[id].stepMin * 60 * peri) ** 4) / 384;
+      expect(worst, id).toBeLessThan(25); // km, against the tens of millions of km of the orbit
+    }
+  });
+
+  it('Dimorphos has its own id 120065803, is centred on the Didymos system barycentre (500@20065803) and samples 24 times per revolution', () => {
+    expect(byBody.DIMORPHOS).toMatchObject({ horizons: '120065803', center: '500@20065803', frame: 'DIDYMOS:inertial', stepMin: 30 });
+    expect(targetRows(byBody.DIMORPHOS)).toBe(2 * MOON_WINDOW_STEPS + 1);
+    const p = new URL(bodyUrl(byBody.DIMORPHOS, NOW)).searchParams;
+    expect(p.get('COMMAND')).toBe("'120065803'");
+    expect(p.get('CENTER')).toBe("'500@20065803'");
+    expect(defaultBodies.get('DIMORPHOS').parentId).toBe('DIDYMOS');
+  });
+
+  it('parses every recorded table (4 rows, 1 day apart); the distance from the Sun lies in the registry orbit, within 10 %', () => {
+    for (const id of ASTEROID_IDS) {
+      const rows = parseHorizonsVectors(fixture(`horizons-body-${id}.json`));
+      expect(rows, id).toHaveLength(4);
+      expect(rows[1][0] - rows[0][0], id).toBe(86_400_000);
+      expect(Math.abs(rows[0][0] - Date.UTC(2026, 10, 17)), id).toBeLessThan(70_000); // 2026-11-17 00:00 TDB is 69 s earlier in UTC
+      const o = defaultBodies.get(id.toUpperCase()).orbit!;
+      for (const s of rows) {
+        const r = Math.hypot(s[1], s[2], s[3]);
+        expect(r, id).toBeGreaterThan(o.a * (1 - o.e) * 0.9);
+        expect(r, id).toBeLessThan(o.a * (1 + o.e) * 1.1);
+      }
+    }
+    // Vesta, row 0 (the file itself): 3.2679e8 km, 2.18 AU from the Sun
+    const vesta = parseHorizonsVectors(fixture('horizons-body-vesta.json'))[0];
+    expect(vesta[1]).toBeCloseTo(3.267853701007305e8, 0);
+    expect(Math.hypot(vesta[1], vesta[2], vesta[3]) / AU).toBeGreaterThan(2.15);
+    expect(Math.hypot(vesta[1], vesta[2], vesta[3]) / AU).toBeLessThan(2.58);
+  });
+
+  it('the registry constants are the ones printed in the recorded records: osculating elements, radius and GM', () => {
+    for (const id of ASTEROID_IDS) {
+      const text = result(`horizons-body-${id}.json`);
+      const g = (re: RegExp): number => num(re.exec(text)![1]);
+      const b = defaultBodies.get(id.toUpperCase());
+      const o = b.orbit!;
+      const jd = g(/EPOCH=\s*(\S+)/);
+      expect(o.epochMs, id).toBeCloseTo(J2000_MS + (jd - 2451545) * 86_400_000, 0);
+      expect(o.e, id).toBeCloseTo(g(/\bEC=\s*(\S+)/), 12);
+      expect(o.i / DEG, id).toBeCloseTo(g(/\bIN=\s*(\S+)/), 10);
+      expect(o.raan / DEG, id).toBeCloseTo(g(/\bOM=\s*(\S+)/), 10);
+      expect(o.argp / DEG, id).toBeCloseTo(g(/\sW=\s*(\S+)/), 10);
+      const phys = /GM=\s*(\S+)\s+RAD=\s*(\S+)\s+ROTPER=/.exec(text)!;
+      if (phys[1] !== 'n.a.') expect(b.gm, id).toBe(num(phys[1]));
+      else expect(b.gm, `${id} GM n.a.`).toBe(id === 'arrokoth' || id === 'bennu' || id === 'apophis' || id === 'didymos' ? (id === 'didymos' ? 3.51278e-8 : 0) : -1);
+      if (phys[2] !== 'n.a.') { if (id !== 'didymos') expect(b.radiusKm, id).toBe(num(phys[2])); } else expect(id).toBe('arrokoth');
+    }
+  });
+
+  it('the source block above the asteroids in bodies.ts names Horizons, the NAIF kernel, the IAU report and every body', () => {
+    const src = readFileSync(join(__dirname, '../../../packages/core/src/bodies.ts'), 'utf8');
+    const block = src.slice(src.indexOf('Named asteroids (added'), src.indexOf('const JD_J2000'));
+    expect(block.length).toBeGreaterThan(2000);
+    for (const cite of ['Horizons', 'pck00011', 'WGCCRE 2015', 'Archinal', 'Porter (2024)', '920065803', '120065803', 'NO_ROTATION', 'Keane']) expect(block, cite).toContain(cite);
+    for (const id of ['Vesta', 'Pallas', 'Hygiea', 'Psyche', 'Bennu', 'Ryugu', 'Didymos', 'Apophis', 'Eros', 'Itokawa', 'Arrokoth', 'Dimorphos']) expect(block, id).toContain(id);
+  });
+
+  it('Didymos and Dimorphos take radius, GM and spin from the header of the DART / Hera records', () => {
+    const prim = result('horizons-body-didymos-primary.json');
+    expect(prim).toContain('Radii   ~ (0.39167 x 0.39167 x 0.29195) km');
+    expect(prim).toContain('Volume  ~ 0.1876 km^3');
+    expect(prim).toContain('GM_Didy ~ 3.51278E-08 km^3/s^2');
+    expect(prim).toContain('RA  =  69.32686 deg.');
+    expect(prim).toContain('DEC = -72.72455 deg.');
+    expect(prim).toContain('3823.008849557522 deg/day');
+    const dimo = result('horizons-body-dimorphos.json');
+    expect(dimo).toContain('Radii   ~ (0.09594 x 0.07390 x 0.05856) km');
+    expect(dimo).toContain('Volume  ~ 0.001616 km^8'); // sic: the record prints km^8
+    expect(dimo).toContain('GM_Dimo ~ 3.02680E-10 km^3/s^2');
+    expect(dimo).toContain('Didymos system barycenter :  20065803');
+    expect(dimo).toContain('Center body name: Didymos (system barycenter) (20065803)');
+    const d = defaultBodies.get('DIDYMOS'), m = defaultBodies.get('DIMORPHOS');
+    expect(d.gm).toBe(3.51278e-8);
+    expect(m.gm).toBe(3.0268e-10);
+    expect((d.rotation as { poleRaDeg: number }).poleRaDeg).toBe(69.32686);
+  });
+
+  it('the Dimorphos table is a 1.15 km orbit about the barycentre and the registry fallback reproduces its first row (the elements were derived from it)', () => {
+    const rows = parseHorizonsVectors(fixture('horizons-body-dimorphos.json'));
+    expect(rows).toHaveLength(4);
+    const reg = new BodyRegistry();
+    const s = bodyStateInParent(reg.get('DIMORPHOS'), rows[0][0], reg)!;
+    // ecliptic J2000 -> ICRF, like the registry does: the position agrees to a few metres, the velocity to a per cent
+    expect(Math.hypot(rows[0][1], rows[0][2], rows[0][3])).toBeCloseTo(1.151, 2);
+    expect(dist(s.r, rows[0].slice(1, 4))).toBeLessThan(0.05); // 12 m: the elements are rounded to 4 digits and TDB is 69 s off UTC
+    for (const row of rows) expect(Math.hypot(row[1], row[2], row[3])).toBeLessThan(1.3);
+  });
+});
+
 describe('horizons-bodies connector', () => {
   const T0 = Date.parse('2026-10-29T11:30:00Z');
   beforeEach(() => {
@@ -302,14 +424,14 @@ describe('horizons-bodies connector', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
   });
   afterEach(() => {
-    for (const id of ['JUPITER', 'IO', 'PLUTO', 'MARS', 'CERES']) setBodyStream(id, undefined);
+    for (const id of ['JUPITER', 'IO', 'PLUTO', 'MARS', 'CERES', 'VESTA', 'DIMORPHOS']) setBodyStream(id, undefined);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   /** answers every table request with a recorded response chosen by COMMAND; `fail` ids answer an HTTP status */
   function setup(opts: { offline?: boolean; fail?: Record<string, number> } = {}) {
-    const files: Record<string, string> = { "'599'": 'horizons-body-jupiter.json', "'501'": 'horizons-body-io.json', "'999'": 'horizons-body-pluto.json', "'499'": 'horizons-body-mars.json', "'1;'": 'horizons-body-ceres.json' };
+    const files: Record<string, string> = { "'599'": 'horizons-body-jupiter.json', "'501'": 'horizons-body-io.json', "'999'": 'horizons-body-pluto.json', "'499'": 'horizons-body-mars.json', "'1;'": 'horizons-body-ceres.json', "'4;'": 'horizons-body-vesta.json', "'120065803'": 'horizons-body-dimorphos.json' };
     const urls: string[] = [];
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
@@ -331,8 +453,8 @@ describe('horizons-bodies connector', () => {
     await scheduler.start();
     const before = Object.fromEntries(hub.graph.all().map((e) => [e.id, e]));
     expect(before['body-jupiter'].provider).toEqual({ type: 'body', bodyId: 'JUPITER' });
-    await vi.advanceTimersByTimeAsync(47 * 1500 + 60_000);
-    expect(urls).toHaveLength(47);
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(urls).toHaveLength(59);
     for (const id of ['body-jupiter', 'body-io', 'body-pluto', 'body-mars', 'body-ceres']) {
       const e = hub.graph.get(id)!;
       expect(e.provider).toMatchObject({ type: 'body', ephemeris: { samples: expect.any(Array) } });
@@ -344,14 +466,31 @@ describe('horizons-bodies connector', () => {
     expect(hub.graph.get('body-io')!.provider).toMatchObject({ bodyId: 'IO', ephemeris: { frame: 'JUPITER:inertial' } });
     // the Earth, Moon and Sun stay analytic
     for (const id of ['body-sun', 'body-earth', 'body-moon']) expect(hub.graph.get(id)!.provider).toEqual({ type: 'body', bodyId: id.slice(5).toUpperCase() });
-    expect(hub.healthOf('horizons-bodies').note).toMatch(/47 of 47 bodies streamed/);
+    expect(hub.healthOf('horizons-bodies').note).toMatch(/59 of 59 bodies streamed/);
+    scheduler.stop();
+  });
+
+  it('streams a named asteroid and its moon: kind asteroid / moon, parent and frame unchanged, samples in the parent frame', async () => {
+    const { hub, scheduler } = setup();
+    await scheduler.start();
+    const before = Object.fromEntries(hub.graph.all().map((e) => [e.id, e]));
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(hub.graph.get('body-vesta')).toMatchObject({ kind: 'asteroid', bodyId: 'SUN', parentId: 'body-sun', provider: { type: 'body', bodyId: 'VESTA', ephemeris: { frame: 'SUN:inertial' } } });
+    expect(hub.graph.get('body-dimorphos')).toMatchObject({ kind: 'moon', bodyId: 'DIDYMOS', parentId: 'body-didymos', provider: { type: 'body', bodyId: 'DIMORPHOS', ephemeris: { frame: 'DIDYMOS:inertial' } } });
+    expect((hub.graph.get('body-vesta')!.provider as { ephemeris: { samples: unknown[] } }).ephemeris.samples).toHaveLength(4);
+    for (const id of ['body-vesta', 'body-dimorphos']) {
+      const e = hub.graph.get(id)!;
+      expect({ id: e.id, kind: e.kind, parentId: e.parentId, aliases: e.aliases }).toEqual({ id, kind: before[id].kind, parentId: before[id].parentId, aliases: before[id].aliases });
+      expect(entityRank(e)).toBe(entityRank(before[id]));
+    }
+    expect(hub.graph.stateOf('body-dimorphos', T0)!.frame).toBe('EARTH:inertial');
     scheduler.stop();
   });
 
   it('keeps bodyOf, isBodyEntity, isOrbitable and the rank working on a streamed record', async () => {
     const { hub, scheduler } = setup();
     await scheduler.start();
-    await vi.advanceTimersByTimeAsync(47 * 1500 + 60_000);
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
     const io = hub.graph.get('body-io')!;
     expect(bodyOf(io)).toBe('IO');
     expect(isBodyEntity(io)).toBe(true);
@@ -367,7 +506,7 @@ describe('horizons-bodies connector', () => {
   it('the orbit-line source is the registry orbit, not the (shorter) sample window', async () => {
     const { hub, scheduler } = setup();
     await scheduler.start();
-    await vi.advanceTimersByTimeAsync(47 * 1500 + 60_000);
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
     const pluto = hub.graph.get('body-pluto')!;
     const samples = (pluto.provider as { ephemeris: { samples: number[][] } }).ephemeris.samples;
     const windowSec = (samples[samples.length - 1][0] - samples[0][0]) / 1000;
@@ -383,24 +522,24 @@ describe('horizons-bodies connector', () => {
   it('a block error ends the run: the remaining targets are not requested, the streamed ones stay', async () => {
     const { hub, scheduler, urls } = setup({ fail: { "'599'": 429 } });
     await scheduler.start();
-    await vi.advanceTimersByTimeAsync(47 * 1500 + 60_000);
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
     // order: planets first; Mercury, Venus, Mars succeed, Jupiter answers 429, nothing after it is requested
     expect(urls).toHaveLength(4);
     expect(hub.graph.get('body-mars')!.provider).toMatchObject({ ephemeris: { frame: 'SUN:inertial' } });
     expect(hub.graph.get('body-jupiter')!.provider).toEqual({ type: 'body', bodyId: 'JUPITER' });
     expect(hub.graph.get('body-io')!.provider).toEqual({ type: 'body', bodyId: 'IO' });
-    expect(hub.healthOf('horizons-bodies').note).toMatch(/3 of 47 bodies streamed/);
+    expect(hub.healthOf('horizons-bodies').note).toMatch(/3 of 59 bodies streamed/);
     scheduler.stop();
   });
 
   it('a transient per-target failure is soft: the others carry on', async () => {
     const { hub, scheduler, urls } = setup({ fail: { "'599'": 500 } });
     await scheduler.start();
-    await vi.advanceTimersByTimeAsync(47 * 1500 + 60_000);
-    expect(urls).toHaveLength(47);
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(urls).toHaveLength(59);
     expect(hub.graph.get('body-jupiter')!.provider).toEqual({ type: 'body', bodyId: 'JUPITER' });
     expect(hub.graph.get('body-io')!.provider).toMatchObject({ ephemeris: expect.anything() });
-    expect(hub.healthOf('horizons-bodies').note).toMatch(/46 of 47 bodies streamed; 1 on the analytic fallback/);
+    expect(hub.healthOf('horizons-bodies').note).toMatch(/58 of 59 bodies streamed; 1 on the analytic fallback/);
     scheduler.stop();
   });
 
@@ -419,7 +558,7 @@ describe('horizons-bodies connector', () => {
     const server = Fastify();
     registerApi(server, hub, new Http(new Store(':memory:'), { fetch: vi.fn<typeof fetch>(), offline: true }));
     await scheduler.start();
-    await vi.advanceTimersByTimeAsync(47 * 1500 + 60_000);
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
     const rec = (await server.inject({ url: '/api/entities/body-io' })).json();
     expect(rec).toMatchObject({ kind: 'moon', parentId: 'body-jupiter', bodyId: 'JUPITER', provider: { type: 'body', bodyId: 'IO', ephemeris: { frame: 'JUPITER:inertial' } } });
     expect(rec.provider.ephemeris.samples.length).toBe(37);

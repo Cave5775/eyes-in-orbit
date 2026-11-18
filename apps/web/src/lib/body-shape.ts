@@ -70,6 +70,12 @@ export const BODY_SHAPES: Record<string, BodyShape> = {
   JANUS: { kind: 'ellipsoid', radiiKm: [101.7, 93.0, 76.3], source: NAIF },
   EPIMETHEUS: { kind: 'ellipsoid', radiiKm: [64.9, 57.3, 53.0], source: NAIF },
   PROTEUS: { kind: 'ellipsoid', radiiKm: [218, 208, 201], source: NAIF },
+  // named asteroids (2026-11-17): the ones with a rotation model have an orientation, so a triaxial shape is drawn. Pallas has no
+  // radii in the kernel; Hygiea, Psyche, Bennu, Ryugu, Apophis and Arrokoth have no rotation (NO_ROTATION) and stay spheres.
+  VESTA: { kind: 'ellipsoid', radiiKm: [289, 280, 229], source: NAIF },
+  EROS: { kind: 'ellipsoid', radiiKm: [17.0, 5.5, 5.5], source: NAIF },
+  ITOKAWA: { kind: 'ellipsoid', radiiKm: [0.268, 0.147, 0.104], source: NAIF },
+  DIDYMOS: { kind: 'ellipsoid', radiiKm: [0.39167, 0.39167, 0.29195], source: 'JPL Horizons record 920065803 (DART / Hera reconstruction), header read 2026-11-17' },
 };
 
 /** The shape entry of a body, or undefined for a plain sphere. */

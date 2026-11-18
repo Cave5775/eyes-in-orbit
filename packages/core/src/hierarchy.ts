@@ -10,6 +10,10 @@ const ALT_NAMES: Record<string, string> = {
   SUN: 'Sol', EARTH: 'Terra', MOON: 'Luna',
   // minor-planet designations of the dwarf planets, so "134340" or "1 Ceres" finds them
   CERES: '1 Ceres', PLUTO: '134340 Pluto', ERIS: '136199 Eris', HAUMEA: '136108 Haumea', MAKEMAKE: '136472 Makemake',
+  // and of the named asteroids (Dimorphos: its provisional designation)
+  VESTA: '4 Vesta', PALLAS: '2 Pallas', HYGIEA: '10 Hygiea', PSYCHE: '16 Psyche', BENNU: '101955 Bennu', RYUGU: '162173 Ryugu',
+  DIDYMOS: '65803 Didymos', APOPHIS: '99942 Apophis', EROS: '433 Eros', ITOKAWA: '25143 Itokawa', ARROKOTH: '486958 Arrokoth',
+  DIMORPHOS: 'S/2003 (65803) 1',
 };
 
 /** Entity id of a registry body: `body-` + lowercase registry id (`body-earth`). */
@@ -20,8 +24,9 @@ export const bodyEntityId = (bodyId: string): string => `body-${bodyId.toLowerCa
  * other: `provider: { type: 'body', bodyId }` (state in `EARTH:inertial`, see `bodyStateEci`).
  *
  * - `kind`: `star` (no parent), `planet` (parent is the root), `dwarf_planet` (parent is the root, `Body.dwarf`: Ceres, Pluto,
- *   Eris, Haumea, Makemake), `moon` (deeper). The default registry has 50 bodies: Sun, Earth, Moon, Mars, the other six planets,
- *   five dwarf planets and 35 moons (see `DEFAULT_BODY_LIST`).
+ *   Eris, Haumea, Makemake), `asteroid` (parent is the root, `Body.asteroid`: Vesta ... Arrokoth), `moon` (deeper, also Dimorphos
+ *   around the asteroid Didymos). The default registry has 62 bodies: Sun, Earth, Moon, Mars, the other six planets, five dwarf
+ *   planets, 11 asteroids and 36 moons (see `DEFAULT_BODY_LIST`).
  * - `bodyId`: the registry id of the body it ORBITS (Moon -> `EARTH`). The field is required, so the Sun, which orbits
  *   nothing, names itself (`SUN`). `parentId` is the entity id of the parent body (`body-earth`), unset for the Sun.
  * - `aliases.body` is the registry id; `aliases.alt` an alternative name (Sol, Terra, Luna) for search.
@@ -41,7 +46,7 @@ export function bodyEntityRecords(registry: BodyRegistry = defaultBodies, update
     const rec: EntityRecord = {
       id: bodyEntityId(b.id),
       name: b.name,
-      kind: !parent ? 'star' : parent.parentId ? 'moon' : b.dwarf ? 'dwarf_planet' : 'planet',
+      kind: !parent ? 'star' : parent.parentId ? 'moon' : b.dwarf ? 'dwarf_planet' : b.asteroid ? 'asteroid' : 'planet',
       bodyId: parent ? parent.id : b.id,
       aliases,
       group: 'bodies',
