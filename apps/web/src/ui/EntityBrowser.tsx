@@ -17,8 +17,11 @@ import {
   acceptTag, activeTag, backspaceRemovesChip, parseQuery, splitCommitted, suggestTags, type TagKey, type TagSuggestion,
 } from '../lib/search-tags';
 import { perf } from '../lib/perf';
+import { focusesSearch } from '../lib/focus-search';
+import { skyCoversScene } from '../lib/sky-mode';
 import { clock, ensureInGraph, graph, runtime } from '../state/runtime';
 import { useStore } from '../state/store';
+import { useView } from '../state/view';
 import { VirtualList, type VirtualListHandle } from './VirtualList';
 
 const ROW_H = 28;
@@ -118,6 +121,18 @@ export function EntityBrowser() {
   const ownSelect = useRef<string | null>(null);
   /** the entity whose row is still to be scrolled to once the expansion has reached the list */
   const [revealId, setRevealId] = useState<string | null>(null);
+
+  // Enter (nothing else wants it: not in a field, a row, a button or a link; not in the Sky view) goes to the search field
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!focusesSearch(e, skyCoversScene(useView.getState().sky.phase))) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // the typed text is the text term of the query. Typing is debounced; the chips (terms) apply at once.
   const lastInput = useRef(input);
