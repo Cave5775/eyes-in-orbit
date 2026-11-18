@@ -4,12 +4,15 @@
  * - The SELECTED entity's trajectory is always drawn, at full strength: its orbit line round its primary body.
  * - The orbits of its CHILDREN (the entities that orbit it: a planet's moons and orbiters, the Earth's satellites, a moon's
  *   probes) are drawn DIMMED (the same look as HIGHLIGHT, `lib/dim.ts`), without trail, footprint or ground track.
+ * - Surface-fixed objects (rovers, landers, aircraft on another body, ground stations, observatories and pads: `isSurfaceFixed`)
+ *   have no orbit line and no trail, selected or not, whatever the data says: they stand on the ground, they do not orbit.
  * - Nothing is drawn without a selection, and nothing else is ever drawn: not the frame centre, not what is near the camera.
  *   The frame (locked or not) and the camera do not change which lines exist.
  *
  * Pure: no three.js, no frame, no camera, no clock.
  */
 import { bodyOf, compareHierarchy, type EntityRecord } from '@eio/core';
+import { isSurfaceFixed } from './view-class';
 
 /** At most this many child orbits are drawn (the Earth has thousands of satellites). */
 export const CHILD_ORBIT_LIMIT = 12;
@@ -49,6 +52,7 @@ export function orbitLines<R extends OrbitRec>(recs: ReadonlyMap<string, R>, sel
   const sel = selectedId === null ? undefined : recs.get(selectedId);
   if (!sel) return [];
   const out: OrbitLineSpec[] = [];
+  if (isSurfaceFixed(sel)) return out;
   if (!isBodyRec(sel) || sel.render?.orbitLine) out.push({ id: sel.id, role: 'selected' });
   const selBody = bodyOf(sel);
   if (selBody === undefined) return out;
@@ -56,7 +60,7 @@ export function orbitLines<R extends OrbitRec>(recs: ReadonlyMap<string, R>, sel
   const group = (rec: R): number => (isBodyRec(rec) ? 0 : rec.render?.orbitLine ? 1 : 2);
   const children: R[] = [];
   for (const rec of recs.values()) {
-    if (rec.id === sel.id) continue;
+    if (rec.id === sel.id || isSurfaceFixed(rec)) continue;
     if (isBodyRec(rec) ? rec.parentId !== sel.id || !rec.render?.orbitLine : rec.bodyId !== selBody || !(rec.render?.orbitLine || hasOrbitProvider(rec))) continue;
     if (visible(rec)) children.push(rec);
   }

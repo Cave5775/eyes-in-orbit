@@ -150,6 +150,26 @@ export const hasSurfaceSites = (bodyId: string): boolean => SURFACE_SITES.some((
 /** The surface site of an entity id, or undefined. */
 export const surfaceSiteOf = (id: string): SurfaceSite | undefined => SURFACE_SITES.find((s) => s.id === id);
 
+/**
+ * The whole traverse of a rover (`GET /api/traverse/:entityId`): every localization of its NASA MMGIS waypoint layer in the order
+ * of the file (drive order), consecutive repeats removed. A point is `[latDeg, lonDeg, sol]` (planetocentric, east, 6 decimals).
+ * The server keeps it in its SQLite cache (the one stored form); the scene draws it on the body, height 0.
+ */
+export interface RoverTraverse {
+  entityId: string;
+  bodyId: string;
+  /** where it was read */
+  source: string;
+  /** epoch ms of the answer the points come from */
+  fetchedAt: number;
+  /** the cache entry is past its TTL and the refresh failed */
+  stale: boolean;
+  points: [number, number, number][];
+}
+
+/** Does the entity have a live traverse (a rover whose position is a MMGIS waypoint layer)? */
+export const hasTraverse = (id: string): boolean => surfaceSiteOf(id)?.live !== undefined;
+
 /** Longitude in [-180, 180). */
 export const wrapLonDeg = (lon: number): number => ((((lon + 180) % 360) + 360) % 360) - 180;
 
@@ -179,7 +199,7 @@ export function surfaceSiteRecord(s: SurfaceSite, updatedAt = 0): EntityRecord {
     group: s.dsn ? 'dsn' : SURFACE_GROUP,
     provider: { type: 'geodetic', bodyId: s.bodyId, latDeg: s.latDeg, lonDeg: s.lonDeg, altKm: 0 },
     links: { newsQuery: s.name },
-    render: { colorKey: drone ? 'aircraft' : rover ? 'rover' : 'probe', glyph: drone ? 'triangle' : rover ? 'diamond' : 'square', label: s.status === 'active' },
+    render: { colorKey: drone ? 'aircraft' : rover ? 'rover' : 'probe', glyph: drone ? 'triangle' : rover ? 'diamond' : 'square', label: true },
     attrs: surfaceSiteAttrs(s),
     updatedAt,
   };

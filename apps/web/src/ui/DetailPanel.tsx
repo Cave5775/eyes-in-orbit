@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { emptyHint } from '../lib/browser-ui';
 import { kindLabel, launchOf } from '../lib/entity';
-import { typeOf } from '../lib/view-class';
+import { typeOf, viewClass } from '../lib/view-class';
 import { modelDef } from '../scene/models/registry';
 import { runtime } from '../state/runtime';
 import { useStore } from '../state/store';
@@ -25,6 +25,8 @@ export function DetailPanel() {
   const follow = useStore((s) => s.follow);
   const setFollow = useStore((s) => s.setFollow);
   const model = modelDef(rec?.render?.model);
+  // a lander, rover or aircraft on another body also has a Close-up: a few km over the site (and its traverse)
+  const onSurface = !!rec && viewClass(rec) === 'surface';
   const [tab, setTab] = useState<TabId>('telemetry');
 
   const launch = useMemo(() => launchOf(rec, launches), [rec, launches]);
@@ -71,9 +73,11 @@ export function DetailPanel() {
         <button className="key" onClick={() => runtime.camera?.fitSelected()} title="Frame the selection and its related objects (F)">
           Fit<kbd>F</kbd>
         </button>
-        {model && (
-          <button className="key" onClick={() => runtime.camera?.viewModel(rec.id)} title={`Fly to the 3D model (${model.label}) and follow it. It replaces the point sprite within ${model.lodKm} km.`}>
-            Model
+        {(model || onSurface) && (
+          <button
+            className="key" onClick={() => runtime.camera?.viewCloseUp(rec.id)}
+            title={model ? `Fly to the 3D model (${model.label}) and follow it. It replaces the point sprite within ${model.lodKm} km.` : 'Fly to 4 km over the site, looking down at it, and follow it; a rover with a published traverse is framed with its whole path.'}>
+            Close-up
           </button>
         )}
         {frameLocked && frame === rec.id ? (

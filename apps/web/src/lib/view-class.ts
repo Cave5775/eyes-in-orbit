@@ -18,6 +18,13 @@ import { listedParent } from './listed-parent';
  */
 export type ViewClass = 'body' | 'orbiter' | 'surface' | 'satellite' | 'probe' | 'other';
 
+/**
+ * Standing on a body, fixed in its body-fixed frame: a `geodetic` provider (a lander, a rover, the Ingenuity helicopter, a launch pad,
+ * a ground station or observatory on the Earth). THE predicate for what never has an orbit line or a trail (lib/orbit-lines.ts) and
+ * for a label that is not hidden by the disc of the body it stands on (lib/labels.ts).
+ */
+export const isSurfaceFixed = (rec: Partial<Pick<EntityRecord, 'provider'>>): boolean => rec.provider?.type === 'geodetic';
+
 /** Geocentric radius (km) under which an Earth-bound spacecraft is an Earth satellite; beyond it, a deep-space probe (L2 is 1.5e6 km). */
 export const NEAR_ORBIT_KM = 100_000;
 

@@ -11,7 +11,7 @@ const NOW = Date.parse('2026-10-22T12:00:00Z');
 function fakeCamera(over: Partial<CameraCommands> = {}) {
   const calls: string[] = [];
   const cam: CameraCommands = {
-    fitSelected: () => {}, fitVisible: () => {}, toggleSurface: () => {}, viewModel: () => {},
+    fitSelected: () => {}, fitVisible: () => {}, toggleSurface: () => {}, viewCloseUp: () => {},
     lookFrom: (id) => { calls.push(`look ${id}`); return true; },
     leaveFirstPerson: () => { calls.push('leave'); },
     firstPersonPose: () => null, setFirstPersonLook: () => {}, setPaused: () => {}, setFirstPersonHold: () => {},

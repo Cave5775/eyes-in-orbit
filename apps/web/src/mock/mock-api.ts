@@ -1,17 +1,30 @@
-import { surfaceSiteRecords, type CredentialInfo } from '@eio/core';
+import { hasTraverse, surfaceSiteOf, surfaceSiteRecords, type CredentialInfo, type RoverTraverse } from '@eio/core';
 import type { Api } from '../api/types';
 import { rankEntities } from '../lib/filters';
 import { pageSlice } from '../lib/paging';
 import { mockArchiveImages } from './archive-images';
+import mmgis from './fixtures/mmgis-traverse.json';
 import { mockDescription } from './describe';
 import {
   mockAscentSeries, mockBodies, mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockObservatories, mockSatellites,
 } from './generators';
 
+/** The mock rover traverses: the trimmed real MMGIS localizations (fixtures/mmgis-traverse.json), the same shape as `GET /api/traverse/:id`. */
+function mockTraverse(id: string, nowMs: number): RoverTraverse | null {
+  const points = (mmgis as unknown as Record<string, [number, number, number][] | undefined>)[id];
+  const site = surfaceSiteOf(id);
+  if (!hasTraverse(id) || !points || !site) return null;
+  return { entityId: id, bodyId: site.bodyId, source: mmgis.source, fetchedAt: nowMs, stale: false, points };
+}
+
 /** Offline stand-in for the server: same shapes as the REST contract, synthesised in memory. */
 export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
   const { launches, entities: launchEntities } = mockLaunches(nowMs);
-  const entities = [...mockBodies(nowMs), ...mockSatellites(nowMs, satCount), ...launchEntities, ...mockGroundAndProbes(nowMs), ...mockObservatories(nowMs), ...surfaceSiteRecords(nowMs)];
+  const entities = [...mockBodies(nowMs), ...mockSatellites(nowMs, satCount), ...launchEntities, ...mockGroundAndProbes(nowMs), ...mockObservatories(nowMs), ...surfaceSiteRecords(nowMs).map((r) => {
+    // a rover stands at the end of its traverse, as on the server (its latest waypoint)
+    const end = mockTraverse(r.id, nowMs)?.points.at(-1);
+    return end && r.provider?.type === 'geodetic' ? { ...r, provider: { ...r.provider, latDeg: end[0], lonDeg: end[1] } } : r;
+  })];
   const iss = entities.find((e) => e.id === 'sat-25544');
   const issOmm = iss?.provider?.type === 'sgp4' ? iss.provider.omm : undefined;
 
@@ -67,6 +80,7 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
       telemetry: mockIssTelemetry(Date.now()),
     }),
     health: async () => ({ serverTime: Date.now(), entityCount: entities.length, connectors: mockHealth(Date.now()) }),
+    traverse: async (entityId) => mockTraverse(entityId, nowMs),
     ascent: async (launchId) => {
       const launch = launches.find((l) => l.id === launchId);
       return launch ? mockAscentSeries(launch) : null;

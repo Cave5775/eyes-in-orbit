@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci,
-  type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm,
+  type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm, type RoverTraverse,
 } from '@eio/core';
 import { listedParent } from '../lib/listed-parent';
 import { modelViewDirection } from '../lib/attitude';
@@ -11,7 +11,7 @@ import { DIM } from '../lib/dim';
 import { orbitPeriodSec } from '../lib/orbit';
 import { orbitLines, type OrbitRole } from '../lib/orbit-lines';
 import { focusTarget } from '../lib/focus-target';
-import { viewClass } from '../lib/view-class';
+import { isSurfaceFixed, viewClass } from '../lib/view-class';
 import { EARTH_CENTRE, centreLabel, distanceFromCentre, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
 import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
@@ -26,7 +26,7 @@ import { POPUP_MAX, SHOW_EXEMPT, SHOW_EXEMPT_MIN, pickMeta, type PickExtra, type
 import { discGroups, hiddenByDisc, type DiscGroup, type GroupStats } from '../lib/disc-hide';
 import { bodyInScope, focusBodyOf, inScope, inView, scopeBodies, type FocusCandidate, type ScopeMode } from '../lib/scope';
 import { SCOPE_CHUNK, markSpecials, scanScope, type ScopeScanInput } from '../lib/scope-scan';
-import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
+import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelHome, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
 import { OrbitRig } from './controls';
@@ -36,7 +36,8 @@ import type { DetailView } from '../lib/earth-detail';
 import { CelestialLayer } from './celestial';
 import { EarthDetail, type DetailStats } from './earth-detail';
 import { EntityOverlay } from './overlays';
-import { PathOverlay, type PathStatus } from './PathOverlay';
+import { PathOverlay, TraverseOverlay, type PathStatus } from './PathOverlay';
+import { closeUpDirection, closeUpDistance, localAngles, reachFrom, siteBasis, traverseFixed } from '../lib/traverse';
 import { nearestOnPath, type PathHit } from '../lib/path-pick';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
@@ -246,6 +247,10 @@ export class SceneController {
   /** the trajectory under the cursor (hover highlight, cursor, tooltip); null when none */
   private pathHover: (PathHit & { id: string }) | null = null;
   private pathStatus: PathStatus = { active: false, frame: 'inertial', plan: null };
+  /** the traverses the page has fetched (`setTraverse`), and the line of the selected rover's one (scene/PathOverlay.ts) */
+  private traverses = new Map<string, RoverTraverse>();
+  private traverseOverlay: TraverseOverlay | null = null;
+  private selectedAtWall = 0;
   private hadPathLabels = false;
   // object labels (lib/labels.ts)
   private labelsOn = true;
@@ -569,6 +574,7 @@ export class SceneController {
     this.query = v.query;
     this.highlight = v.highlight;
     this.ctx = { focus, text: v.text };
+    if (selChanged) this.selectedAtWall = performance.now();
     this.selectedId = v.selectedId;
     this.refreshOrbitLines(); // a hidden group keeps no orbit line
     this.applyAppearance();
@@ -1006,6 +1012,8 @@ export class SceneController {
     if (this.surfaceOn && ids.length === 1 && !opts.points?.length && this.fitSurface(ids[0])) return true;
     // an entity with a 3D model and nothing else to frame: show the model (following it), not a 3,200 km view of a dot
     if (ids.length === 1 && !opts.points?.length && this.viewModel(ids[0])) return true;
+    // a rover: its whole traverse is the subject, not a view of the planet
+    if (ids.length === 1 && !opts.points?.length && this.traverseOverlay?.entityId === ids[0] && this.viewCloseUp(ids[0])) return true;
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const id of ids) {
@@ -1026,6 +1034,50 @@ export class SceneController {
   /** Does the entity have a registered 3D model (drawn when the camera is near)? */
   hasModel(id: string | null | undefined): boolean {
     return !!id && this.models.has(id);
+  }
+
+  /**
+   * CLOSE-UP: the close view of the selected object. An object with a 3D model: the model (`viewModel`). A lander, rover or
+   * aircraft on another body (`viewClass` surface): the camera flies to a few km over the site, 45 degrees over the horizon on the
+   * Sun's side, looking down at it (lib/traverse.ts `closeUpDirection`), far enough out to hold its whole traverse when the page
+   * has fetched one. False for anything else.
+   */
+  viewCloseUp(id: string): boolean {
+    return this.viewModel(id) || this.viewSurface(id);
+  }
+
+  private viewSurface(id: string): boolean {
+    const rec = this.recs.get(id);
+    if (!rec || viewClass(rec) !== 'surface') return false;
+    this.leaveFirstPerson();
+    const t = clock.now();
+    if (!graph.get(id)) graph.upsert(rec);
+    const st = graph.stateIn(id, t, 'EARTH:inertial');
+    if (!st) return false;
+    if (this.surfaceOn) this.setSurfaceMode(false);
+    const c = refDisplay(rec.bodyId, t).r;
+    const s = sunDirectionEci(t);
+    const dir = closeUpDirection([st.r[0] - c[0], st.r[1] - c[1], st.r[2] - c[2]], [s[0], s[1], s[2]]);
+    // everything the traverse reaches from the rover must fit
+    let reach = 0;
+    const tr = this.traverseOverlay?.entityId === id ? this.traverseOverlay : null;
+    if (tr && rec.provider?.type === 'geodetic') {
+      const here = new Float64Array(3);
+      traverseFixed([[rec.provider.latDeg, rec.provider.lonDeg]], rec.bodyId, here);
+      const p = tr.fixedPoints;
+      reach = reachFrom(p.fixed, p.count, here);
+    }
+    this.focus({ id, nonce: 0 });
+    // the offset is kept in the site's own east/north/up, which the planet's rotation turns: the camera keeps its side and height
+    const local = () => {
+      const r = this.recs.get(id);
+      return r?.provider?.type === 'geodetic' ? siteBasis(r.bodyId, r.provider.latDeg, r.provider.lonDeg, clock.now()) : null;
+    };
+    const basis = local();
+    const a = basis ? localAngles(dir, basis) : { az: Math.atan2(dir[1], dir[0]), el: Math.asin(Math.max(-1, Math.min(1, dir[2]))) };
+    this.rig.flyTo({ dist: closeUpDistance(reach, this.camera.fov, this.camera.aspect, FIT_MARGIN), az: a.az, el: a.el, ...(basis ? { local } : {}) });
+    this.cb.onFollowChange?.(true);
+    return true;
   }
 
   /**
@@ -1265,6 +1317,7 @@ export class SceneController {
     this.celestial.dispose();
     this.detail.dispose();
     this.overlays.forEach((o) => o.dispose());
+    this.traverseOverlay?.dispose();
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
       m.geometry?.dispose?.();
@@ -1487,7 +1540,7 @@ export class SceneController {
     this.overlayRoles = want;
 
     // trajectory path for a selected entity that has no SGP4 orbit of its own
-    const pathId = sel && !isSgp4(sel) && sel.provider && (sel.provider.type !== 'geodetic' || !isEarthCentre(this.frameCentre)) && !this.bodyIds.has(sel.id) ? sel.id : null;
+    const pathId = sel && !isSgp4(sel) && sel.provider && !isSurfaceFixed(sel) && !this.bodyIds.has(sel.id) ? sel.id : null;
     if (pathId !== this.pathOverlayId) {
       this.pathOverlay?.dispose();
       this.pathOverlay = null;
@@ -1496,6 +1549,30 @@ export class SceneController {
       this.pathStatus = { active: false, frame: 'inertial', plan: null };
       if (sel && pathId) this.pathOverlay = new PathOverlay(this.scene, this.pointMat, this.palette.colors[colorKeyOf(sel)]);
     }
+    this.syncTraverse();
+  }
+
+  /** The page fetched (or lost) a rover's traverse: draw it when that rover is selected. */
+  setTraverse(entityId: string, traverse: RoverTraverse | null): void {
+    const first = !!traverse && !this.traverses.has(entityId);
+    if (traverse) this.traverses.set(entityId, traverse);
+    else this.traverses.delete(entityId);
+    this.syncTraverse();
+    // the first answer for the selected rover arrives after the selection's own fit: while the camera is in the Close-up (or the
+    // selection is a moment old) refit once to hold the traverse
+    if (first && entityId === this.selectedId && this.traverseOverlay && (this.rig.offsetFrame || performance.now() - this.selectedAtWall < 8000)) this.viewSurface(entityId);
+  }
+
+  /** The traverse line exists exactly while its rover is selected and its points are known (a surface-fixed object has no other path). */
+  private syncTraverse(): void {
+    const id = this.selectedId;
+    const data = id ? this.traverses.get(id) : undefined;
+    const rec = id ? this.recs.get(id) : undefined;
+    const want = data && rec && data.points.length >= 2 ? data : null;
+    const have = this.traverseOverlay;
+    if (have && want && have.entityId === want.entityId && have.points === want.points) return;
+    have?.dispose();
+    this.traverseOverlay = want && rec ? new TraverseOverlay(this.scene, this.palette.colors[colorKeyOf(rec)], want.entityId, rec.bodyId, want.points) : null;
   }
 
   // ------------------------------------------------------------------ geometry queries
@@ -1856,6 +1933,7 @@ export class SceneController {
     this.hi.pos.upload(f);
     this.overlays.forEach((o) => o.uploadFrame(f));
     this.pathOverlay?.uploadFrame(f);
+    this.traverseOverlay?.uploadFrame(f);
     if (perf.on) perf.time('upload', performance.now() - tUp);
   }
 
@@ -2088,6 +2166,7 @@ export class SceneController {
     }
     const po = this.pathOverlay, rec = this.pathOverlayId ? this.recs.get(this.pathOverlayId) : undefined;
     if (po && rec) this.pathStatus = po.update(graph, rec, t, wall, this.overlays.get(rec.id)?.hasOrbit ?? false, centre);
+    this.traverseOverlay?.update(t);
   }
 
   /** Project the selected path's phase boundaries to the screen for the label layer. */
@@ -2243,7 +2322,7 @@ export class SceneController {
       if ((set.size.array as Float32Array)[c.i] <= 0) continue;
       const rel = set.pos.attr.array as Float32Array;
       if (c.id !== hov && this.discHiddenPoint(set, c.i, rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2])) continue; // its icon is not drawn over a small body's disc
-      this.projectLabel(rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2], c.id, c.text, c.id === hov ? 'hover' : c.feat ? 'featured' : 'satellite', 9);
+      this.projectLabel(rel[c.i * 3], rel[c.i * 3 + 1], rel[c.i * 3 + 2], c.id, c.text, c.id === hov ? 'hover' : c.feat ? 'featured' : 'satellite', 9, labelHome(this.recs.get(c.id)));
     }
     const n = plan.plan(w, h);
     cb(plan.out, n);
@@ -2251,12 +2330,12 @@ export class SceneController {
   }
 
   /** Add a label for the camera-relative point (x, y, z) unless it is out of view or behind a body. */
-  private projectLabel(x: number, y: number, z: number, id: string, text: string, cls: LabelClass, dx: number): void {
+  private projectLabel(x: number, y: number, z: number, id: string, text: string, cls: LabelClass, dx: number, home = ''): void {
     const m = this.labelM.elements;
     const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
     const cx = m[0] * x + m[4] * y + m[8] * z + m[12], cy = m[1] * x + m[5] * y + m[9] * z + m[13];
     if (!inView(cx, cy, cw) || this.occ(x, y, z)) return;
-    this.labelPlan.add(id, text, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, dx);
+    this.labelPlan.add(id, text, cls, (cx / cw * 0.5 + 0.5) * this.labelW, (0.5 - cy / cw * 0.5) * this.labelH, dx, 1, 0, 0, '', home);
   }
 
   /** One body for the label pass (a bound arrow function: no closure per frame). Only bodies whose entity says `render.label`. */

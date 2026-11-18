@@ -12,13 +12,18 @@
  *   shown last frame gets a small bonus so a declutter decision does not flicker as the camera moves;
  * - the disc rule: a label never sits on a larger body's disc. A candidate (not the selection or the hovered object) whose
  *   anchor is inside the disc of a larger body (`addDisc`) is dropped: a moon in front of its planet, a probe over a
- *   planet. (A backdrop over `BACKDROP_DISC_PX`, the Earth seen from low orbit, still carries the labels of the objects
+ *   planet. The body an object STANDS on is exempt for that object (`labelHome`: a lander on the Moon, a rover on Mars, an
+ *   observatory on the Earth sit on their own disc by definition); the far side of the body is hidden by occlusion, as for any
+ *   point. (A backdrop over `BACKDROP_DISC_PX`, the Earth seen from low orbit, still carries the labels of the objects
  *   in front of it; bodies are held to the rule whatever the size.) A moon's label also fades in only as it clears its
  *   parent: nothing within `MOON_SEP_MIN` of the parent's limb, full from `MOON_SEP_FULL`;
  * - at most `MAX_LABELS` are shown, and a label whose box would overlap one already accepted is dropped (the selection
  *   and the hovered object are never dropped for overlap);
  * - the planner owns pooled storage: nothing is allocated per frame once it has grown to its working size.
  */
+
+import { bodyEntityId, type EntityRecord } from '@eio/core';
+import { isSurfaceFixed } from './view-class';
 
 /** Most labels on screen at once (selection and hover included). */
 export const MAX_LABELS = 48;
@@ -45,6 +50,9 @@ export const MOON_SEP_FULL = 4 * LABEL_H;
 const MIN_OPACITY = 0.03;
 
 export type LabelClass = 'selected' | 'hover' | 'body' | 'featured' | 'satellite';
+
+/** The entity id of the body a surface-fixed object stands on (`body-mars` for a rover), '' for anything else: its own disc never hides its label. */
+export const labelHome = (rec: Pick<EntityRecord, 'bodyId' | 'provider'> | undefined): string => (rec && isSurfaceFixed(rec) ? bodyEntityId(rec.bodyId) : '');
 
 /** Lower = more important. */
 const RANK: Record<LabelClass, number> = { selected: 0, hover: 1, body: 2, featured: 3, satellite: 4 };
@@ -133,6 +141,8 @@ export interface LabelCandidate {
   rank: number;
   /** a moon: the entity id of its parent body ('' for the rest); its label waits until it clears the parent (`addDisc`) */
   parent: string;
+  /** a surface-fixed object: the entity id of the body it stands on ('' for the rest); that disc does not hide the label */
+  home: string;
 }
 
 /** The disc of a drawn body on screen, px. */
@@ -189,10 +199,10 @@ export class LabelPlanner {
   }
 
   /** Is the point inside the disc of a body bigger than `size` (other than `id` itself)? Objects (size 0) ignore backdrops. */
-  private underLargerDisc(id: string, x: number, y: number, size: number): boolean {
+  private underLargerDisc(id: string, x: number, y: number, size: number, home: string): boolean {
     for (let i = 0; i < this.nDiscs; i++) {
       const d = this.discs[i];
-      if (d.id === id || !(d.r > size)) continue;
+      if (d.id === id || d.id === home || !(d.r > size)) continue;
       if (size === 0 && d.r > BACKDROP_DISC_PX) continue;
       if (Math.hypot(x - d.x, y - d.y) <= d.r) return true;
     }
@@ -210,10 +220,10 @@ export class LabelPlanner {
     return 1;
   }
 
-  add(id: string, text: string, cls: LabelClass, x: number, y: number, dx: number, opacity = 1, size = 0, rank = 0, parent = ''): void {
+  add(id: string, text: string, cls: LabelClass, x: number, y: number, dx: number, opacity = 1, size = 0, rank = 0, parent = '', home = ''): void {
     if (!(opacity >= MIN_OPACITY)) return;
     let c = this.cands[this.n];
-    if (!c) c = this.cands[this.n] = { id: '', text: '', cls: 'body', x: 0, y: 0, dx: 0, opacity: 1, size: 0, rank: 0, parent: '' };
+    if (!c) c = this.cands[this.n] = { id: '', text: '', cls: 'body', x: 0, y: 0, dx: 0, opacity: 1, size: 0, rank: 0, parent: '', home: '' };
     c.id = id;
     c.text = text;
     c.cls = cls;
@@ -224,6 +234,7 @@ export class LabelPlanner {
     c.size = size;
     c.rank = rank;
     c.parent = parent;
+    c.home = home;
     this.n++;
   }
 
@@ -250,7 +261,7 @@ export class LabelPlanner {
       if (left > vw || left + labelWidth(c.text) < 0 || top > vh || top + LABEL_H < 0) continue;
       const shown = prev.has(c.id);
       if (c.cls !== 'selected' && c.cls !== 'hover') {
-        if (this.underLargerDisc(c.id, c.x, c.y, c.size)) continue;
+        if (this.underLargerDisc(c.id, c.x, c.y, c.size, c.home)) continue;
         if (this.moonFade(c.parent, c.x, c.y) * c.opacity < MIN_OPACITY) continue;
       }
       if (c.cls === 'body') {

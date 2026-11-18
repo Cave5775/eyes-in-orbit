@@ -28,8 +28,8 @@ export interface CameraCommands {
   fitVisible(): void;
   /** surface-aligned camera on / off (S); the controller remembers the choice */
   toggleSurface(): void;
-  /** fly to the selected object's 3D model and follow it */
-  viewModel(id: string): void;
+  /** Close-up of the selected object: its 3D model, or a few km over a lander, rover or aircraft; follows it */
+  viewCloseUp(id: string): void;
   /** first-person view: stand the camera at the observatory `id` and look outward (Esc and `leaveFirstPerson` leave it). False when it has no position. */
   lookFrom(id: string): boolean;
   /** leave the first-person view only (Esc and the Leave button): the globe view you had comes back, the selection stays */

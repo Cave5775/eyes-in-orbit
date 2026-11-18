@@ -45,11 +45,6 @@ export interface PathHints {
   validRange?: [number, number];
   /** `render.trailSeconds`: how much past to show for short-scale paths. */
   trailSeconds?: number;
-  /**
-   * The path is drawn relative to a frame centre that moves (not the Earth): an object standing on the ground (geodetic) then
-   * moves in that frame, so it gets a window of its own: its window is three hours each way.
-   */
-  framed?: boolean;
 }
 
 function specRange(spec: ProviderSpec): [number, number] | undefined {
@@ -110,8 +105,9 @@ function plannedFlight(spec: ProviderSpec, nowMs: number): PathPlan | null {
 }
 
 /**
- * Time window to draw for a provider, or null when no path applies (SGP4 has its orbit line, geodetic points do not move
- * unless the frame centre does: `hints.framed`, -3 h .. +3 h).
+ * Time window to draw for a provider, or null when no path applies (SGP4 has its orbit line; a geodetic object, one that stands
+ * on the ground (a rover, a lander, an aircraft, a ground station, a pad), never gets a path or a trail, in any frame: what it
+ * draws round a moving frame centre is an orbit-like curve it does not fly. The rover's traverse is its own thing, `lib/traverse.ts`).
  *  - sampled, long (>= 6 h, e.g. Horizons ephemerides): the whole valid range within -1 d .. +2 d;
  *  - composite of pad holds and sampled flight (launch ascent, booster return): the whole planned flight, whenever it is,
  *    plus the first part of a keplerian orbit continuation (see `plannedFlight`);
@@ -121,7 +117,7 @@ function plannedFlight(spec: ProviderSpec, nowMs: number): PathPlan | null {
  */
 export function planPathWindow(spec: ProviderSpec | undefined, nowMs: number, hints: PathHints = {}): PathPlan | null {
   if (!spec || spec.type === 'sgp4') return null;
-  if (spec.type === 'geodetic') return hints.framed ? { t0: nowMs - 3 * HOUR, t1: nowMs + 3 * HOUR } : null;
+  if (spec.type === 'geodetic') return null;
   const range = hints.validRange ?? specRange(spec);
   const trail = (hints.trailSeconds ?? 0) * 1000;
   switch (spec.type) {

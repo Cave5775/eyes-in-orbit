@@ -114,3 +114,23 @@ describe('dim: one amount for points and lines', () => {
     expect(DIM.size).toBeLessThan(1);
   });
 });
+
+describe('orbitLines: surface-fixed objects never get a line or a trail', () => {
+  const geodetic = (bodyId: string) => ({ type: 'geodetic' as const, bodyId, latDeg: 1, lonDeg: 2, altKm: 0 });
+  const rover = obj('dsn-M20', 'MARS', { kind: 'rover', provider: geodetic('MARS') });
+  const lander = obj('site-apollo-11', 'MOON', { kind: 'lander', provider: geodetic('MOON') });
+  const drone = obj('site-ingenuity', 'MARS', { kind: 'drone', provider: geodetic('MARS') });
+  const station = obj('gs-goldstone', 'EARTH', { kind: 'ground_station', provider: geodetic('EARTH') });
+  const flagged = obj('site-flagged', 'MARS', { kind: 'rover', provider: geodetic('MARS'), render: { orbitLine: true } });
+
+  it('a selected rover, lander, aircraft or ground station draws nothing, even when the data flags a line', () => {
+    const recs = catalog(rover, lander, drone, station, flagged);
+    for (const id of ['dsn-M20', 'site-apollo-11', 'site-ingenuity', 'gs-goldstone', 'site-flagged']) expect(orbitLines(recs, id), id).toEqual([]);
+  });
+
+  it('they are not children of their body either: the Moon and the Earth list only what orbits', () => {
+    const recs = catalog(lander, station, lro, iss);
+    expect(ids(orbitLines(recs, 'body-moon'))).toEqual(['body-moon', 'dsn-LRO']);
+    expect(ids(orbitLines(recs, 'body-earth'))).not.toContain('gs-goldstone');
+  });
+});
