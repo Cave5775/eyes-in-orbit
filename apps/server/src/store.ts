@@ -67,6 +67,17 @@ export class Store {
       .run(key, data, fetchedAt, ttlMs, fetchedAt);
   }
 
+  /** Age, TTL and size of a binary row without reading its bytes. */
+  blobInfo(key: string): { fetchedAt: number; ttlMs: number; bytes: number } | undefined {
+    const r = this.db.prepare('SELECT fetchedAt, ttl, LENGTH(data) AS size FROM blob WHERE key = ?').get(key) as { fetchedAt: number; ttl: number; size: number } | undefined;
+    return r && { fetchedAt: r.fetchedAt, ttlMs: r.ttl, bytes: Number(r.size) };
+  }
+
+  /** Renew a binary row (a 304 answer) without rewriting its bytes. */
+  touchBlob(key: string, ttlMs: number, fetchedAt = Date.now()): void {
+    this.db.prepare('UPDATE blob SET fetchedAt = ?, ttl = ?, usedAt = ? WHERE key = ?').run(fetchedAt, ttlMs, fetchedAt, key);
+  }
+
   /** Count and bytes of the binary rows whose key starts with `prefix`. */
   blobStats(prefix: string): { count: number; bytes: number } {
     const r = this.db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(data)), 0) AS b FROM blob WHERE key LIKE ? ESCAPE '\\'").get(likePrefix(prefix)) as { n: number; b: number };
