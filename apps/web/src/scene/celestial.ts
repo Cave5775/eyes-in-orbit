@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { EARTH, MOON, SUN, bodyOf, defaultBodies, hasSurfaceSites, isBodyEntity, type Body, type EntityRecord } from '@eio/core';
 import { bodyFixedToInertial, fitMapSize, poleDirection } from '../lib/body-map';
-import { BODY_TEXTURES, MAP_LOAD_PX, textureOf, type BodyTexture } from '../lib/body-textures';
+import { BODY_TEXTURES, MAP_LOAD_PX, mapWanted, textureOf, type BodyTexture } from '../lib/body-textures';
 import { MARKER_BELOW_PX, MARKER_SIZE_PX, bodyStyle, hexRgb } from '../lib/body-style';
 import type { AssetCache } from '../lib/asset-cache';
-import { BODY_SHAPES, MESH_LOAD_PX, baseEllipsoid, ellipsoidScale, meshWanted, type BodyShape, type MeshShape } from '../lib/body-shape';
+import { BODY_SHAPES, MESH_LOAD_PX, baseEllipsoid, ellipsoidScale, type BodyShape, type MeshShape } from '../lib/body-shape';
 import { bodyDiscRadiusPx, SHOW_EXEMPT } from '../lib/pick';
 import { bodyShown } from '../lib/scope';
 import { SUN_I, lightRig } from '../lib/shading';
@@ -401,17 +401,17 @@ export class CelestialLayer {
   }
 
   /**
-   * Surface maps (lib/body-textures.ts): request a body's map while its disc is at least `MAP_LOAD_PX` px (kept until under 40 % of it)
-   * and free it beyond, so only the bodies being looked at hold video memory. A missing file is asked for once. Call with `updateMeshes`.
+   * Surface maps (lib/body-textures.ts): request a body's map while it is selected or its disc is at least `MAP_LOAD_PX` px (kept until under 40 % of it)
+   * and free it beyond (the selected body's is never freed while it stays selected), so only the bodies being looked at hold video memory. A missing file is asked for once. Call with `updateMeshes`.
    */
-  private updateTextures(fovDeg: number, viewportPx: number): void {
+  private updateTextures(fovDeg: number, viewportPx: number, selectedId: string | null): void {
     if (this.disposed) return;
     for (const d of this.list) {
       const t = d.tex;
       if (!t || t.missing) continue;
       const dist = Math.hypot(d.rel[0], d.rel[1], d.rel[2]);
       const px = bodyDiscRadiusPx(d.radiusKm, d.k, dist, fovDeg, viewportPx);
-      const want = d.shown && meshWanted(px === Infinity ? 1e6 : px, MAP_LOAD_PX, t.held);
+      const want = mapWanted(px === Infinity ? 1e6 : px, d.entityId === selectedId, t.held, MAP_LOAD_PX, d.shown);
       if (want && !t.held) this.holdMap(d, t);
       else if (!want && t.held) this.dropMap(t);
     }
@@ -450,19 +450,19 @@ export class CelestialLayer {
   }
 
   /**
-   * The mesh tier (lib/body-shape.ts): for each body that names a glb, hold the file while the body's disc is at least
+   * The mesh tier (lib/body-shape.ts): for each body that names a glb, hold the file while the body is selected or its disc is at least
    * `loadPx` big (kept until under 40% of it) and let it go beyond; call after `update`, like `updateMarkers`. Nothing is requested
    * for a body that is never approached; a file that fails leaves the sphere (the cache retries after a minute). A body behind
    * the camera still counts by distance only: a disc that big and that near is on screen in practice.
    */
-  updateMeshes(fovDeg: number, viewportPx: number): void {
-    this.updateTextures(fovDeg, viewportPx);
+  updateMeshes(fovDeg: number, viewportPx: number, selectedId: string | null = null): void {
+    this.updateTextures(fovDeg, viewportPx, selectedId);
     for (const d of this.list) {
       const bm = d.mesh;
       if (!bm) continue;
       const dist = Math.hypot(d.rel[0], d.rel[1], d.rel[2]);
       const px = bodyDiscRadiusPx(d.radiusKm, d.k, dist, fovDeg, viewportPx);
-      const want = meshWanted(px === Infinity ? 1e6 : px, bm.spec.loadPx ?? MESH_LOAD_PX, bm.held);
+      const want = mapWanted(px === Infinity ? 1e6 : px, d.entityId === selectedId, bm.held, bm.spec.loadPx ?? MESH_LOAD_PX);
       if (want && !bm.held) this.holdMesh(d, bm);
       else if (!want && bm.held) this.dropMesh(d, bm);
     }

@@ -14,6 +14,9 @@
  * not where it is today.
  */
 
+import { bodyEntityId, bodyOf, type EntityRecord } from '@eio/core';
+import { meshWanted } from './body-shape';
+
 /** How the map's columns relate to longitude. Only the first is used today; the others are for a source in another layout. */
 export type MapLayout =
   /** -180..180 east, prime meridian at the centre column, east to the right (also a west-positive axis drawn with east to the right) */
@@ -33,8 +36,18 @@ export interface BodyTexture {
   credit: string;
 }
 
-/** Disc radius, px, at which a body's map is loaded (kept until under 40 % of it, like the mesh tier: `meshWanted`). 2048 px maps are about 11 MB with mipmaps. */
+/** Disc radius, px, at which a body's map is loaded (kept until under 40 % of it, like the mesh tier: `meshWanted`); the selected body loads it at any size (`mapWanted`). 2048 px maps are about 11 MB with mipmaps. */
 export const MAP_LOAD_PX = 24;
+
+/**
+ * Should a high-res tier (a body's map, or its glb mesh with a `loadPx` of its own) be held this frame? The selected body
+ * always wants it, whatever the zoom, and keeps it while it stays selected; any other body follows the size rule with
+ * hysteresis (`meshWanted`: loaded at `loadPx`, kept until under 40 % of it). `shown` false (hidden) wants nothing.
+ */
+export function mapWanted(discPx: number, selected: boolean, wasLoaded: boolean, loadPx: number = MAP_LOAD_PX, shown = true): boolean {
+  if (!shown) return false;
+  return selected || meshWanted(discPx, loadPx, wasLoaded);
+}
 
 const USGS = 'USGS Astrogeology planetary WMS';
 
@@ -69,6 +82,18 @@ export function textureU(eastLonDeg: number, layout: MapLayout = 'centred-east')
     case 'zero-left-east': return wrap(eastLonDeg / 360);
     case 'centred-west': return wrap(0.5 - eastLonDeg / 360);
   }
+}
+
+/**
+ * The body entity whose high-res tier a selection wants: the selected body itself, or the body a selected object sits on or
+ * orbits (`rec.bodyId`: Perseverance on Mars, an Apollo lander on the Moon, Huygens on Titan), so "render on select" holds for
+ * things on a body too. Null for no selection or an unknown id. Feeds `mapWanted`'s `selected`.
+ */
+export function selectedBodyEntityId(rec: Pick<EntityRecord, 'provider' | 'bodyId'> | null | undefined): string | null {
+  if (!rec) return null;
+  const own = bodyOf(rec);
+  const id = own ?? rec.bodyId;
+  return id ? bodyEntityId(id) : null;
 }
 
 /** The map of a registry body, or undefined (it keeps the procedural look). */
