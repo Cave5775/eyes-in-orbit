@@ -90,7 +90,7 @@ npm run dev        # server on :8787, web on :5173
 npm test           # vitest, all workspaces
 ```
 
-Open http://localhost:5173. The Vite dev server proxies `/api` and `/stream` to `localhost:8787` (set by `EIO_SERVER`, default `localhost:8787`, in `apps/web/vite.config.ts`; start Vite with `EIO_SERVER=localhost:8799` for a server on another `PORT`).
+Open http://localhost:5173 (or http://127.0.0.1:5173). The Vite dev server listens on the IPv4 loopback `127.0.0.1` only (set by `EIO_WEB_HOST`; unset, Vite would bind `localhost`, which Node on Windows resolves to the IPv6 `::1` only, so IPv4 clients timed out; browsers reach `localhost` through their IPv4 fallback, `http://[::1]:5173` does not answer). `EIO_WEB_HOST=0.0.0.0` exposes it to the LAN, including the proxy to the server's localhost-only routes, so it is not the default. The Vite dev server proxies `/api` and `/stream` to `localhost:8787` (set by `EIO_SERVER`, default `localhost:8787`, in `apps/web/vite.config.ts`; start Vite with `EIO_SERVER=localhost:8799` for a server on another `PORT`).
 
 Other scripts: `npm run build` (production build of the web app into `apps/web/dist`; the server does not serve it), `npm run typecheck`, `npm run start -w @eio/server` (server without file watching).
 
