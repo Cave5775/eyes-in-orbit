@@ -26,7 +26,7 @@ export const SMOOTH_OPTIONS: readonly DevOptionDef[] = [
   { id: 'smooth.zoomTau', label: 'Zoom damping', hint: 'Time constant of the wheel and pinch easing', type: 'number', min: 0.02, max: 1, step: 0.01, unit: 's', default: SMOOTH_DEFAULTS.zoomTau },
   { id: 'smooth.panTau', label: 'Pan damping', hint: 'Time constant of the pan easing', type: 'number', min: 0.02, max: 1, step: 0.01, unit: 's', default: SMOOTH_DEFAULTS.panTau },
   { id: 'smooth.inertia', label: 'Inertia', hint: 'Keep gliding after the drag is released. Off: the view stops where the pointer stopped. Always off with reduced motion', type: 'toggle', default: SMOOTH_DEFAULTS.inertia },
-  { id: 'smooth.cutoff', label: 'Velocity cutoff', hint: 'A glide slower than this stops (pixels per second). 0: never cut off', type: 'number', min: 0, max: 100, step: 1, unit: 'px/s', default: SMOOTH_DEFAULTS.cutoff },
+  { id: 'smooth.cutoff', label: 'Velocity cutoff', hint: 'A glide slower than this stops (pixels per second). 0: only a negligible tail (under 0.000001 px/s) is cut off', type: 'number', min: 0, max: 100, step: 1, unit: 'px/s', default: SMOOTH_DEFAULTS.cutoff },
 ];
 
 /** The smoothing parameters from the developer option values; reduced motion turns inertia off. */
@@ -57,9 +57,11 @@ export const frameDt = (nowMs: number, lastMs: number): number => Math.min(MAX_D
 /** A vector of pending motion (e.g. [dx, dy] pixels) that drains exponentially. */
 export class Damper {
   readonly pending: number[];
+  private readonly out: number[];
 
   constructor(size: number) {
     this.pending = new Array<number>(size).fill(0);
+    this.out = new Array<number>(size).fill(0);
   }
 
   get active(): boolean {
@@ -72,12 +74,16 @@ export class Damper {
 
   /**
    * Apply `dtS` of damping and return what to apply to the camera now. When the remaining speed (`|pending| / tau`) is below
-   * `cutoffSpeed` (units per second), everything left is returned, ending the glide.
+   * `cutoffSpeed` (units per second), everything left is returned, ending the glide. The returned array is reused by the next
+   * `step`: read it before stepping again.
    */
   step(dtS: number, tau: number, cutoffSpeed: number): number[] {
-    const out = this.pending.map(() => 0);
+    const out = this.out;
+    out.fill(0);
     if (!this.active) return out;
-    const speed = Math.hypot(...this.pending) / Math.max(tau, 1e-6);
+    let sq = 0;
+    for (const v of this.pending) sq += v * v;
+    const speed = Math.sqrt(sq) / Math.max(tau, 1e-6);
     const f = speed < Math.max(cutoffSpeed, 1e-6) ? 1 : decayFraction(dtS, tau);
     for (let i = 0; i < out.length; i++) {
       out[i] = this.pending[i] * f;

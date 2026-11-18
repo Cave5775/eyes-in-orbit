@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState, type RefObject } from 'react';
-import { DEV_OPTIONS, atDevDefaults } from '../lib/dev-options';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { DEV_OPTIONS, atDevDefaults, commitDraft, type NumberOption } from '../lib/dev-options';
 import { useDevOptions } from '../state/dev-options';
 import { useDismiss } from './hooks';
 
@@ -31,6 +31,23 @@ export function BrandIcon() {
   );
 }
 
+/** A number field that keeps what is typed as text and commits (clamp and snap) on blur or Enter. */
+function NumberField({ def, value, onCommit }: { def: NumberOption; value: number; onCommit(v: number): void }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]); // a reset or a clamped commit shows the stored value
+  const commit = () => {
+    const v = commitDraft(def, draft, value);
+    onCommit(v);
+    setDraft(String(v));
+  };
+  return (
+    <input
+      type="text" inputMode="decimal" className="dev-input" value={draft} aria-label={def.label} autoComplete="off" spellCheck={false}
+      onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }} />
+  );
+}
+
 function Panel() {
   const values = useDevOptions((s) => s.values);
   const { set, reset } = useDevOptions.getState();
@@ -47,9 +64,7 @@ function Panel() {
           </label>
         ) : (
           <label key={d.id} className="menu-row" title={d.hint}>
-            <input
-              type="number" className="dev-input" min={d.min} max={d.max} step={d.step} value={Number(values[d.id])}
-              onChange={(e) => { if (e.target.value !== '') set(d.id, e.target.value); }} />
+            <NumberField def={d} value={Number(values[d.id])} onCommit={(v) => set(d.id, v)} />
             <span className="menu-name">{d.label}{d.unit ? ` (${d.unit})` : ''}</span>
             {d.hint && <span className="menu-hint">{d.hint}</span>}
           </label>

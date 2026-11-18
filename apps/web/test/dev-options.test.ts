@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEV_OPTIONS_KEY, atDevDefaults, clampNumber, defaultValues, loadDevValues, parseValue, saveDevValues, type DevOptionDef, type DevStorage, type NumberOption,
+  DEV_OPTIONS_KEY, atDevDefaults, clampNumber, commitDraft, defaultValues, loadDevValues, parseValue, saveDevValues, type DevOptionDef, type DevStorage, type NumberOption,
 } from '../src/lib/dev-options';
 import { createDevOptionsStore } from '../src/state/dev-options';
 
@@ -77,5 +77,17 @@ describe('developer options store', () => {
     store.getState().reset();
     expect(store.getState().values).toEqual({ n: 0.5, t: true });
     expect(createDevOptionsStore(s, defs).getState().values).toEqual({ n: 0.5, t: true });
+  });
+});
+
+describe('commitDraft (a number field commits on blur or Enter)', () => {
+  it('clamps and snaps the typed text, and keeps the current value for empty or non-numeric text', () => {
+    expect(commitDraft(num, '0.3', 0.5)).toBe(0.3);
+    expect(commitDraft(num, '0,3', 0.5)).toBe(0.3);
+    expect(commitDraft(num, '0', 0.5)).toBe(0.1);
+    expect(commitDraft(num, '99', 0.5)).toBe(2);
+    expect(commitDraft(num, '', 0.7)).toBe(0.7);
+    expect(commitDraft(num, '.', 0.7)).toBe(0.7);
+    expect(commitDraft(num, 'abc', 0.7)).toBe(0.7);
   });
 });

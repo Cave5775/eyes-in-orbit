@@ -49,6 +49,16 @@ export function parseValue(def: DevOptionDef, raw: unknown): DevValue {
   return clampNumber(def, n);
 }
 
+/**
+ * What a number field being typed in commits (on blur or Enter): the draft text clamped and snapped, or `current` when the draft is
+ * empty or not a number. Typing itself is never clamped, so a lone 0 or a dot can be on the way to 0.3.
+ */
+export function commitDraft(def: NumberOption, draft: string, current: number): number {
+  const t = draft.trim().replace(',', '.');
+  const n = t === '' ? NaN : Number(t);
+  return Number.isFinite(n) ? clampNumber(def, n) : current;
+}
+
 export function defaultValues(defs: readonly DevOptionDef[] = DEV_OPTIONS): DevValues {
   const out: DevValues = {};
   for (const d of defs) out[d.id] = d.default;

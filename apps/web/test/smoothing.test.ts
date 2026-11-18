@@ -224,3 +224,28 @@ describe('OrbitRig smoothing', () => {
     expect(fp.rig.az).not.toBe(a0); // applied at once
   });
 });
+
+describe('OrbitRig glide handling', () => {
+  it('a new press catches the glide', () => {
+    const { rig, fire } = makeRig(P);
+    fire('pointerdown', { clientX: 0, clientY: 0 });
+    fire('pointermove', { clientX: 200, clientY: 0 });
+    fire('pointerup', {});
+    fire('pointerdown', { clientX: 0, clientY: 0 });
+    const az = rig.az;
+    let t = 0;
+    for (let i = 0; i < 50; i++) rig.update(null, new THREE.Vector3(), (t += 16));
+    expect(rig.az).toBe(az);
+  });
+  it('releasing with no inertia does not flush a pending wheel zoom in one jump', () => {
+    const { rig, fire } = makeRig({ ...P, inertia: false });
+    fire('pointerdown', { clientX: 0, clientY: 0 });
+    fire('wheel', { deltaY: 300, deltaMode: 0 });
+    const d0 = rig.dist;
+    fire('pointerup', {});
+    expect(rig.dist).toBe(d0);
+    rig.update(null, new THREE.Vector3(), 16);
+    expect(rig.dist).toBeGreaterThan(d0);
+    expect(rig.dist).toBeLessThan(d0 * Math.exp(300 * 0.0013) * 0.99);
+  });
+});

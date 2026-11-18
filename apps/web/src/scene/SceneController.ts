@@ -386,7 +386,18 @@ export class SceneController {
     this.rig = new OrbitRig(this.camera, this.renderer.domElement);
     this.rig.onGroundPan = (east, north, frame) => this.panSurface(east, north, frame);
     // eased input: off while drawing is paused (the Sky view owns the input then), under the Settings toggle, tuned by the developer options
-    this.rig.smoothing = () => (this.smoothCamera && !this.paused ? smoothParams(useDevOptions.getState().values, prefersReducedMotion()) : null);
+    // the parameters object is rebuilt only when an option value or the reduced-motion preference changed, not per frame
+    let cachedValues: unknown = null, cachedReduced = false, cachedParams: SmoothParams | null = null;
+    this.rig.smoothing = () => {
+      if (!this.smoothCamera || this.paused) return null;
+      const values = useDevOptions.getState().values, reduced = prefersReducedMotion();
+      if (!cachedParams || values !== cachedValues || reduced !== cachedReduced) {
+        cachedParams = smoothParams(values, reduced);
+        cachedValues = values;
+        cachedReduced = reduced;
+      }
+      return cachedParams;
+    };
     const sun0 = sunDirectionEci(clock.now());
     this.rig.az = Math.atan2(sun0[1], sun0[0]) + 0.5;
     this.rig.el = 0.35;

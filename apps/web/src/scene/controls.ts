@@ -77,6 +77,8 @@ export class OrbitRig {
   /** pending zoom as a log factor (wheel: deltaY * 0.0013, the same unit the wheel always used) */
   private readonly zoomD = new Damper(1);
   private lastNow = -1;
+  private readonly scratchRight = new THREE.Vector3();
+  private readonly scratchUp = new THREE.Vector3();
   private lastPinch = 0;
   private readonly offset = new THREE.Vector3();
   private readonly natOffset = new THREE.Vector3();
@@ -87,6 +89,7 @@ export class OrbitRig {
   constructor(private camera: THREE.PerspectiveCamera, private dom: HTMLElement) {
     camera.up.set(0, 0, 1);
     const down = (e: PointerEvent) => {
+      this.stopInertia(); // a press catches the glide: the old motion must not drain under the new drag
       dom.setPointerCapture(e.pointerId);
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       this.lastPinch = this.pinchDistance();
@@ -313,11 +316,11 @@ export class OrbitRig {
   private releaseGlide(): void {
     const sm = this.smooth();
     if (!sm || sm.inertia) return;
+    // only orbit and pan: a wheel step has no release, and flushing it here would turn an eased zoom into one jump
     if (this.pointers.size === 0) {
       this.applyOrbit(this.orbitD.flush());
       this.applyPan(this.panD.flush());
     }
-    if (this.pointers.size < 2) this.applyZoom(this.zoomD.flush()[0]);
   }
 
   /** One frame of damping: apply the share of each pending motion that `dtS` seconds release. */
@@ -390,8 +393,8 @@ export class OrbitRig {
       if (this.frame) this.onGroundPan?.(d.east, d.north, this.frame);
       return;
     }
-    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
-    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    const right = this.scratchRight.setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const up = this.scratchUp.setFromMatrixColumn(this.camera.matrixWorld, 1);
     this.pan.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
   }
 
