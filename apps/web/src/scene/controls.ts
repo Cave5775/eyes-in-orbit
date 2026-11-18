@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { localAngles, localOffsetDir, type LocalBasis } from '../lib/traverse';
 import { FP_LOOK_KM, clampFpEl, firstPersonDrag, firstPersonEye, firstPersonLookDir, zoomFov } from '../lib/first-person';
 import {
-  MAX_DIST_KM, MIN_ALT_KM, advanceSurfaceFrame, altitudeOf, blendPosition, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceFrame, type V3,
+  EARTH_BODY, MAX_DIST_KM, advanceSurfaceFrame, altitudeOf, blendPosition, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceBody, type SurfaceFrame, type V3,
 } from '../lib/camera';
 import { Damper, frameDt, type SmoothParams } from '../lib/smoothing';
 
@@ -66,6 +66,12 @@ export class OrbitRig {
   onGroundPan?: (eastKm: number, northKm: number, frame: SurfaceFrame) => void;
   /** surface mode: the horizontal frame of the last update (null until the first update after entering the mode) */
   frame: SurfaceFrame | null = null;
+  /**
+   * The ground of the surface view: the body (centre, radius, pole, altitude floor) the vertical, north and the floor refer to. The owner
+   * sets it before entering the surface view and every frame while it lasts (the body moves); it stays through the transition out,
+   * which is blended round the same body. Outside both the Earth applies, as the globe view's floor always did.
+   */
+  surfaceBody: SurfaceBody = EARTH_BODY;
   /** the local frame the globe-mode angles are in (see `FlyOptions.local`); null: world axes */
   offsetFrame: (() => LocalBasis | null) | null = null;
 
@@ -150,9 +156,14 @@ export class OrbitRig {
     return this.flight !== null || this.blend !== null;
   }
 
-  /** Camera height above the ellipsoid, km (from the last update). */
+  /** The body the altitude floor and the vertical refer to now: the surface view's body (also while blending in or out of it), else the Earth. */
+  private get ground(): SurfaceBody {
+    return this.mode === 'surface' || this.blend ? this.surfaceBody : EARTH_BODY;
+  }
+
+  /** Camera height above the ground body's ellipsoid, km (from the last update). */
   get altitudeKm(): number {
-    return altitudeOf(tup(this.camera.position));
+    return altitudeOf(tup(this.camera.position), this.ground);
   }
 
   flyTo(to: FlyOptions): void {
@@ -235,7 +246,8 @@ export class OrbitRig {
       this.target.set(eye[0] - this.natOffset.x, eye[1] - this.natOffset.y, eye[2] - this.natOffset.z);
       this.natUp.set(basis.u[0], basis.u[1], basis.u[2]);
     } else if (this.mode === 'surface') {
-      const basis = (this.frame = advanceSurfaceFrame(this.frame, ellipsoidUp(tup(this.target))));
+      const sb = this.surfaceBody;
+      const basis = (this.frame = advanceSurfaceFrame(this.frame, ellipsoidUp(tup(this.target), sb), sb.pole));
       this.el = this.clampSurfaceEl(this.el);
       const ce = Math.cos(this.el), se = Math.sin(this.el), ca = Math.cos(this.az), sa = Math.sin(this.az);
       const { e, n, u } = basis;
@@ -266,7 +278,8 @@ export class OrbitRig {
       // `this.target` is not blended, so the look direction does not sweep and a followed object stays at the screen centre
       const endTarget = tup(this.target);
       const end = this.endPos.copy(this.target).add(this.natOffset);
-      const pos = blendPosition(tup(b.pos), tup(end), k, MIN_ALT_KM, endTarget);
+      const gb = this.surfaceBody;
+      const pos = blendPosition(tup(b.pos), tup(end), k, gb.floorKm, endTarget, gb);
       this.camera.position.set(pos[0], pos[1], pos[2]);
       const up = slerpDir(tup(b.up), tup(this.natUp), k);
       this.camera.up.set(up[0], up[1], up[2]);
@@ -277,11 +290,15 @@ export class OrbitRig {
       this.camera.up.copy(this.natUp);
     }
 
-    // never closer to the ground than MIN_ALT_KM, whatever the mode or pan did: lift radially and keep `dist` honest
+    // never closer to the ground than the body's floor (the Earth's 3 km), whatever the mode or pan did: lift radially from the
+    // body's centre and keep `dist` honest
     const p = this.camera.position;
-    const alt = altitudeOf(tup(p));
-    if (alt < MIN_ALT_KM && p.lengthSq() > 0) {
-      p.multiplyScalar((p.length() + (MIN_ALT_KM - alt)) / p.length());
+    const g = this.ground;
+    const alt = altitudeOf(tup(p), g);
+    const rc = Math.hypot(p.x - g.c[0], p.y - g.c[1], p.z - g.c[2]);
+    if (alt < g.floorKm && rc > 0) {
+      const s = (rc + (g.floorKm - alt)) / rc;
+      p.set(g.c[0] + (p.x - g.c[0]) * s, g.c[1] + (p.y - g.c[1]) * s, g.c[2] + (p.z - g.c[2]) * s);
       if (!this.blend) this.dist = Math.max(this.minDist, p.distanceTo(this.target));
     }
     this.camera.lookAt(this.target);
@@ -373,7 +390,8 @@ export class OrbitRig {
 
   /** Lowest surface-view elevation: above the horizon for a ground target, lower for a high object (the camera still clears the ground). */
   private minSurfaceEl(): number {
-    return minElevation(this.dist, MIN_ALT_KM, altitudeOf(tup(this.target)));
+    const sb = this.surfaceBody;
+    return minElevation(this.dist, sb.floorKm, altitudeOf(tup(this.target), sb));
   }
 
   /** Surface elevation limits: above the ground limit, and never straight up or down (the vertical would be parallel to the view). */
