@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { defaultBodies, mmgisLayer, type MmgisLayer } from '@eio/core';
 import {
-  MAX_IN_FLIGHT, MAX_TEXTURES, PATCH_LIFT_KM, STACK_LIFT_KM, ancestors, evictions, lonLatAlt, missionUnder, patchOpacity, requestsFor, selectTiles, standIn,
+  MAX_IN_FLIGHT, MAX_TEXTURES, PATCH_LIFT_KM, STACK_LIFT_KM, ancestors, evictions, lonLatAlt, marsInReach, missionUnder, patchOpacity, requestsFor, selectTiles, standIn,
   texKey, textureBytes, tileGrid, uvRect, type TileDraw,
 } from '../lib/map-tiles';
 import { bodyAxes } from '../lib/traverse';
@@ -28,6 +28,8 @@ const RELEASE_AFTER_MS = 30_000;
 interface Tex {
   state: 'loading' | 'ready' | 'failed';
   tex: THREE.Texture | null;
+  /** the image while it loads (its `src` is cleared to stop the download when the entry is dropped) */
+  img: HTMLImageElement | null;
   at: number;
   used: number;
 }
@@ -115,7 +117,10 @@ export class SurfacePatch {
    * (world), `fovDeg` / `aspect` / `viewportPx` the render camera's. Every frame; the tile choice is redone every 120 ms.
    */
   update(t: number, origin: THREE.Vector3, dir: THREE.Vector3, fovDeg: number, aspect: number, viewportPx: number, wall = performance.now()): void {
-    const axes = this.enabled ? bodyAxes('MARS', t) : null;
+    // the camera at the Earth (or anywhere far from Mars) pays one ephemeris lookup, not the four conversions of bodyAxes
+    const c = this.enabled ? refPositionEci('MARS', t) : null;
+    if (!c || !marsInReach(Math.hypot(origin.x - c[0], origin.y - c[1], origin.z - c[2]), this.radiusKm)) return this.hide(wall);
+    const axes = bodyAxes('MARS', t);
     if (!axes) return this.hide(wall);
     const { o, ex, ey, ez } = axes;
     // the camera in body-fixed km: the transpose of the axes applied to (camera - centre)
@@ -157,7 +162,7 @@ export class SurfacePatch {
       d.mesh.material.dispose();
     }
     for (const g of this.geometries.values()) g.g.dispose();
-    for (const t of this.textures.values()) t.tex?.dispose();
+    for (const t of this.textures.values()) this.drop(t);
     this.drawn.clear();
     this.geometries.clear();
     this.textures.clear();
@@ -235,7 +240,8 @@ export class SurfacePatch {
       for (const [z, x, y] of ancestors(draw.layer, draw.tz, draw.tx, draw.ty)) keep.add(texKey(draw.layer, z, x, y));
     }
     for (const k of evictions(this.textures, keep, MAX_TEXTURES)) {
-      this.textures.get(k)?.tex?.dispose();
+      const t = this.textures.get(k);
+      if (t) this.drop(t);
       this.textures.delete(k);
     }
   }
@@ -244,10 +250,11 @@ export class SurfacePatch {
     const [mission, id, z, x, y] = key.split('/');
     const layer = mmgisLayer(mission, id);
     const url = layer ? this.tileUrl(layer, Number(z), Number(x), Number(y)) : null;
-    const entry: Tex = { state: url ? 'loading' : 'failed', tex: null, at: wall, used: wall };
+    const entry: Tex = { state: url ? 'loading' : 'failed', tex: null, img: null, at: wall, used: wall };
     this.textures.set(key, entry);
     if (!url) return;
     const img = new Image();
+    entry.img = img;
     img.onload = () => {
       if (this.disposed || this.textures.get(key) !== entry) return;
       const tex = new THREE.Texture(img);
@@ -263,6 +270,16 @@ export class SurfacePatch {
       entry.at = performance.now();
     };
     img.src = url;
+  }
+
+  /** Free a texture, or stop its download. */
+  private drop(t: Tex): void {
+    t.tex?.dispose();
+    if (t.img && t.state === 'loading') {
+      t.img.onload = t.img.onerror = null;
+      t.img.src = '';
+    }
+    t.img = null;
   }
 
   /** Give a mesh its own texture, or the nearest coarser one of its layer while that loads; hidden when there is neither. */

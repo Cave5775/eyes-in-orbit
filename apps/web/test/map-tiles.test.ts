@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defaultBodies, layerHasTile, lonLatOfTms, tileBounds, tmsOf } from '@eio/core';
 import {
-  MAX_TILES, TILE_TARGET_PX, ancestors, evictions, fixedOf, lonLatAlt, missionUnder, patchOpacity, requestsFor, selectTiles, standIn, texKey, tileGrid,
+  FADE_FAR_KM, MAX_TILES, TILE_TARGET_PX, ancestors, evictions, fixedOf, lonLatAlt, marsInReach, missionUnder, patchOpacity, requestsFor, selectTiles, standIn, texKey, tileGrid,
   tileScreenPx, uvRect, type PatchView,
 } from '../src/lib/map-tiles';
 import type { V3 } from '../src/lib/camera';
@@ -48,6 +48,16 @@ describe('placement on the sphere and when the patch shows', () => {
     expect(patchOpacity(3)).toBe(1);
     expect(patchOpacity(425)).toBeCloseTo(0.5, 6);
     expect(patchOpacity(300)).toBeGreaterThan(patchOpacity(400));
+  });
+
+  it('the per-frame distance gate: within 600 km of the surface only, and never false where a mission would be on', () => {
+    expect(marsInReach(R + 4, R)).toBe(true);
+    expect(marsInReach(R + FADE_FAR_KM - 1, R)).toBe(true);
+    expect(marsInReach(R + FADE_FAR_KM, R)).toBe(false);
+    expect(marsInReach(1e8, R)).toBe(false); // the camera at the Earth
+    for (const alt of [0, 3, 250, 599]) {
+      if (missionUnder(M20[0], M20[1], alt, R)) expect(marsInReach(R + alt, R)).toBe(true);
+    }
   });
 
   it('is on over Jezero and Gale below 600 km, off elsewhere and higher up', () => {

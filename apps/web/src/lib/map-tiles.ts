@@ -80,6 +80,12 @@ export function lonLatAlt(p: V3, r: number): { lonDeg: number; latDeg: number; a
   return { lonDeg: Math.atan2(p[1], p[0]) / DEG, latDeg: Math.asin(n ? p[2] / n : 0) / DEG, altKm: n - r };
 }
 
+/**
+ * Cheap first test of every frame: is the camera (its distance from the Mars centre, km) close enough for the patch at all? Only
+ * then are the body-fixed axes worked out (four frame conversions).
+ */
+export const marsInReach = (camToCentreKm: number, radiusKm: number): boolean => camToCentreKm < radiusKm + FADE_FAR_KM;
+
 /** Opacity of the patch at a camera altitude: 0 over `FADE_FAR_KM`, 1 under `FADE_NEAR_KM`, smooth in between. */
 export function patchOpacity(altKm: number): number {
   const t = Math.min(1, Math.max(0, (FADE_FAR_KM - altKm) / (FADE_FAR_KM - FADE_NEAR_KM)));
