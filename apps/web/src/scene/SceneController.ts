@@ -15,8 +15,9 @@ import { focusTarget } from '../lib/focus-target';
 import { isSurfaceFixed, viewClass } from '../lib/view-class';
 import { EARTH_CENTRE, centreLabel, distanceFromCentre, isEarthCentre, type Centre } from '../lib/frame';
 import { refDisplay, refMinDistKm, refViewDistKm } from '../lib/ref-body';
-import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceFrame, type V3 } from '../lib/camera';
-import { loadSurfacePref, shouldAutoSurface } from '../lib/surface';
+import { NORTH_UP_AZ, MIN_ALT_KM, MIN_TARGET_DIST_KM, EARTH_BODY, altitudeOf, boundingSphere, fitAngles, fitDistanceClamped, moveOnSphere, settleView, surfaceFitDistance, viewAnglesFor, type SurfaceBody, type SurfaceFrame, type V3 } from '../lib/camera';
+import { loadSurfacePref, shouldAutoSurface, surfaceBodyFor } from '../lib/surface';
+import { firstBodyHit, groundPointWorld, hasSurface, surfaceBodyFromAxes, worldToGround } from '../lib/surface-body';
 import { FP_FOV_START, clampFov, clampFpEl, firstPersonLookDir, firstPersonStart, focusActionInFirstPerson, releaseHold, selectionEndsFirstPerson, type FirstPersonSaved } from '../lib/first-person';
 import { dirToAzEl } from '../lib/sky-pose';
 import { colorKeyOf, isIss, isSgp4, type ColorKey } from '../lib/entity';
@@ -41,7 +42,7 @@ import { EarthDetail, type DetailStats } from './earth-detail';
 import { SurfacePatch, type PatchStats } from './surface-patch';
 import { EntityOverlay } from './overlays';
 import { PathOverlay, TraverseOverlay, type PathStatus } from './PathOverlay';
-import { closeUpDirection, closeUpDistance, localAngles, reachFrom, siteBasis, traverseFixed } from '../lib/traverse';
+import { bodyAxes, closeUpDirection, closeUpDistance, localAngles, reachFrom, siteBasis, traverseFixed, type BodyAxes } from '../lib/traverse';
 import { nearestOnPath, type PathHit } from '../lib/path-pick';
 import { PropagatorClient } from './propagator-client';
 import { RelPositions, RenderFrame } from './relative';
@@ -298,6 +299,14 @@ export class SceneController {
   private fpHold = false;
   private fpPending: FocusRequest | null = null;
   private surfaceSrc: SurfaceSource | null = null;
+  /** the registry id of the body the surface view stands on (`surfaceBodyFor`: the subject's primary body) and its ground as of the last frame */
+  private surfaceBodyId = 'EARTH';
+  private sbody: SurfaceBody = EARTH_BODY;
+  /** the body-fixed axes and ground of a non-Earth body at one sim time (cached per body: every reader of a frame, and the pan handlers, share one) */
+  private readonly axesCache = new Map<string, { t: number; a: BodyAxes; ground: SurfaceBody }>();
+  /** the sim time of the last frame: the surface view's body is read at this time everywhere, so the cache is shared */
+  private frameT = 0;
+  private readonly sbPoint: V3 = [0, 0, 0];
   /** the user's remembered choice: false after they switched the surface view off, which stops it coming on by itself */
   private surfaceAuto = loadSurfacePref();
   private smoothCamera = true;
@@ -1000,14 +1009,76 @@ export class SceneController {
   }
 
   /**
-   * The surface view is Earth-only: not while the camera follows a body other than the Earth (the focus entity, read from
-   * `followId`, so it is never a stale body), nor while the frame of reference is such a body (any other entity as the frame
-   * is fine). The one place to adapt for other bodies.
+   * The surface view works round any drawn body with a radius (not the Sun): the body is the subject's primary body or the frame
+   * centre's (`surfaceBodyFor`, the one rule); the Earth's sphere is its ellipsoid, every other body's is `surfaceShape`'s sphere.
    */
-  private surfaceAvailable(): boolean {
-    const followed = this.followedRec();
-    if (followed && isBodyEntity(followed) && !isEarthCentre(followed.id)) return false;
-    return isEarthCentre(this.frameCentre) || !this.bodyIds.has(this.frameCentre);
+  private frameBodyId(): string | null {
+    const rec = this.recs.get(this.frameCentre);
+    return (rec && bodyOf(rec)) ?? null;
+  }
+
+  /** The body the surface view stands on for `rec` (null: the free camera / a ground point): ONE rule, lib/surface.ts `surfaceBodyFor`. */
+  private bodyForRec(rec: EntityRecord | null): string | null {
+    const v = new THREE.Vector3();
+    return surfaceBodyFor(rec, this.frameBodyId(), rec && this.worldPos(rec.id, clock.now(), v) ? v.length() : undefined);
+  }
+
+  /** The body the surface view would stand on now (the followed object's primary body, a followed body itself, a focused pad's Earth, else the frame's body); null: no ground. */
+  private surfaceBodyIdNow(): string | null {
+    if (this.follow && this.focusLatLon) return 'EARTH';
+    const rec = this.followedRec();
+    if (rec) return this.bodyForRec(rec);
+    // a free camera: the body the view centre looks at, the frame's body only when it looks at none
+    return this.bodyUnderView() ?? this.bodyForRec(null);
+  }
+
+  /** The registry id of the nearest drawn body with a ground that the view-centre ray hits (`celestial.bodies()`, the one list), or null. */
+  private bodyUnderView(): string | null {
+    const d = this.camera.getWorldDirection(new THREE.Vector3());
+    const list: { id: string; c: V3; radiusKm: number }[] = [];
+    for (const b of this.celestial.bodies()) {
+      const rec = this.recs.get(b.entityId);
+      const id = rec && bodyOf(rec);
+      if (id && hasSurface(id)) list.push({ id, c: b.c, radiusKm: b.radiusKm });
+    }
+    const p = this.camera.position;
+    return firstBodyHit([p.x, p.y, p.z], [d.x, d.y, d.z], list);
+  }
+
+  /** The sim time of the surface view's body: the last frame's (so the cache is shared), else now. */
+  private surfT(): number {
+    return this.frameT > 0 ? this.frameT : clock.now();
+  }
+
+  /** Body-fixed axes of a non-Earth body in the scene's axes at `t` (float64; cached for the frame). */
+  private axesAt(id: string, t: number): BodyAxes | null {
+    return this.cachedGround(id, t)?.a ?? null;
+  }
+
+  private cachedGround(id: string, t: number): { t: number; a: BodyAxes; ground: SurfaceBody } | null {
+    const hit = this.axesCache.get(id);
+    if (hit && hit.t === t) return hit;
+    const a = bodyAxes(id, t);
+    if (!a) {
+      this.axesCache.delete(id);
+      return null;
+    }
+    const entry = { t, a, ground: surfaceBodyFromAxes(id, a) };
+    this.axesCache.set(id, entry);
+    return entry;
+  }
+
+  /** The ground of a body at `t`: the Earth's fixed one, or any other body's from its axes (lib/surface-body.ts); null with no state. */
+  private groundOf(id: string, t: number): SurfaceBody | null {
+    if (id === 'EARTH') return EARTH_BODY;
+    return this.cachedGround(id, t)?.ground ?? null;
+  }
+
+  /** Make `id` the surface body and read its ground at `t`; the rig gets it too (the vertical, north and the floor refer to it). */
+  private refreshSurfaceBody(id: string, t: number): void {
+    this.surfaceBodyId = id;
+    this.sbody = this.groundOf(id, t) ?? this.sbody;
+    this.rig.surfaceBody = this.sbody;
   }
 
   /**
@@ -1018,7 +1089,9 @@ export class SceneController {
   setSurfaceMode(on: boolean): void {
     if (on === this.surfaceOn || this.fp) return; // the first-person view has no surface mode
     if (on) {
-      if (!this.surfaceAvailable()) return;
+      const bid = this.surfaceBodyIdNow();
+      if (!bid || !this.groundOf(bid, this.surfT())) return;
+      this.refreshSurfaceBody(bid, this.surfT());
       const src = this.pickSurfaceSource();
       if (!src) return;
       this.globeDist = this.rig.dist;
@@ -1032,14 +1105,16 @@ export class SceneController {
     } else {
       // globe view of the same place: from outside along the ground point's direction, at the globe distance we left
       const t = this.rig.target;
-      const look = viewAnglesFor([t.x, t.y, t.z], 1);
+      const c = this.sbody.c;
+      const look = viewAnglesFor([t.x - c[0], t.y - c[1], t.z - c[2]], 1);
       const followed = this.follow && !!this.followFn && this.followFn(this.anchor, clock.now());
+      const fr = this.followedRec();
       this.rig.switchMode('globe');
       if (look) {
         this.rig.az = look.az;
         this.rig.el = look.el;
       }
-      this.rig.dist = followed ? viewFor(this.anchor).dist : Math.max(this.globeDist, 20000);
+      this.rig.dist = followed ? (fr ? this.viewOf(fr, this.anchor) : viewFor(this.anchor)).dist : this.surfaceBodyId === 'EARTH' ? Math.max(this.globeDist, 20000) : refViewDistKm(this.surfaceBodyId);
       this.surfaceOn = false;
       this.surfaceSrc = null;
     }
@@ -1053,12 +1128,12 @@ export class SceneController {
    */
   fitEntities(ids: string[], opts: { points?: { latDeg: number; lonDeg: number }[]; includePath?: boolean } = {}): boolean {
     this.leaveFirstPerson();
+    // a rover: its whole traverse is the subject, not a view of the planet (also from the surface view, which it leaves)
+    if (ids.length === 1 && !opts.points?.length && this.traverseOverlay?.entityId === ids[0] && this.viewCloseUp(ids[0])) return true;
     // surface view of one object: refit inside the surface view instead of leaving it for the globe
     if (this.surfaceOn && ids.length === 1 && !opts.points?.length && this.fitSurface(ids[0])) return true;
     // an entity with a 3D model and nothing else to frame: show the model (following it), not a 3,200 km view of a dot
     if (ids.length === 1 && !opts.points?.length && this.viewModel(ids[0])) return true;
-    // a rover: its whole traverse is the subject, not a view of the planet
-    if (ids.length === 1 && !opts.points?.length && this.traverseOverlay?.entityId === ids[0] && this.viewCloseUp(ids[0])) return true;
     const pts: number[] = [];
     const v = new THREE.Vector3();
     for (const id of ids) {
@@ -1207,15 +1282,23 @@ export class SceneController {
     if (id && !this.bodyIds.has(id) && this.worldPos(id, clock.now(), this.tmp)) return { kind: 'entity', id };
     if (this.follow && this.focusLatLon) return { kind: 'latlon', ...this.focusLatLon };
     const dir = this.camera.getWorldDirection(new THREE.Vector3());
+    const k = this.sbody.c;
     const c = this.camera.position;
-    const b = c.dot(dir);
-    const disc = b * b - (c.lengthSq() - RE * RE);
+    const rel = new THREE.Vector3(c.x - k[0], c.y - k[1], c.z - k[2]);
+    const b = rel.dot(dir);
+    const disc = b * b - (rel.lengthSq() - this.sbody.radiusKm * this.sbody.radiusKm);
     const p = disc > 0 && -b - Math.sqrt(disc) > 0 ? c.clone().addScaledVector(dir, -b - Math.sqrt(disc)) : c.clone();
     return this.latLonOfWorld(p, false);
   }
 
   /** Geodetic latitude/longitude of a world point as a surface source; `keepAlt` keeps its height, else the source is on the ground. */
   private latLonOfWorld(p: THREE.Vector3, keepAlt: boolean): SurfaceSource | null {
+    if (this.surfaceBodyId !== 'EARTH') {
+      const a = this.axesAt(this.surfaceBodyId, this.surfT());
+      if (!a) return null;
+      const geo = worldToGround(this.surfaceBodyId, a, [p.x, p.y, p.z]);
+      return { kind: 'latlon', lat: geo.lat, lon: geo.lon, alt: keepAlt ? Math.max(0, geo.alt) : 0 };
+    }
     if (p.lengthSq() < 1) return null;
     const g = -gmstRad(clock.now());
     const fx = p.x * Math.cos(g) - p.y * Math.sin(g), fy = p.x * Math.sin(g) + p.y * Math.cos(g);
@@ -1231,9 +1314,10 @@ export class SceneController {
     if (ll) this.surfaceSrc = ll;
   }
 
-  /** Height of an entity above the ellipsoid now, km, or null when it has no position. */
-  private entityAltKm(id: string): number | null {
-    return this.worldPos(id, clock.now(), this.tmp) ? altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z]) : null;
+  /** Height of an entity above the ground of body `bodyId` (default: the surface body) now, km, or null when it has no position. */
+  private entityAltKm(id: string, bodyId = this.surfaceBodyId): number | null {
+    const sb = this.groundOf(bodyId, this.surfT());
+    return sb && this.worldPos(id, clock.now(), this.tmp) ? altitudeOf([this.tmp.x, this.tmp.y, this.tmp.z], sb) : null;
   }
 
   /** Surface camera distance that frames an object together with the ground below it, or null when it has no position. */
@@ -1244,30 +1328,35 @@ export class SceneController {
 
   /** Camera distance on entering the surface view of `src`: the object's fit, or a regional view of a ground point. */
   private surfaceDist(src: SurfaceSource | null): number {
-    return (src?.kind === 'entity' ? this.surfaceFitDist(src.id) : null) ?? SURFACE_POINT_DIST_KM;
+    return (src?.kind === 'entity' ? this.surfaceFitDist(src.id) : null) ?? Math.min(SURFACE_POINT_DIST_KM, this.sbody.radiusKm * 0.1);
   }
 
   /**
    * End of focus(): decide whether the camera should be in the surface orientation for what was just focused. Entering
-   * (or staying) is the default for anything near the Earth (`shouldAutoSurface`); a deep-space object, or a non-Earth
-   * frame, takes the camera back to the globe view; a user who switched the surface view off keeps the globe view.
+   * (or staying) is the default for anything near its primary body (`shouldAutoSurface`: the Earth, the Moon, Mars, ...); a
+   * deep-space object takes the camera back to the globe view, and an object of another body moves the view to that body; a user
+   * who switched the surface view off keeps the globe view.
    * Internal refocuses (`nonce` 0: FIT in the surface view, MODEL) frame their own view and are left alone.
    */
   private applyAutoSurface(req: FocusRequest): void {
     if (req.nonce === 0) return;
     const id = req.id;
     const rec = id ? this.recs.get(id) ?? null : null;
-    const alt = id ? this.entityAltKm(id) : 0;
-    const want = shouldAutoSurface(rec, alt, { pref: this.surfaceAuto, earthCentred: this.surfaceAvailable() });
+    // a pad focused by latitude and longitude is on the Earth; the free camera stands on the frame's body
+    const bodyId = id ? this.bodyForRec(rec) : req.lat !== undefined ? 'EARTH' : this.bodyForRec(null);
+    const alt = id ? (bodyId ? this.entityAltKm(id, bodyId) : null) : 0;
+    const want = shouldAutoSurface(rec, alt, { pref: this.surfaceAuto, bodyId });
+    if (this.surfaceOn && (!want || bodyId !== this.surfaceBodyId)) {
+      // deep space, or an object of another body: leave this view (the next one is entered below)
+      this.setSurfaceMode(false);
+      const fr = this.followedRec();
+      if (!want && this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(fr ? this.viewOf(fr, this.tmp) : viewFor(this.tmp));
+    }
     if (!this.surfaceOn) {
       if (want) this.setSurfaceMode(true);
     } else if (want) {
-      // another object (or pad): same view direction, refit distance for it
+      // another object (or pad) of the same body: same view direction, refit distance for it
       this.rig.flyTo({ dist: this.surfaceDist(this.surfaceSrc), az: this.rig.az, el: this.rig.el });
-    } else {
-      this.setSurfaceMode(false);
-      const fr = this.followedRec();
-      if (this.followFn?.(this.tmp, clock.now())) this.rig.flyTo(fr ? this.viewOf(fr, this.tmp) : viewFor(this.tmp));
     }
   }
 
@@ -1278,6 +1367,7 @@ export class SceneController {
   private fitSurface(id: string): boolean {
     const rec = this.recs.get(id);
     if (!rec?.provider) return false;
+    if (this.bodyForRec(rec) !== this.surfaceBodyId) return false; // an object of another body: the globe fit takes the view there
     if (!graph.get(id)) graph.upsert(rec);
     const dist = this.surfaceFitDist(id);
     if (dist === null) return false;
@@ -1302,13 +1392,13 @@ export class SceneController {
     if (src?.kind !== 'latlon') return;
     // slide the target over the sphere along the camera frame's own axes: a great-circle move crosses the poles, where
     // stepping latitude/longitude cannot (and where the longitude change per km blows up)
-    if (!this.surfaceTarget(this.tmp, clock.now())) return;
+    if (!this.surfaceTarget(this.tmp, this.surfT())) return;
     const move: V3 = [
       frame.e[0] * eastKm + frame.n[0] * northKm,
       frame.e[1] * eastKm + frame.n[1] * northKm,
       frame.e[2] * eastKm + frame.n[2] * northKm,
     ];
-    const p = moveOnSphere([this.tmp.x, this.tmp.y, this.tmp.z], move);
+    const p = moveOnSphere([this.tmp.x, this.tmp.y, this.tmp.z], move, this.sbody.c);
     const ll = this.latLonOfWorld(this.tmp.set(p[0], p[1], p[2]), false);
     if (ll?.kind === 'latlon') this.surfaceSrc = { kind: 'latlon', lat: ll.lat, lon: ll.lon, alt: src.alt };
   }
@@ -1318,6 +1408,13 @@ export class SceneController {
     const src = this.surfaceSrc;
     if (!src) return false;
     if (src.kind === 'entity') return this.worldPos(src.id, t, out);
+    if (this.surfaceBodyId !== 'EARTH') {
+      const a = this.axesAt(this.surfaceBodyId, t);
+      if (!a) return false;
+      const w = groundPointWorld(this.surfaceBodyId, a, src.lat, src.lon, src.alt ?? 0, this.sbPoint);
+      out.set(w[0], w[1], w[2]);
+      return true;
+    }
     this.fixedToWorld(geodeticToFixed({ lat: src.lat, lon: src.lon, alt: src.alt ?? 0 }, EARTH), out, t);
     return true;
   }
@@ -1874,6 +1971,7 @@ export class SceneController {
     this.updateOverlays(t, wall);
 
     // camera
+    this.frameT = t;
     let anchored: boolean;
     let focusBody: string | undefined;
     // first-person: the camera stands at the observatory, which must have a position (else the view ends, like the surface view)
@@ -1886,11 +1984,12 @@ export class SceneController {
     if (this.fp) {
       anchored = true;
     } else if (this.surfaceOn) {
+      this.refreshSurfaceBody(this.surfaceBodyId, t); // the body moves and turns: its centre and pole as of now
       anchored = this.surfaceTarget(this.anchor, t);
       if (!anchored) this.setSurfaceMode(false); // the anchored object lost its position: back to the globe
-      // an object may be approached as in the globe view (the camera itself still stops MIN_ALT_KM above the ground)
+      // an object may be approached as in the globe view (the camera itself still stops the body's altitude floor above the ground)
       const src = this.surfaceSrc;
-      this.rig.minDist = src?.kind === 'entity' ? this.models.defOf(src.id)?.minViewKm ?? MIN_TARGET_DIST_KM : MIN_ALT_KM;
+      this.rig.minDist = src?.kind === 'entity' ? this.models.defOf(src.id)?.minViewKm ?? MIN_TARGET_DIST_KM : this.sbody.floorKm;
     } else {
       if (this.untrackedId && this.untrackedId === this.selectedId && this.follow && this.worldPos(this.untrackedId, t, this.tmp)) {
         // the untracked entity gained a position (the clock reached its data): follow it for real
@@ -1906,6 +2005,8 @@ export class SceneController {
       const bodyMin = focusBody ? refMinDistKm(focusBody) : undefined;
       this.rig.minDist = anchored || this.freeTarget.lengthSq() > 1 ? bodyMin ?? modelMin ?? MIN_TARGET_DIST_KM : RE + MIN_ALT_KM;
     }
+    // the blend out of a surface view goes round a body that keeps moving (Mars 40 to 60 km in 1.5 s): its centre stays current
+    if (!this.surfaceOn && !this.fp && this.rig.blending && this.surfaceBodyId !== 'EARTH') this.refreshSurfaceBody(this.surfaceBodyId, t);
     this.rig.update(anchored ? this.anchor : null, this.freeTarget, wall);
     this.updateDetail(wall);
 

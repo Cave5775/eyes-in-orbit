@@ -9,6 +9,20 @@ const F = EARTH.flattening;
 
 /** Closest the camera may get to the ellipsoid: clears the Earth mesh facet sag (~0.12 km) with a wide margin. */
 export const MIN_ALT_KM = 3;
+
+/**
+ * The ground the surface view stands on: a body's centre in the scene's Earth-inertial axes (float64 km), its radius and flattening
+ * (the Earth's ellipsoid, every other body the sphere of `surfaceShape`), the unit vector of its north pole in the same axes and
+ * the lowest the camera may go above it. Defaults to the Earth (centre at the origin, pole +Z, `MIN_ALT_KM`), so every function
+ * below behaves as it always did without the argument. Built for any body by lib/surface-body.ts.
+ */
+export interface SurfaceBody {
+  c: V3;
+  radiusKm: number;
+  flattening: number;
+  pole: V3;
+  floorKm: number;
+}
 /** Farthest the camera may be from its target. Everything is drawn at its real distance (Voyager 1 is ~2.5e10 km out). */
 export const MAX_DIST_KM = 1e11;
 
@@ -38,7 +52,10 @@ export const MIN_TARGET_DIST_KM = 0.2;
 /** Reference altitude is never taken below this, so the zoom step near the ground stays a usable size. */
 const MIN_REF_KM = 1;
 
+export const EARTH_BODY: SurfaceBody = { c: [0, 0, 0], radiusKm: RE, flattening: F, pole: [0, 0, 1], floorKm: MIN_ALT_KM };
+
 const len = (a: V3) => Math.hypot(a[0], a[1], a[2]);
+const rel = (p: V3, b: SurfaceBody): V3 => [p[0] - b.c[0], p[1] - b.c[1], p[2] - b.c[2]];
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const unit = (a: V3): V3 => {
@@ -47,14 +64,15 @@ const unit = (a: V3): V3 => {
 };
 
 /** Radius of the Earth ellipsoid (km) below the direction of `p` (geocentric, so approximate: fine for clamping). */
-export function surfaceRadius(p: V3): number {
-  const n = len(p);
-  const s = n > 0 ? p[2] / n : 0;
-  return RE * (1 - F * s * s);
+export function surfaceRadius(p: V3, b: SurfaceBody = EARTH_BODY): number {
+  const r = rel(p, b);
+  const n = len(r);
+  const s = n > 0 ? dot(r, b.pole) / n : 0;
+  return b.radiusKm * (1 - b.flattening * s * s);
 }
 
 /** Height of `p` above the ellipsoid, km (negative below). */
-export const altitudeOf = (p: V3): number => len(p) - surfaceRadius(p);
+export const altitudeOf = (p: V3, b: SurfaceBody = EARTH_BODY): number => len(rel(p, b)) - surfaceRadius(p, b);
 
 /**
  * Wheel/pinch zoom that scales with height above the surface instead of with distance to the target.
@@ -137,19 +155,21 @@ export function boundingSphere(pts: ArrayLike<number>, count = Math.floor(pts.le
 }
 
 /** Outward geodetic normal at a point on/near the ellipsoid (the local vertical). */
-export function ellipsoidUp(p: V3): V3 {
-  const k = 1 / ((1 - F) * (1 - F));
-  return unit([p[0], p[1], p[2] * k]);
+export function ellipsoidUp(p: V3, b: SurfaceBody = EARTH_BODY): V3 {
+  const k = 1 / ((1 - b.flattening) * (1 - b.flattening));
+  const r = rel(p, b);
+  const z = dot(r, b.pole) * (k - 1);
+  return unit([r[0] + b.pole[0] * z, r[1] + b.pole[1] * z, r[2] + b.pole[2] * z]);
 }
 
 /**
  * East/north/up unit vectors for a local vertical `up` (north = towards +Z, i.e. north-up).
  * At the poles east is arbitrary (+Y).
  */
-export function basisFromUp(up: V3): { e: V3; n: V3; u: V3 } {
+export function basisFromUp(up: V3, pole: V3 = [0, 0, 1]): { e: V3; n: V3; u: V3 } {
   const u = unit(up);
-  let e = cross([0, 0, 1], u);
-  if (len(e) < 1e-9) e = [0, 1, 0];
+  let e = cross(pole, u);
+  if (len(e) < 1e-9) e = cross(pole, Math.abs(pole[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]); // at a pole east is arbitrary (the Earth's: +Y)
   e = unit(e);
   return { e, n: cross(u, e), u };
 }
@@ -187,9 +207,9 @@ const wrapPi = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
  * by 0 per radian of travel; in between the two blend.
  * `prev` null starts north-up.
  */
-export function advanceSurfaceFrame(prev: SurfaceFrame | null, upIn: V3): SurfaceFrame {
+export function advanceSurfaceFrame(prev: SurfaceFrame | null, upIn: V3, pole: V3 = [0, 0, 1]): SurfaceFrame {
   const u = unit(upIn);
-  const north = basisFromUp(u);
+  const north = basisFromUp(u, pole);
   const fresh = (): SurfaceFrame => ({ e: north.e, n: north.n, u, psi: 0 });
   if (!Number.isFinite(u[0] + u[1] + u[2])) return prev ?? fresh();
   if (!prev) return fresh();
@@ -203,7 +223,7 @@ export function advanceSurfaceFrame(prev: SurfaceFrame | null, upIn: V3): Surfac
   // turn from north-up, nearest to the previous one (the north-up axes themselves are unreliable near a pole)
   let psi = prev.psi + wrapPi(Math.atan2(dot(e, north.n), dot(e, north.e)) - prev.psi);
   psi = wrapPi(psi);
-  const colat = Math.acos(Math.min(1, Math.abs(u[2])));
+  const colat = Math.acos(Math.min(1, Math.abs(dot(u, pole))));
   const t = Math.max(0, Math.min(1, (colat - POLE_ZONE_NEAR) / (POLE_ZONE_FAR - POLE_ZONE_NEAR)));
   const lim = HEADING_RELAX * t * step;
   const undo = Math.max(-lim, Math.min(lim, psi));
@@ -220,16 +240,17 @@ export function advanceSurfaceFrame(prev: SurfaceFrame | null, upIn: V3): Surfac
  * Move `p` over the sphere of its own radius by the tangent vector `move` (km, the part along p is ignored) along the great circle,
  * so a pan crosses the poles like any other place. Zero movement returns `p`.
  */
-export function moveOnSphere(p: V3, move: V3): V3 {
+export function moveOnSphere(p0: V3, move: V3, c: V3 = [0, 0, 0]): V3 {
+  const p: V3 = [p0[0] - c[0], p0[1] - c[1], p0[2] - c[2]];
   const r = len(p);
-  if (r <= 0) return p;
+  if (r <= 0) return p0;
   const d: V3 = [p[0] / r, p[1] / r, p[2] / r];
   const k = dot(move, d);
   const t: V3 = [move[0] - k * d[0], move[1] - k * d[1], move[2] - k * d[2]];
   const tl = len(t);
-  if (!(tl > 0)) return p;
-  const th = tl / r, c = Math.cos(th), s = Math.sin(th) / tl;
-  return [r * (d[0] * c + t[0] * s), r * (d[1] * c + t[1] * s), r * (d[2] * c + t[2] * s)];
+  if (!(tl > 0)) return p0;
+  const th = tl / r, ct = Math.cos(th), s = Math.sin(th) / tl;
+  return [c[0] + r * (d[0] * ct + t[0] * s), c[1] + r * (d[1] * ct + t[1] * s), c[2] + r * (d[2] * ct + t[2] * s)];
 }
 
 /** East/north/up for geodetic latitude and (east) longitude in radians, in the frame the longitude refers to. */
@@ -272,21 +293,21 @@ export function slerpDir(a: V3, b: V3, k: number): V3 {
 }
 
 /** Elevation (rad above the local horizontal) of the camera at `p` as seen from `target`; the local vertical is the ellipsoid normal at `target`. */
-export function elevationAbout(p: V3, target: V3): number {
+export function elevationAbout(p: V3, target: V3, b: SurfaceBody = EARTH_BODY): number {
   const o: V3 = [p[0] - target[0], p[1] - target[1], p[2] - target[2]];
   const d = len(o);
-  return d > 0 ? Math.asin(Math.max(-1, Math.min(1, dot(o, ellipsoidUp(target)) / d))) : 0;
+  return d > 0 ? Math.asin(Math.max(-1, Math.min(1, dot(o, ellipsoidUp(target, b)) / d))) : 0;
 }
 
 /**
  * `p` turned about `target` (distance kept, azimuth kept) up to elevation `minEl` when it is lower, else unchanged. Raising the
  * elevation at a fixed distance only moves the camera away from the Earth's centre, so this never lowers its altitude.
  */
-export function liftToElevation(p: V3, target: V3, minEl: number): V3 {
-  if (elevationAbout(p, target) >= minEl) return p;
+export function liftToElevation(p: V3, target: V3, minEl: number, b: SurfaceBody = EARTH_BODY): V3 {
+  if (elevationAbout(p, target, b) >= minEl) return p;
   const o: V3 = [p[0] - target[0], p[1] - target[1], p[2] - target[2]];
   const d = len(o);
-  const { n, u } = basisFromUp(ellipsoidUp(target));
+  const { n, u } = basisFromUp(ellipsoidUp(target, b), b.pole);
   const k = dot(o, u);
   let h: V3 = [o[0] - k * u[0], o[1] - k * u[1], o[2] - k * u[2]];
   if (len(h) < 1e-9 * d) h = n; // straight below: any horizontal direction (north, matching an unset azimuth)
@@ -310,16 +331,18 @@ const ABOUT_MIN_ALT_KM = 10;
  * near the Earth's centre, or deep inside the planet, has no horizon and only the great-circle path applies.
  * Exactly `from` at 0 and `to` at 1.
  */
-export function blendPosition(from: V3, to: V3, k: number, minAltKm = MIN_ALT_KM, about?: V3): V3 {
+export function blendPosition(from: V3, to: V3, k: number, minAltKm = MIN_ALT_KM, about?: V3, b: SurfaceBody = EARTH_BODY): V3 {
   if (k <= 0) return from;
   if (k >= 1) return to;
-  if (len(from) < 1 || len(to) < 1) return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k, from[2] + (to[2] - from[2]) * k];
-  const d = slerpDir(from, to, k);
-  const a0 = Math.max(minAltKm, altitudeOf(from)), a1 = Math.max(minAltKm, altitudeOf(to));
-  const r = surfaceRadius(d) + Math.exp(Math.log(a0) + (Math.log(a1) - Math.log(a0)) * k);
-  const p: V3 = [d[0] * r, d[1] * r, d[2] * r];
-  if (!about || len(about) < 1000 || altitudeOf(about) < -ABOUT_MIN_ALT_KM) return p;
-  return liftToElevation(p, about, Math.min(elevationAbout(from, about), elevationAbout(to, about)));
+  const f = rel(from, b), t = rel(to, b);
+  if (len(f) < b.radiusKm / RE || len(t) < b.radiusKm / RE) return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k, from[2] + (to[2] - from[2]) * k];
+  const d = slerpDir(f, t, k);
+  const a0 = Math.max(minAltKm, altitudeOf(from, b)), a1 = Math.max(minAltKm, altitudeOf(to, b));
+  const r = surfaceRadius([b.c[0] + d[0], b.c[1] + d[1], b.c[2] + d[2]], b) + Math.exp(Math.log(a0) + (Math.log(a1) - Math.log(a0)) * k);
+  const p: V3 = [b.c[0] + d[0] * r, b.c[1] + d[1] * r, b.c[2] + d[2] * r];
+  const ar = about ? len(rel(about, b)) : 0;
+  if (!about || ar < b.radiusKm * 1000 / RE || altitudeOf(about, b) < -ABOUT_MIN_ALT_KM * (b.radiusKm / RE)) return p;
+  return liftToElevation(p, about, Math.min(elevationAbout(from, about, b), elevationAbout(to, about, b)), b);
 }
 
 /** Surface view of an object: closest and farthest the fit may put the camera from it, km. */
