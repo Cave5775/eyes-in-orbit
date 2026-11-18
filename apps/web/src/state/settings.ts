@@ -10,6 +10,7 @@ export function restoreDefaults(): void {
   const view = useView.getState();
   view.setDetail(true);
   view.setSurfaceAuto(true);
+  view.setSmoothCamera(true);
   view.setSkyTransition(DEFAULT_SKY_TRANSITION);
   usePlayerPrefs.getState().setNativeControls(false);
   useLayout.getState().resetAll();
@@ -19,6 +20,6 @@ export function restoreDefaults(): void {
 /** Whether every choice `restoreDefaults` covers is already at its default. */
 export function atDefaults(): boolean {
   const v = useView.getState();
-  return v.detail && v.surfaceAuto && v.skyTransition === DEFAULT_SKY_TRANSITION && !usePlayerPrefs.getState().nativeControls && Object.keys(useLayout.getState().stored).length === 0
+  return v.detail && v.surfaceAuto && v.smoothCamera && v.skyTransition === DEFAULT_SKY_TRANSITION && !usePlayerPrefs.getState().nativeControls && Object.keys(useLayout.getState().stored).length === 0
     && useSkin.getState().skin === DEFAULT_SKIN;
 }

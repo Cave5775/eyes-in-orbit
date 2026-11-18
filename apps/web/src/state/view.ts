@@ -18,6 +18,8 @@ export interface ViewState {
   surface: boolean;
   /** focusing an object near the Earth switches to the surface view (Settings; the last S / Surface also sets it) */
   surfaceAuto: boolean;
+  /** eased orbit, zoom and pan with inertia (Settings, Camera; tuning in the developer options, lib/smoothing.ts) */
+  smoothCamera: boolean;
   /** id of the observatory the camera stands at (first-person view), else null; mirrors the controller */
   firstPerson: string | null;
   /**
@@ -34,6 +36,7 @@ export interface ViewState {
   toggleSunShading(): void;
   toggleScope(): void;
   setSurface(on: boolean): void;
+  setSmoothCamera(on: boolean): void;
   setSurfaceAuto(on: boolean): void;
   setFirstPerson(id: string | null): void;
   skyDispatch(e: SkyEvent): void;
@@ -45,6 +48,7 @@ export interface ViewState {
 export const LABELS_KEY = 'eio.labels';
 export const DETAIL_KEY = 'eio.detail';
 export const SUN_SHADING_KEY = 'eio.sunShading';
+export const SMOOTH_CAMERA_KEY = 'eio.smoothCamera';
 export { SKY_TRANSITION_KEY };
 export { SURFACE_PREF_KEY };
 
@@ -94,6 +98,7 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
     scopeAll: false,
     surface: false,
     surfaceAuto: loadFlag(SURFACE_PREF_KEY, storage),
+    smoothCamera: loadFlag(SMOOTH_CAMERA_KEY, storage),
     firstPerson: null,
     sky: SKY_OFF,
     skyTransition: loadSkyTransition(storage),
@@ -115,6 +120,10 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
     },
     toggleScope: () => set({ scopeAll: !get().scopeAll }),
     setSurface: (surface) => { if (get().surface !== surface) set({ surface }); },
+    setSmoothCamera: (smoothCamera) => {
+      saveFlag(SMOOTH_CAMERA_KEY, smoothCamera, storage);
+      if (get().smoothCamera !== smoothCamera) set({ smoothCamera });
+    },
     setSurfaceAuto: (surfaceAuto) => {
       saveFlag(SURFACE_PREF_KEY, surfaceAuto, storage);
       if (get().surfaceAuto !== surfaceAuto) set({ surfaceAuto });

@@ -7,6 +7,7 @@ import { SPEEDS, fmtRateLabel, signedRate, splitRate, type RatePref } from '../l
 import { clock } from '../state/runtime';
 import { useStore } from '../state/store';
 import { DataStreams } from './DataStreams';
+import { BrandIcon } from './DevOptions';
 import { useSimNow } from './hooks';
 import { SettingsMenu } from './SettingsMenu';
 import { ViewMenu } from './ViewMenu';
@@ -97,7 +98,7 @@ export function TopBar() {
   return (
     <header className="topbar">
       <div className="brand" title="EyesInOrbit">
-        <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.2" /><circle cx="8" cy="8" r="2" fill="currentColor" /></svg>
+        <BrandIcon />
         <span className="brand-text">EyesInOrbit</span>
       </div>
 
