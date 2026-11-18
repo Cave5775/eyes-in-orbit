@@ -4,6 +4,8 @@
  * Pure logic (no React, no DOM); the values live in `state/dev-options.ts`.
  */
 
+import { SMOOTH_OPTIONS } from './smoothing';
+
 export interface ToggleOption { id: string; label: string; hint?: string; type: 'toggle'; default: boolean }
 export interface NumberOption { id: string; label: string; hint?: string; type: 'number'; min: number; max: number; step: number; unit?: string; default: number }
 export type DevOptionDef = ToggleOption | NumberOption;
@@ -14,7 +16,7 @@ export type DevValues = Record<string, DevValue>;
 export const DEV_OPTIONS_KEY = 'eio.dev.v1';
 
 /** Every developer option. Features append their definitions here. */
-export const DEV_OPTIONS: readonly DevOptionDef[] = [];
+export const DEV_OPTIONS: readonly DevOptionDef[] = [...SMOOTH_OPTIONS];
 
 /** Minimal slice of the Web Storage interface. */
 export interface DevStorage {

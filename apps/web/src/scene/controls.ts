@@ -4,6 +4,7 @@ import { FP_LOOK_KM, clampFpEl, firstPersonDrag, firstPersonEye, firstPersonLook
 import {
   MAX_DIST_KM, MIN_ALT_KM, advanceSurfaceFrame, altitudeOf, blendPosition, ellipsoidUp, groundPanDelta, minElevation, slerpDir, zoomDistance, type SurfaceFrame, type V3,
 } from '../lib/camera';
+import { Damper, frameDt, type SmoothParams } from '../lib/smoothing';
 
 const MAX_EL = 1.5;
 
@@ -38,6 +39,13 @@ const tup = (v: THREE.Vector3): V3 => [v.x, v.y, v.z];
  *    `FP_LOOK_KM` ahead of the eye (for the scope policy and the mode transition's aim); `dist` is that distance.
  * Left drag orbits, right/shift drag pans (in surface mode it slides the target along the ground, see `onGroundPan`), wheel and pinch zoom with a step proportional to the height
  * above the surface (see `zoomDistance`). Any user input cancels a fly-to or a mode transition.
+ *
+ * Smoothing (`smoothing` returns its parameters, null = off = input is applied the moment it arrives, as it always was): orbit,
+ * pan and zoom input is added to dampers (lib/smoothing.ts) and a fraction `1 - exp(-dt / tau)` of it is applied each `update`, so
+ * the motion eases in and, once the pointer is released, glides to a stop (inertia). The first-person view is never smoothed: it
+ * drags the sky, which must stay under the pointer (and the Sky view mirrors its az/el). Every limit (altitude floor, distance and
+ * elevation clamps, the surface frame) is applied to the damped motion exactly as to direct input. A fly-to, a mode switch and
+ * `stopInertia` drop what is still gliding.
  */
 export class OrbitRig {
   az = 0.6;
@@ -52,6 +60,8 @@ export class OrbitRig {
   readonly pan = new THREE.Vector3();
   readonly target = new THREE.Vector3();
   onUserInput?: () => void;
+  /** the camera smoothing parameters for this moment, or null when input must be applied directly (see the class comment) */
+  smoothing: (() => SmoothParams | null) | null = null;
   /** surface mode: a pan drag asks to move the ground target by this many km along the frame's east and north axes */
   onGroundPan?: (eastKm: number, northKm: number, frame: SurfaceFrame) => void;
   /** surface mode: the horizontal frame of the last update (null until the first update after entering the mode) */
@@ -62,6 +72,11 @@ export class OrbitRig {
   private flight: { t0: number; dur: number; from: THREE.Vector3; fromDist: number; fromAz: number; fromEl: number; to: FlyOptions } | null = null;
   private blend: { t0: number; dur: number; pos: THREE.Vector3; up: THREE.Vector3; fresh: boolean } | null = null;
   private pointers = new Map<number, { x: number; y: number }>();
+  private readonly orbitD = new Damper(2);
+  private readonly panD = new Damper(2);
+  /** pending zoom as a log factor (wheel: deltaY * 0.0013, the same unit the wheel always used) */
+  private readonly zoomD = new Damper(1);
+  private lastNow = -1;
   private lastPinch = 0;
   private readonly offset = new THREE.Vector3();
   private readonly natOffset = new THREE.Vector3();
@@ -83,22 +98,31 @@ export class OrbitRig {
       p.x = e.clientX;
       p.y = e.clientY;
       this.cancelMotion();
+      const smooth = this.smooth() !== null;
       if (this.pointers.size === 2) {
         const d = this.pinchDistance();
-        if (this.lastPinch > 0 && d > 0) this.zoomBy(this.lastPinch / d);
+        if (this.lastPinch > 0 && d > 0) {
+          if (smooth) this.zoomD.add(Math.log(this.lastPinch / d));
+          else this.zoomBy(this.lastPinch / d);
+        }
         this.lastPinch = d;
-      } else if (e.buttons & 2 || e.buttons & 4 || e.shiftKey) this.panBy(dx, dy);
+      } else if (e.buttons & 2 || e.buttons & 4 || e.shiftKey) {
+        if (smooth) this.panD.add(dx, dy);
+        else this.panBy(dx, dy);
+      } else if (smooth) this.orbitD.add(dx, dy);
       else this.orbitBy(dx, dy);
     };
     const up = (e: PointerEvent) => {
-      this.pointers.delete(e.pointerId);
+      const had = this.pointers.delete(e.pointerId);
       this.lastPinch = this.pinchDistance();
+      if (had) this.releaseGlide();
     };
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
       this.cancelMotion();
       const unit = e.deltaMode === 1 ? 16 : 1;
-      this.zoomBy(Math.exp(e.deltaY * unit * 0.0013));
+      if (this.smooth()) this.zoomD.add(e.deltaY * unit * 0.0013);
+      else this.zoomBy(Math.exp(e.deltaY * unit * 0.0013));
     };
     const ctxMenu = (e: Event) => e.preventDefault();
     dom.style.touchAction = 'none';
@@ -151,6 +175,7 @@ export class OrbitRig {
       if (d.lengthSq() > 0) ({ az: fromAz, el: fromEl } = localAngles([d.x, d.y, d.z], basis));
     }
     this.offsetFrame = basis ? to.local! : null;
+    this.stopInertia();
     this.flight = { t0: performance.now(), dur: to.durationMs ?? 1300, from: this.target.clone(), fromDist: this.dist, fromAz, fromEl, to };
     this.pan.set(0, 0, 0);
   }
@@ -163,6 +188,7 @@ export class OrbitRig {
    * and the horizon of that target. Set az/el/dist for the new mode afterwards.
    */
   switchMode(mode: RigMode, durationMs = 1500): void {
+    this.stopInertia();
     this.blend = {
       t0: performance.now(),
       dur: durationMs,
@@ -179,6 +205,8 @@ export class OrbitRig {
 
   /** Advance one frame. `anchor` is the live world position being followed, or null for the free target. */
   update(anchor: THREE.Vector3 | null, freeTarget: THREE.Vector3, now = performance.now()): void {
+    this.advanceSmoothing(this.lastNow < 0 ? 0 : frameDt(now, this.lastNow));
+    this.lastNow = now;
     const base = anchor ?? freeTarget;
     const goal = this.offset.copy(base).add(this.pan);
     const f = this.flight;
@@ -257,6 +285,72 @@ export class OrbitRig {
       if (!this.blend) this.dist = Math.max(this.minDist, p.distanceTo(this.target));
     }
     this.camera.lookAt(this.target);
+  }
+
+  /** The smoothing parameters, or null where input is applied directly: smoothing off, or the first-person view (see the class comment). */
+  private smooth(): SmoothParams | null {
+    return this.mode === 'firstPerson' ? null : this.smoothing?.() ?? null;
+  }
+
+  private get gliding(): boolean {
+    return this.orbitD.active || this.panD.active || this.zoomD.active;
+  }
+
+  /** Drop what is still gliding (a new selection, a fly-to, a mode switch, the Sky view), or with `apply` apply it at once. */
+  stopInertia(apply = false): void {
+    if (apply) {
+      this.applyOrbit(this.orbitD.flush());
+      this.applyPan(this.panD.flush());
+      this.applyZoom(this.zoomD.flush()[0]);
+    } else {
+      this.orbitD.clear();
+      this.panD.clear();
+      this.zoomD.clear();
+    }
+  }
+
+  /** Pointer released: without inertia what is pending is applied at once, so the view ends where the pointer did. */
+  private releaseGlide(): void {
+    const sm = this.smooth();
+    if (!sm || sm.inertia) return;
+    if (this.pointers.size === 0) {
+      this.applyOrbit(this.orbitD.flush());
+      this.applyPan(this.panD.flush());
+    }
+    if (this.pointers.size < 2) this.applyZoom(this.zoomD.flush()[0]);
+  }
+
+  /** One frame of damping: apply the share of each pending motion that `dtS` seconds release. */
+  private advanceSmoothing(dtS: number): void {
+    if (!this.gliding) return;
+    const sm = this.smooth();
+    if (!sm) {
+      this.stopInertia(true); // smoothing went off (or the first-person view began) with motion pending: apply it, never lose it
+      return;
+    }
+    this.applyOrbit(this.orbitD.step(dtS, sm.orbitTau, sm.cutoff));
+    this.applyPan(this.panD.step(dtS, sm.panTau, sm.cutoff));
+    this.applyZoom(this.zoomD.step(dtS, sm.zoomTau, sm.cutoff * 0.0013)[0]);
+  }
+
+  private applyOrbit(v: number[]): void {
+    if (v[0] === 0 && v[1] === 0) return;
+    const want = this.el + v[1] * 0.0055;
+    this.orbitBy(v[0], v[1]);
+    // pushed against the elevation limit: what is still pending in that direction would only wind up and have to be undone later
+    if (this.mode !== 'firstPerson' && Math.abs(this.el - want) > 1e-9) this.orbitD.pending[1] = 0;
+  }
+
+  private applyPan(v: number[]): void {
+    if (v[0] !== 0 || v[1] !== 0) this.panBy(v[0], v[1]);
+  }
+
+  private applyZoom(logFactor: number): void {
+    if (logFactor === 0) return;
+    const before = this.dist;
+    this.zoomBy(Math.exp(logFactor));
+    // stopped by the zoom limit: drop the rest instead of letting it wind up
+    if (this.mode !== 'firstPerson' && this.dist === before) this.zoomD.clear();
   }
 
   private cancelMotion(): void {

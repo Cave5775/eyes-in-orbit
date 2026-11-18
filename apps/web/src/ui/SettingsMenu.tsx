@@ -40,6 +40,7 @@ export function SettingsMenu() {
 function Panel() {
   const detail = useView((s) => s.detail);
   const surfaceAuto = useView((s) => s.surfaceAuto);
+  const smoothCamera = useView((s) => s.smoothCamera);
   const native = usePlayerPrefs((s) => s.nativeControls);
   const sized = useLayout((s) => Object.keys(s.stored).length > 0);
   const skin = useSkin((s) => s.skin);
@@ -81,6 +82,11 @@ function Panel() {
           key: 'surface', label: 'Surface view near the Earth',
           hint: 'Selecting an object near the Earth turns the camera level with its horizon, north up. S or Surface also changes this',
           on: surfaceAuto, set: (on) => useView.getState().setSurfaceAuto(on),
+        },
+        {
+          key: 'smooth', label: 'Smooth camera',
+          hint: 'Orbit, zoom and pan ease in and glide to a stop after you let go. Off: the view follows the pointer exactly. No glide with reduced motion',
+          on: smoothCamera, set: (on) => useView.getState().setSmoothCamera(on),
         },
       ])}
       <fieldset className="menu-group">

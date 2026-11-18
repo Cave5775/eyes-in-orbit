@@ -30,6 +30,8 @@ import { SCOPE_CHUNK, markSpecials, scanScope, type ScopeScanInput } from '../li
 import { BUCKETS, LABEL_SCAN_KEEP, LabelPlanner, apparentRadiusPx, bodyLabelOpacity, labelHome, labelText, selectNearest, type LabelClass, type PlannedLabel } from '../lib/labels';
 import type { FocusRequest } from '../state/store';
 import { clock, graph } from '../state/runtime';
+import { useDevOptions } from '../state/dev-options';
+import { smoothParams, type SmoothParams } from '../lib/smoothing';
 import { OrbitRig } from './controls';
 import { createAtmosphereMaterial, createEarthMaterial, createPointMaterial, createStarMaterial, setOccluderUniforms, SHADING } from './materials';
 import { GLYPH_ID, POINT_SIZE, readPalette, type Palette } from './palette';
@@ -49,6 +51,13 @@ import { IssArrayTracker, arraySources, issJoints, type ArraySources, type IssJo
 
 // Colours and sizes are authored in display space; skip three's linear workflow.
 THREE.ColorManagement.enabled = false;
+
+let reducedMotionQuery: MediaQueryList | null | undefined;
+/** The user's `prefers-reduced-motion: reduce` (read live from one cached media query; false where there is no window). */
+function prefersReducedMotion(): boolean {
+  if (reducedMotionQuery === undefined) reducedMotionQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  return reducedMotionQuery?.matches === true;
+}
 
 const RE = EARTH.radiusKm;
 /** a launch vehicle, stage or capsule is "in flight" (exempt from the small-disc hiding) once it is this high above the Earth's surface, km; on the pad it hides like the rest */
@@ -291,6 +300,7 @@ export class SceneController {
   private surfaceSrc: SurfaceSource | null = null;
   /** the user's remembered choice: false after they switched the surface view off, which stops it coming on by itself */
   private surfaceAuto = loadSurfacePref();
+  private smoothCamera = true;
   private globeDist = 24000;
   private focusLatLon: { lat: number; lon: number } | null = null;
   /** Earth-fixed point the free (unfollowed) camera target is pinned to after a FIT of ground-level objects */
@@ -375,6 +385,8 @@ export class SceneController {
     this.camera.up.set(0, 0, 1);
     this.rig = new OrbitRig(this.camera, this.renderer.domElement);
     this.rig.onGroundPan = (east, north, frame) => this.panSurface(east, north, frame);
+    // eased input: off while drawing is paused (the Sky view owns the input then), under the Settings toggle, tuned by the developer options
+    this.rig.smoothing = () => (this.smoothCamera && !this.paused ? smoothParams(useDevOptions.getState().values, prefersReducedMotion()) : null);
     const sun0 = sunDirectionEci(clock.now());
     this.rig.az = Math.atan2(sun0[1], sun0[0]) + 0.5;
     this.rig.el = 0.35;
@@ -737,6 +749,7 @@ export class SceneController {
    * other) is followed, a ground point is followed, neither is the home view (free camera over the Earth).
    */
   focus(req: FocusRequest): void {
+    this.rig.stopInertia(); // a new selection (or the home view) starts from a still camera, unless the first-person view defers it below
     if (this.fp) {
       const act = focusActionInFirstPerson(this.fp.id, req, this.fpHold);
       if (act === 'ignore') return; // the observatory we stand at, again: nothing to do
@@ -864,6 +877,7 @@ export class SceneController {
     if (this.disposed || on === this.paused) return;
     this.paused = on;
     if (on) {
+      this.rig.stopInertia(); // leftover glide must not move the scene camera when drawing resumes (Sky view)
       this.renderer.setAnimationLoop(null);
     } else {
       this.lastFrame = performance.now();
@@ -894,6 +908,7 @@ export class SceneController {
     const a = dirToAzEl(f, dir);
     this.rig.az = a.az;
     this.rig.el = clampFpEl(a.el);
+    this.rig.stopInertia();
     this.camera.fov = clampFov(vFovDeg);
     this.camera.updateProjectionMatrix();
   }
@@ -965,6 +980,12 @@ export class SceneController {
 
   setSurfaceAuto(on: boolean): void {
     this.surfaceAuto = on;
+  }
+
+  /** Settings, Camera: eased orbit, zoom and pan with inertia (see `OrbitRig.smoothing`). Turning it off applies what is still gliding at once. */
+  setSmoothCamera(on: boolean): void {
+    this.smoothCamera = on;
+    if (!on) this.rig.stopInertia(true);
   }
 
   /**

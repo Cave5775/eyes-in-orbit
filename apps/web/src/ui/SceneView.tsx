@@ -203,12 +203,14 @@ export function SceneView() {
     ctl.setSunShading(v0.sunShading);
     ctl.setScopeMode(v0.scopeAll ? 'all' : 'auto');
     ctl.setSurfaceAuto(v0.surfaceAuto);
+    ctl.setSmoothCamera(v0.smoothCamera);
     const unsubView = useView.subscribe((v, p) => {
       if (v.detail !== p.detail) ctl.setDetailEnabled(v.detail);
       if (v.labels !== p.labels) ctl.setLabelsEnabled(v.labels);
       if (v.sunShading !== p.sunShading) ctl.setSunShading(v.sunShading);
       if (v.scopeAll !== p.scopeAll) ctl.setScopeMode(v.scopeAll ? 'all' : 'auto');
       if (v.surfaceAuto !== p.surfaceAuto) ctl.setSurfaceAuto(v.surfaceAuto);
+      if (v.smoothCamera !== p.smoothCamera) ctl.setSmoothCamera(v.smoothCamera);
     });
     const unsubSkin = useSkin.subscribe((s, p) => { if (s.skin !== p.skin) ctl.refreshPalette(); });
     ctl.setEntities(s0.entities);
