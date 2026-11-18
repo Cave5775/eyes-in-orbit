@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { inflateSync } from 'node:zlib';
 import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
-import { mmgisLayer } from '@eio/core';
+import { mmgisLayer, tmsOf } from '@eio/core';
 import { MmgisTiles, TILE_KEY_PREFIX, TILE_NEGATIVE_MS, TILE_TTL_MS, registerMmgisTiles, tileKey } from '../src/mmgis-tiles';
 import { Limiter } from '../src/net/limiter';
 import { LIMITS } from '../src/net/limits';
@@ -177,5 +178,54 @@ describe('Store binary rows', () => {
     expect(store.blobStats(TILE_KEY_PREFIX)).toEqual({ count: 3, bytes: 30_000 });
     expect(store.getBlob('other:x')).toBeDefined(); // another prefix is not touched
     expect(store.trimBlobs(TILE_KEY_PREFIX, 35_000)).toBe(0);
+  });
+});
+
+/** Alpha channel of an 8-bit RGBA, non-interlaced PNG (enough for the MMGIS tiles; PNG spec filters 0 to 4). */
+function pngAlpha(buf: Buffer): { w: number; h: number; alpha: (x: number, y: number) => number } {
+  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+  if (buf[24] !== 8 || buf[25] !== 6 || buf[28] !== 0) throw new Error('not 8-bit RGBA non-interlaced');
+  const idat: Buffer[] = [];
+  for (let p = 8; p < buf.length;) {
+    const len = buf.readUInt32BE(p), type = buf.toString('ascii', p + 4, p + 8);
+    if (type === 'IDAT') idat.push(buf.subarray(p + 8, p + 8 + len));
+    p += 12 + len;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  const bpp = 4, stride = w * bpp;
+  const px = Buffer.alloc(h * stride);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)];
+    for (let i = 0; i < stride; i++) {
+      const x = raw[y * (stride + 1) + 1 + i];
+      const a = i >= bpp ? px[y * stride + i - bpp] : 0, b = y > 0 ? px[(y - 1) * stride + i] : 0, c = i >= bpp && y > 0 ? px[(y - 1) * stride + i - bpp] : 0;
+      const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+      const pred = f === 0 ? 0 : f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      px[y * stride + i] = (x + pred) & 0xff;
+    }
+  }
+  return { w, h, alpha: (x, y) => px[y * stride + x * bpp + 3] };
+}
+
+describe('the projection, checked on a real tile', () => {
+  it('level-10 tile 731/565 is opaque exactly inside the configured bounding box (web mercator, TMS rows from the south)', () => {
+    const png = readFileSync(new URL('../../web/src/mock/fixtures/mmgis-tiles/m20-color-10-731-565.png', import.meta.url));
+    const { w, h, alpha } = pngAlpha(png);
+    expect([w, h]).toEqual([256, 256]);
+    const l = mmgisLayer('M20', 'color')!;
+    // where the mosaic's west and north edges must fall in this tile, from the core math
+    const west = (tmsOf(l.bbox[0], 18.4, 10).x - 731) * 256;
+    const north = 256 - (tmsOf(77.3, l.bbox[3], 10).y - 565) * 256; // image rows run from the north
+    // the first opaque column along a row in the middle of the mosaic, and the first opaque row along a column inside it
+    const row = Math.round((north + 256) / 2), col = Math.round((west + 256) / 2);
+    let firstX = 0;
+    while (firstX < w && alpha(firstX, row) === 0) firstX++;
+    let firstY = 0;
+    while (firstY < h && alpha(col, firstY) === 0) firstY++;
+    expect(Math.abs(firstX - west)).toBeLessThanOrEqual(2);
+    expect(Math.abs(firstY - north)).toBeLessThanOrEqual(2);
+    // and an equirectangular grid would put the north edge elsewhere: (n - lat) / 180 * 2^10 rows of 256 px
+    const eqNorth = ((90 - l.bbox[3]) / 180 * 2 ** 10 - Math.floor((90 - 18.4) / 180 * 2 ** 10)) * 256;
+    expect(Math.abs(firstY - eqNorth)).toBeGreaterThan(20);
   });
 });

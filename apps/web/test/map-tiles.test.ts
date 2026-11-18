@@ -190,12 +190,13 @@ describe('stand-ins while a tile loads', () => {
 });
 
 describe('mock mode', () => {
-  it('serves the two real fixture tiles under Perseverance and nothing else', async () => {
+  it('serves the three real fixture tiles under Perseverance and nothing else', async () => {
     const { createMockApi } = await import('../src/mock/mock-api');
     const api = createMockApi(Date.UTC(2026, 10, 17), 10);
     const color = { mission: 'M20' as const, id: 'color' };
     expect(api.mapTile(color, 11, 1463, 1130)).toMatch(/m20-color-11-1463-1130\.png/);
     expect(api.mapTile(color, 11, 1464, 1130)).toMatch(/m20-color-11-1464-1130\.png/);
+    expect(api.mapTile(color, 10, 731, 565)).toMatch(/m20-color-10-731-565\.png/);
     expect(api.mapTile(color, 12, 2926, 2261)).toBeNull();
     expect(api.mapTile({ mission: 'MSL', id: 'color' }, 11, 1463, 1130)).toBeNull();
     // the mock's Close-up of Perseverance selects exactly these tiles at level 11 when the view asks for that level
