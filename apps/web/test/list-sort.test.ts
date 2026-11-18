@@ -16,6 +16,11 @@ describe('list sort', () => {
     const cmp = listComparator('name', () => undefined)!;
     expect(['x10', 'x9', 'X1'].map((name) => ({ name })).sort(cmp).map((t) => t.name)).toEqual(['X1', 'x9', 'x10']);
   });
+  it('name sorting is stable and numeric: equal names keep their order, 2 before 10', () => {
+    const cmp = listComparator('name', () => undefined)!;
+    const rows = [{ name: 'Item 10', i: 0 }, { name: 'item 10', i: 1 }, { name: 'Item 2', i: 2 }];
+    expect([...rows].sort(cmp).map((r) => r.i)).toEqual([2, 0, 1]);
+  });
   it('distance: nearest first, ties and unknown by name, unknown last', () => {
     expect(sorted('distance')).toEqual(['b', 'a', 'd', 'c']);
   });

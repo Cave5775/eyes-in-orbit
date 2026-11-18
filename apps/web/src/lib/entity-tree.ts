@@ -178,6 +178,8 @@ export function buildTreeRows<T extends TreeItem>(items: readonly T[], opts: Tre
   // open by default: the path to the frame (and its own node), and everything with a hit while filtering
   const auto = new Set<string>();
   for (const k of bodyPathKeys(opts.bodies, opts.frameBodyId ?? 'EARTH', opts.bodyGroups)) auto.add(k);
+  // the root body's folders (the Sun's Planets, Dwarf planets ...) are open by default too: with the Sun as the frame, or a filter off, the planets stay in view
+  if (opts.bodyGroups) for (const r of roots) for (const c of r.children) auto.add(bodyGroupKey(r.id, opts.bodyGroups.of(c.body)));
   const frameEntity = opts.frameId;
   const isOpen = (key: string): boolean => {
     const o = overrides?.get(key);

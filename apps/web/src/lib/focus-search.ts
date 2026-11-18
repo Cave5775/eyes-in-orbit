@@ -41,11 +41,21 @@ export function handlesEnterItself(target: unknown): boolean {
   return false;
 }
 
-/** Whether this key press should focus the search field. `skyCovers`: the Sky view is entering or on. */
-export function focusesSearch(e: EnterKeyLike, skyCovers: boolean): boolean {
+/** What the page is doing around the key press. */
+export interface FocusContext {
+  /** the Sky view is entering or on */
+  skyCovers: boolean;
+  /** the browser panel is not on screen (the field cannot take focus) */
+  panelHidden?: boolean;
+  /** a popover, menu or dialog is open: Enter belongs to it */
+  popoverOpen?: boolean;
+}
+
+/** Whether this key press should focus the search field. */
+export function focusesSearch(e: EnterKeyLike, ctx: FocusContext): boolean {
   if (e.key !== 'Enter') return false;
   if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return false;
   if (e.repeat || e.isComposing || e.defaultPrevented) return false;
-  if (skyCovers) return false;
+  if (ctx.skyCovers || ctx.panelHidden || ctx.popoverOpen) return false;
   return !handlesEnterItself(e.target);
 }

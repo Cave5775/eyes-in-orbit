@@ -44,7 +44,9 @@ export interface SortInfo {
   distanceKm?: number;
 }
 
-const byName = (a: { name: string }, b: { name: string }): number => a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' });
+/** one collator for every comparison (building one per call costs more than the comparison, and a 12k-row list makes ~200k of them) */
+const COLLATOR = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+const byName = (a: { name: string }, b: { name: string }): number => COLLATOR.compare(a.name, b.name);
 
 const finite = (v: number | undefined): v is number => v !== undefined && Number.isFinite(v);
 

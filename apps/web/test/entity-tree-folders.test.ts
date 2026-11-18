@@ -23,6 +23,12 @@ describe('entity tree body folders', () => {
     expect(rows.map((r) => r.depth)).toEqual([0, 1, 2, 2, 3, 4, 1, 2]);
   });
 
+  it('opens the root body folders by default, so the planets stay in view with the Sun as the frame', () => {
+    const rows = buildTreeRows([], { ...opts, frameId: 'body-sun', frameBodyId: 'SUN' });
+    expect(types(rows)).toEqual(['B:SUN', 'G:planet', 'B:MARS', 'B:EARTH', 'G:dwarf_planet', 'B:CERES']);
+    expect(rows.find((r) => r.type === 'group' && r.kind === 'dwarf_planet')).toMatchObject({ open: true });
+  });
+
   it('shows an asteroid body in its folder when one exists, without any change to the table', () => {
     const withAst = [...bodies, { id: 'EROS', name: 'Eros', parentId: 'SUN', kind: 'asteroid' }];
     const rows = buildTreeRows([], { ...opts, bodies: withAst, openAll: true });
@@ -31,7 +37,7 @@ describe('entity tree body folders', () => {
 
   it('opens the path to the frame including the folders, and folds the rest', () => {
     const rows = buildTreeRows([], opts);
-    expect(types(rows)).toEqual(['B:SUN', 'G:planet', 'B:MARS', 'B:EARTH', 'G:moon', 'G:dwarf_planet']);
+    expect(types(rows)).toEqual(['B:SUN', 'G:planet', 'B:MARS', 'B:EARTH', 'G:moon', 'G:dwarf_planet', 'B:CERES']);
     expect(rows.find((r) => r.type === 'group' && r.kind === 'moon')).toMatchObject({ open: false });
     expect(rows.find((r) => r.type === 'group' && r.kind === 'planet')).toMatchObject({ open: true });
   });

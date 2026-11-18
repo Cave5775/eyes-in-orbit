@@ -1,4 +1,4 @@
-import { bodyEntityId, bodyOf, defaultBodies, isBodyEntity, type EntityRecord } from '@eio/core';
+import { bodyEntityId, bodyOf, defaultBodies, type EntityRecord } from '@eio/core';
 import { listedParent } from '../lib/listed-parent';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { BODY_CATEGORY_KINDS, CATEGORIES, categoryCounts, categoryLabel } from '../lib/browser-ui';
@@ -8,7 +8,7 @@ import { listComparator, loadSortMode, saveSortMode, SORT_MODES, parseSortMode, 
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { browseOrder, facetCounts, jumpTarget, searchHitOf, type SearchHit } from '../lib/filters';
 import { typeOf } from '../lib/view-class';
-import { entityRelativeToCentre, graphLookup, isEarthCentre } from '../lib/frame';
+import { centreStateEci, graphLookup, isEarthCentre } from '../lib/frame';
 import { buildLaunchGroups, launchMembers } from '../lib/launch-group';
 import {
   NO_FOCUS, findTerm, hasHide, isDrawn, classify, queryActive, tagTerms, termFromWord, termWord, textOf, type Ctx, type Query, type Term,
@@ -96,6 +96,9 @@ export function EntityBrowser() {
   const [dismissed, setDismissed] = useState(false);
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  /** bumped when the main-thread graph gained the records a distance sort reads, so the sort is taken again */
+  const [graphTick, setGraphTick] = useState(0);
   /** explicit open / closed choices of tree nodes by row key; they win over the defaults (see buildTreeRows) */
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const setMode = (m: Mode) => {
@@ -125,7 +128,14 @@ export function EntityBrowser() {
   // Enter (nothing else wants it: not in a field, a row, a button or a link; not in the Sky view) goes to the search field
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!focusesSearch(e, skyCoversScene(useView.getState().sky.phase))) return;
+      const panel = panelRef.current;
+      const ctx = {
+        skyCovers: skyCoversScene(useView.getState().sky.phase),
+        // the panel is not on screen, or a popover / menu / dialog (Settings, View, Data streams, scene help, the pick list) is open
+        panelHidden: !panel || panel.getClientRects().length === 0,
+        popoverOpen: !!document.querySelector('.popover, [aria-modal="true"]'),
+      };
+      if (!focusesSearch(e, ctx)) return;
       e.preventDefault();
       inputRef.current?.focus();
       inputRef.current?.select();
@@ -187,20 +197,17 @@ export function EntityBrowser() {
     const t = clock.now();
     const lookup = graphLookup(graph);
     const cache = new Map<string, SortInfo>();
-    if (sort === 'distance') {
-      const fr = entities.get(frame);
-      if (fr && isBodyEntity(fr)) ensureInGraph(fr);
-    }
+    // the centre's state is read once per pass, not once per object (null until the graph holds the frame's record: see the effect below)
+    const centre = sort === 'distance' ? centreStateEci(frame, t, lookup) : null;
     const infoOf = (id: string): SortInfo => {
       let i = cache.get(id);
       if (i) return i;
       const rec = entities.get(id);
       const radius = rec?.attrs?.radiusKm;
       i = { radiusKm: typeof radius === 'number' ? radius : undefined };
-      if (sort === 'distance' && rec) {
-        if (isBodyEntity(rec)) ensureInGraph(rec);
-        const rel = entityRelativeToCentre(id, frame, t, lookup);
-        if (rel) i.distanceKm = Math.hypot(rel.r[0], rel.r[1], rel.r[2]);
+      if (centre && rec) {
+        const s = lookup(id, t);
+        if (s) i.distanceKm = Math.hypot(s.r[0] - centre.r[0], s.r[1] - centre.r[1], s.r[2] - centre.r[2]);
       }
       cache.set(id, i);
       return i;
@@ -212,8 +219,8 @@ export function EntityBrowser() {
         return { ...i, radiusKm: i.radiusKm ?? b.radiusKm };
       }),
     };
-  }, [sort, frame, shape]);
-  /** LIST: the whole list in the chosen order */
+  }, [sort, frame, shape, graphTick]);
+  /** the rows in the chosen order, sorted once per change of the rows, the sort or the frame (LIST draws them, the tree groups them in this order) */
   const listRows = useMemo(() => (sorters.item ? [...rows].sort(sorters.item) : rows), [rows, sorters]);
 
   // the tree: the same filtered, ordered rows, nested under their primary body and flattened to the rows that are open
@@ -229,21 +236,37 @@ export function EntityBrowser() {
     return rec ? { ...b, entityId, kind: rec.kind || b.kind } : b;
   }), [shape]);
 
+  // a distance sort needs the frame's record and the body entities in the main-thread graph (the scene adds them too): add what is
+  // missing here, outside the memo, and take the sort again. A frame locked to an object whose record arrives later is caught by `shape`.
+  useEffect(() => {
+    if (sort !== 'distance') return;
+    let added = false;
+    const ensure = (rec: EntityRecord | undefined) => {
+      if (rec?.provider && graph.get(rec.id) !== rec) {
+        ensureInGraph(rec);
+        added = true;
+      }
+    };
+    ensure(entities.get(frame));
+    for (const b of treeBodies) if (b.entityId) ensure(entities.get(b.entityId));
+    if (added) setGraphTick((n) => n + 1);
+  }, [sort, frame, shape, treeBodies]);
+
   const treeRows = useMemo(() => {
     if (mode !== 'tree') return [];
     const bodies = treeBodies;
     const recOf = (r: { id: string }) => entities.get(r.id);
     const frameRec = entities.get(frame);
     const t0 = perf.on ? performance.now() : 0;
-    const built = buildTreeRows(rows, {
+    const built = buildTreeRows(listRows, {
       bodies, frameId: frame, frameBodyId: frameRec ? bodyOf(frameRec) ?? frameRec.bodyId : undefined,
       openAll: filtering, skeleton: !filtering, overrides, kindName: kindLabel, bodyOf: (r) => { const e = recOf(r); return e && listedParent(e); },
       standsForBody: (r) => { const p = recOf(r)?.provider; return p?.type === 'body' ? p.bodyId : undefined; },
-      bodyGroups: BODY_GROUPS_OPT, sortBodies: sorters.body, sortItems: sorters.item,
+      bodyGroups: BODY_GROUPS_OPT, sortBodies: sorters.body,
     });
     if (perf.on) perf.time('tree', performance.now() - t0);
     return built;
-  }, [mode, rows, shape, frame, filtering, overrides, treeBodies, sorters]);
+  }, [mode, listRows, shape, frame, filtering, overrides, treeBodies, sorters]);
 
   /** the rows pinned at the top of the tree while a row is the first in view: its ancestors (the body chain and the kind group) */
   const stickyOf = useCallback((first: number) => stickyAncestors(treeRows, first), [treeRows]);
@@ -452,7 +475,7 @@ export function EntityBrowser() {
   };
 
   return (
-    <aside className="panel left">
+    <aside className="panel left" ref={panelRef}>
       <div className="panel-head">
         <span>Objects</span>
         <span className="seg" role="group" aria-label="Entity view">
