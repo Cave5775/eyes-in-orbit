@@ -24,8 +24,10 @@ export function orbitPeriodSec(graph: EntityGraph, rec: EntityRecord, s: StateVe
     }
   }
   const p = graph.provider(rec.id);
-  if (p instanceof Sgp4Provider) return p.periodMin * 60;
-  if (!s.v) return null;
+  // an SGP4 object is on its own element set's period, but like any other it is no orbit when its periapsis is inside the Earth or
+  // its atmosphere (a decayed or reentering set): the line would run through the ground
+  const sgp4Period = p instanceof Sgp4Provider ? p.periodMin * 60 : null;
+  if (!s.v) return sgp4Period;
   let body;
   try {
     body = defaultBodies.get(rec.bodyId);
@@ -50,5 +52,6 @@ export function orbitPeriodSec(graph: EntityGraph, rec: EntityRecord, s: StateVe
   const vh = cross(s.v, cross(s.r, s.v));
   const e = norm(vh.map((x, i) => x / gm - s.r[i] / r) as Vec3);
   if (e >= 1 || a * (1 - e) < body.radiusKm + (ATMOSPHERE_KM[body.id] ?? 0)) return null;
+  if (sgp4Period !== null) return sgp4Period;
   return 2 * Math.PI * Math.sqrt((a * a * a) / gm);
 }
