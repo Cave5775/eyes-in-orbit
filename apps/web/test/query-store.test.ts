@@ -146,3 +146,22 @@ describe('HIGHLIGHT', () => {
     expect(storage.data.get('eio.highlight')).toBe('off');
   });
 });
+
+describe('the search text (typed, not applied)', () => {
+  it('is looked up on its own and filters nothing', async () => {
+    const store = await freshStore(mem());
+    const s = store.getState;
+    store.setState({ entities: new Map(CATALOG.map((r) => [r.id, r])) });
+    s().setSearchText('starlink');
+    expect(s().searchHits?.map((h) => h.id)).toEqual(['sat-2', 'sat-3']);
+    expect([...s().searchIds!]).toEqual(['sat-2', 'sat-3']);
+    expect(s().query.terms).toEqual([]);
+    expect(s().textHits).toBeNull();
+    s().setText('iss'); // the applied text has its own lookup
+    expect(s().textHits?.map((h) => h.id)).toEqual(['sat-1']);
+    expect(s().searchHits?.length).toBe(2);
+    s().setSearchText('');
+    expect(s().searchHits).toBeNull();
+    expect(s().textHits?.length).toBe(1);
+  });
+});

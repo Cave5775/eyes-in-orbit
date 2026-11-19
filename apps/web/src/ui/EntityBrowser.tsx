@@ -6,7 +6,8 @@ import { buildTreeRows, revealKeys, revealRowIndex, stickyAncestors, type BodyGr
 import { bodyGroupLabel, bodyGroupOrder, registryBodyKinds } from '../lib/body-groups';
 import { listComparator, loadSortMode, saveSortMode, SORT_MODES, parseSortMode, type SortInfo, type SortMode } from '../lib/list-sort';
 import { colorKeyOf, kindLabel } from '../lib/entity';
-import { browseOrder, facetCounts, jumpTarget, searchHitOf, type SearchHit } from '../lib/filters';
+import { browseOrder, facetCounts, searchHitOf, type SearchHit } from '../lib/filters';
+import { afterPick, isSearching, moveHighlight, pendingQuery, pickedResult, searchRows, searchTagTerms, searchTextOf } from '../lib/search-pending';
 import { typeOf } from '../lib/view-class';
 import { centreStateEci, graphLookup, isEarthCentre } from '../lib/frame';
 import { buildLaunchGroups, launchMembers } from '../lib/launch-group';
@@ -14,7 +15,7 @@ import {
   NO_FOCUS, findTerm, hasHide, isDrawn, classify, queryActive, tagTerms, termFromWord, termWord, textOf, type Ctx, type Query, type Term,
 } from '../lib/query';
 import {
-  acceptTag, activeTag, backspaceRemovesChip, parseQuery, splitCommitted, suggestTags, type TagKey, type TagSuggestion,
+  acceptTag, activeTag, backspaceRemovesChip, suggestTags, type TagKey, type TagSuggestion,
 } from '../lib/search-tags';
 import { perf } from '../lib/perf';
 import { focusesSearch } from '../lib/focus-search';
@@ -27,23 +28,12 @@ import { VirtualList, type VirtualListHandle } from './VirtualList';
 const ROW_H = 28;
 const DEBOUNCE_MS = 250;
 const INDENT_PX = 12;
-const MODE_KEY = 'eio.browser';
-
-type Mode = 'tree' | 'list';
 
 /** The body tree the entity tree nests under (SUN > EARTH > MOON, SUN > MARS). */
 const REGISTRY_KINDS = registryBodyKinds(defaultBodies.all());
 const TREE_BODIES: TreeBody[] = defaultBodies.all().map((b) => ({ id: b.id, name: b.name, parentId: b.parentId, kind: REGISTRY_KINDS.get(b.id), radiusKm: b.radiusKm }));
 /** the bodies that orbit a body sit in folders by kind (Planets, Dwarf planets, Moons, Asteroids; lib/body-groups.ts) */
 const BODY_GROUPS_OPT: BodyGroups = { of: (b) => b.kind ?? 'other', label: bodyGroupLabel, order: bodyGroupOrder };
-
-function loadMode(): Mode {
-  try {
-    return localStorage.getItem(MODE_KEY) === 'list' ? 'list' : 'tree';
-  } catch {
-    return 'tree';
-  }
-}
 
 /** Eye: the group is shown (click to hide it); crossed: it is hidden (click to show it). */
 function Eye({ off }: { off: boolean }) {
@@ -66,7 +56,7 @@ const HELP_TAGS: [string, string][] = [
   ['-type:debris', 'a leading - leaves those out'],
 ];
 
-/** Whether the query lists a row: the predicate the list, the tree and the scene share. */
+/** Whether the query lists a row: the predicate the search list, the tree and the scene share (the search list gets the pending query). */
 const listedBy = (entities: ReadonlyMap<string, EntityRecord>, query: Query, text: ReadonlySet<string> | null) => {
   const ctx: Ctx = { focus: NO_FOCUS, text };
   return (r: SearchHit) => isDrawn(classify(entities.get(r.id) ?? r, query, ctx));
@@ -80,12 +70,16 @@ export function EntityBrowser() {
   const query = useStore((s) => s.query);
   const textHits = useStore((s) => s.textHits);
   const textIds = useStore((s) => s.textIds);
+  const searchHits = useStore((s) => s.searchHits);
+  const searchIds = useStore((s) => s.searchIds);
   const selectedId = useStore((s) => s.selectedId);
   const frame = useStore((s) => s.frame);
-  const { setText, addTerms, removeTerm, toggleTerm, setTermEffect, clearQuery, showAll, selectObject } = useStore.getState();
-  /** the free text and the tag word being typed; the finished tag words are terms of the query (the chips) */
-  const [input, setInput] = useState(() => textOf(query));
-  const [mode, setModeState] = useState<Mode>(loadMode);
+  const { setQuery, setSearchText, removeTerm, toggleTerm, setTermEffect, clearQuery, showAll, selectObject } = useStore.getState();
+  /** what is typed (a search: free text and tag words; nothing is applied until Filter). The applied query's terms are the chips. */
+  const [input, setInput] = useState('');
+  /** the highlighted search result (-1: none) */
+  const [hi, setHi] = useState(-1);
+  const searching = isSearching(input);
   const [sort, setSortState] = useState<SortMode>(loadSortMode);
   const setSort = (m: SortMode) => {
     setSortState(m);
@@ -101,12 +95,6 @@ export function EntityBrowser() {
   const [graphTick, setGraphTick] = useState(0);
   /** explicit open / closed choices of tree nodes by row key; they win over the defaults (see buildTreeRows) */
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(() => new Map());
-  const setMode = (m: Mode) => {
-    setModeState(m);
-    try {
-      localStorage.setItem(MODE_KEY, m);
-    } catch { /* private window: the choice just is not remembered */ }
-  };
   /** the node just collapsed: its row stays in view (a pinned header that is collapsed would otherwise scroll away) */
   const collapsedKey = useRef<string | null>(null);
   const setOpen = useCallback((key: string, open: boolean) => {
@@ -144,14 +132,17 @@ export function EntityBrowser() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // the typed text is the text term of the query. Typing is debounced; the chips (terms) apply at once.
-  const lastInput = useRef(input);
+  // the typed text is looked up for the search list (never the scene). Typing is debounced; a cleared text goes at once.
+  const typed = searchTextOf(input);
   useEffect(() => {
-    if (lastInput.current === input) return;
-    lastInput.current = input;
-    const h = setTimeout(() => setText(parseQuery(input).text), DEBOUNCE_MS);
+    if (!typed) {
+      setSearchText('');
+      return;
+    }
+    const h = setTimeout(() => setSearchText(typed), DEBOUNCE_MS);
     return () => clearTimeout(h);
-  }, [input, setText]);
+  }, [typed, setSearchText]);
+  useEffect(() => setHi(-1), [input]);
 
   const facets = useMemo(() => facetCounts(entities.values()), [shape]);
   const categories = useMemo(() => categoryCounts(entities.values()), [shape]);
@@ -183,10 +174,15 @@ export function EntityBrowser() {
   const ordered = useMemo(() => [...entities.values()].sort(browseOrder).map(searchHitOf), [shape]);
   const rows: SearchHit[] = useMemo(() => {
     const t0 = perf.on ? performance.now() : 0;
-    const out = (textOf(query) && textHits ? textHits : ordered).filter(listedBy(entities, query, textIds));
+    const out = searchRows(ordered, textHits, textOf(query), listedBy(entities, query, textIds));
     if (perf.on) perf.time('rows', performance.now() - t0);
     return out;
   }, [shape, ordered, query, textHits, textIds]);
+  /** the search results: the same predicate over the pending query (the applied one plus what is typed), ranked by the typed text */
+  const searchResults: SearchHit[] = useMemo(
+    () => (searching ? searchRows(ordered, searchHits, typed, listedBy(entities, pendingQuery(query, input), searchIds)) : []),
+    [searching, shape, ordered, query, input, typed, searchHits, searchIds],
+  );
 
   /**
    * The sort of the lists, inside each group. Distance is from the centre of the frame at the time the sort, the frame or the
@@ -220,8 +216,10 @@ export function EntityBrowser() {
       }),
     };
   }, [sort, frame, shape, graphTick]);
-  /** the rows in the chosen order, sorted once per change of the rows, the sort or the frame (LIST draws them, the tree groups them in this order) */
+  /** the rows in the chosen order, sorted once per change of the rows, the sort or the frame (the tree groups them in this order) */
   const listRows = useMemo(() => (sorters.item ? [...rows].sort(sorters.item) : rows), [rows, sorters]);
+  /** the search results in the chosen order */
+  const searchList = useMemo(() => (sorters.item ? [...searchResults].sort(sorters.item) : searchResults), [searchResults, sorters]);
 
   // the tree: the same filtered, ordered rows, nested under their primary body and flattened to the rows that are open
   const pick = (id: string) => {
@@ -253,7 +251,7 @@ export function EntityBrowser() {
   }, [sort, frame, shape, treeBodies]);
 
   const treeRows = useMemo(() => {
-    if (mode !== 'tree') return [];
+    if (searching) return []; // the search list is showing
     const bodies = treeBodies;
     const recOf = (r: { id: string }) => entities.get(r.id);
     const frameRec = entities.get(frame);
@@ -266,7 +264,7 @@ export function EntityBrowser() {
     });
     if (perf.on) perf.time('tree', performance.now() - t0);
     return built;
-  }, [mode, listRows, shape, frame, filtering, overrides, treeBodies, sorters]);
+  }, [searching, listRows, shape, frame, filtering, overrides, treeBodies, sorters]);
 
   /** the rows pinned at the top of the tree while a row is the first in view: its ancestors (the body chain and the kind group) */
   const stickyOf = useCallback((first: number) => stickyAncestors(treeRows, first), [treeRows]);
@@ -278,97 +276,114 @@ export function EntityBrowser() {
     if (entityId) pick(entityId);
   };
 
-  useEffect(() => {
-    const own = ownSelect.current === selectedId;
-    ownSelect.current = null;
-    const rec = selectedId && !own ? entities.get(selectedId) : undefined;
-    // a search that leaves the entity out is never cleared: then there is nothing to reveal and the list stays as it is
+  /** open the path to the entity's row in the tree and scroll to it (nothing when the applied filter leaves it out) */
+  const revealEntity = (id: string | null) => {
+    const rec = id ? entities.get(id) : undefined;
+    // a filter that leaves the entity out is never cleared: then there is nothing to reveal and the tree stays as it is
     if (!rec || !rows.some((r) => r.id === rec.id)) {
       setRevealId(null);
       return;
     }
-    if (mode === 'tree') {
-      const keys = revealKeys({ ...rec, kind: typeOf(rec) }, { bodies: treeBodies, bodyOf: (r) => listedParent(r as EntityRecord), bodyGroups: BODY_GROUPS_OPT });
-      setOverrides((o) => (keys.every((k) => o.get(k) === true) ? o : new Map([...o, ...keys.map((k): [string, boolean] => [k, true])])));
-    }
+    const keys = revealKeys({ ...rec, kind: typeOf(rec) }, { bodies: treeBodies, bodyOf: (r) => listedParent(r as EntityRecord), bodyGroups: BODY_GROUPS_OPT });
+    setOverrides((o) => (keys.every((k) => o.get(k) === true) ? o : new Map([...o, ...keys.map((k): [string, boolean] => [k, true])])));
     setRevealId(rec.id);
+  };
+  useEffect(() => {
+    const own = ownSelect.current === selectedId;
+    ownSelect.current = null;
+    revealEntity(selectedId && !own ? selectedId : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only a change of the selection reveals
   }, [selectedId]);
 
   useEffect(() => {
     if (revealId === null) return;
-    const i = mode === 'tree' ? revealRowIndex(treeRows, revealId) : listRows.findIndex((r) => r.id === revealId);
-    if (i < 0) return; // the expansion has not reached the list yet
+    const i = revealRowIndex(treeRows, revealId);
+    if (i < 0) return; // the expansion has not reached the tree yet (or the search list is showing)
     listRef.current?.reveal(i);
     setRevealId(null);
-  }, [revealId, mode, treeRows, listRows]);
+  }, [revealId, treeRows]);
   useEffect(() => setRevealId(null), [filterKey]);
   // collapsing a node (a pinned header too) shrinks the list under the scroll position: keep the node's own row in view
   useEffect(() => {
     const key = collapsedKey.current;
-    if (key === null || mode !== 'tree') return;
+    if (key === null || searching) return;
     collapsedKey.current = null;
     const i = treeRows.findIndex((r) => r.key === key);
     if (i >= 0) listRef.current?.reveal(i);
-  }, [treeRows, mode]);
+  }, [treeRows, searching]);
 
   // ---------------------------------------------------------------- the search field: chips (terms), text, autocomplete
 
-  const chips = useMemo(() => tagTerms(query), [query]);
-  /** finished tag words become terms; a launch fits the camera to its members. A typed word takes over a term that is hidden. */
-  const addChips = (words: string[]) => {
-    const terms = words.map((w) => termFromWord(w)).filter((t): t is Term => !!t);
-    if (!terms.length) return;
-    addTerms(terms, true);
-    for (const t of terms) if (t.key === 'launch' && !t.neg) {
-      const ids = launchMembers(launchGroups, t.value);
-      if (ids.length) runtime.onFitRequest?.(ids);
-    }
-  };
+  /** the applied filter: the tag terms and the text, one chip each (the field itself holds the search being typed) */
+  const chips = useMemo(() => [...tagTerms(query), ...query.terms.filter((t) => t.key === 'text')], [query]);
   const onInput = (v: string) => {
     setDismissed(false);
     setSel(0);
-    const done = splitCommitted(v);
-    if (done.chips.length) {
-      addChips(done.chips);
-      setInput(done.rest);
-    } else setInput(v);
+    setInput(v);
   };
+  /** an accepted suggestion becomes a finished tag word in the field (part of the search until Filter applies it) */
   const accept = (s: TagSuggestion) => {
     if (!active) return;
     const { chip, rest } = acceptTag(input, active, s.value);
-    addChips([chip]);
-    setInput(rest);
+    setInput(`${rest ? `${rest} ` : ''}${chip} `);
     setDismissed(false);
     setSel(0);
     inputRef.current?.focus();
+  };
+  /** the search is over: the field is empty and the list gives way to the tree */
+  const endSearch = () => {
+    setInput('');
+    setSearchText('');
+  };
+  /** FILTER: what is typed becomes the applied query (the tree and the scene filter by it, the chips show it); a launch fits the camera to its members */
+  const applyFilter = () => {
+    if (!searching) return;
+    setQuery(pendingQuery(useStore.getState().query, input));
+    for (const t of searchTagTerms(input)) if (t.key === 'launch' && !t.neg) {
+      const ids = launchMembers(launchGroups, t.value);
+      if (ids.length) runtime.onFitRequest?.(ids);
+    }
+    endSearch();
+  };
+  /** a click or Enter on a search result: select it (the one way to select), then what afterPick() says */
+  const pickResult = (id: string) => {
+    selectObject(id);
+    if (afterPick().clearField) {
+      endSearch();
+      revealEntity(id); // the tree comes back with the pick's path open (also when it was selected already)
+    }
   };
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && e.nativeEvent.isComposing) return; // the Enter that confirms an IME candidate is not ours
     if (suggestOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       e.preventDefault();
       setSel((cur + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
+    } else if (searching && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      const next = moveHighlight(hi, e.key, searchList.length);
+      setHi(next);
+      if (next >= 0) listRef.current?.reveal(next);
     } else if (suggestOpen && (e.key === 'Enter' || e.key === 'Tab')) {
       e.preventDefault();
       accept(suggestions[cur]);
     } else if (e.key === 'Escape' && suggestOpen) {
       e.preventDefault();
       setDismissed(true);
-    } else if (e.key === 'Enter') {
-      // finish a complete tag word that has no space after it yet
-      const done = splitCommitted(`${input} `);
-      if (done.chips.length) {
-        addChips(done.chips);
-        setInput(done.rest.trim());
-      }
-      // jump to the best match of the text, like a click on the first row. The text is set now (not after the typing pause) so
-      // the ranking is for what is typed; a server-ranked catalogue (store.ts askServer) answers a moment later, so a very quick
-      // Enter there still sees the previous ranking
-      const text = parseQuery(done.rest).text;
-      setText(text);
+    } else if (e.key === 'Escape' && input !== '') {
+      // Esc clears the search first: it must not also deselect and reset the view (App.tsx), the next Esc does
+      e.preventDefault();
+      e.stopPropagation();
+      endSearch();
+    } else if (e.key === 'Enter' && searching) {
+      // select the highlighted result, else the first. The text is looked up now (not after the typing pause) so the ranking is
+      // for what is typed; a server-ranked catalogue (store.ts askServer) answers a moment later, so a very quick Enter there
+      // still sees the previous ranking
+      e.preventDefault();
+      setSearchText(typed);
       const s = useStore.getState();
-      const id = jumpTarget(text, s.textHits, listedBy(s.entities, s.query, s.textIds));
-      if (id) pick(id);
+      const fresh = searchRows(ordered, s.searchHits, typed, listedBy(s.entities, pendingQuery(s.query, input), s.searchIds));
+      const id = pickedResult(sorters.item ? [...fresh].sort(sorters.item) : fresh, hi);
+      if (id) pickResult(id);
     } else if (e.key === 'Backspace' && backspaceRemovesChip(input, e.currentTarget.selectionStart, e.currentTarget.selectionEnd, chips.length)) {
       // nothing in front of the caret to delete: the chip before the field goes (the typed text stays)
       e.preventDefault();
@@ -376,10 +391,9 @@ export function EntityBrowser() {
       removeTerm(last.key, last.value, !!last.neg);
     }
   };
-  /** CLEAR: the chips, the text and the typed input; the hidden groups stay (SHOW ALL) */
+  /** CLEAR: the applied chips and text and the typed search; the hidden groups stay (SHOW ALL) */
   const clearAll = () => {
-    setInput('');
-    lastInput.current = '';
+    endSearch();
     clearQuery();
   };
 
@@ -388,14 +402,14 @@ export function EntityBrowser() {
 
   // ---------------------------------------------------------------- rows
 
-  const entityRow = (id: string, name: string, kind: string, depth: number, key: string) => {
+  const entityRow = (id: string, name: string, kind: string, depth: number, key: string, searchRow = false, highlighted = false) => {
     const rec = entities.get(id);
     const isFrame = frame === id && !isEarthCentre(id);
-    const cls = `row${id === selectedId ? ' sel' : ''}`;
+    const cls = `row${id === selectedId ? ' sel' : ''}${highlighted ? ' hi' : ''}`;
     return (
       <button
-        key={key} className={cls} style={{ height: ROW_H, paddingLeft: mode === 'tree' ? 10 + depth * INDENT_PX : undefined }}
-        onClick={() => pick(id)}>
+        key={key} className={cls} style={{ height: ROW_H, paddingLeft: searchRow ? undefined : 10 + depth * INDENT_PX }}
+        onClick={() => (searchRow ? pickResult(id) : pick(id))}>
         <i className="swatch" style={{ background: `var(--c-${rec ? colorKeyOf(rec) : 'satellites'}, var(--c-satellites))` }} />
         <span className="row-name">{name}</span>
         {isFrame && <span className="row-frame" title="The frame of reference is centred on this object">Frame</span>}
@@ -457,11 +471,12 @@ export function EntityBrowser() {
   const chipView = (t: Term) => {
     const w = termWord(t);
     const hide = t.effect === 'hide';
+    const text = t.key === 'text';
     const cls = `tagchip${t.neg ? ' neg' : ''}${hide ? ' hide' : ''}`;
     return (
-      <span key={w} className={cls} title={hide ? `Hidden: ${w} is not drawn nor listed` : t.neg ? `Leaves out ${w.slice(1)}` : `Only ${w}`}>
-        <span className="tagchip-text">{w}</span>
-        {!t.neg && (
+      <span key={w} className={cls} title={text ? `Only names matching "${w}"` : hide ? `Hidden: ${w} is not drawn nor listed` : t.neg ? `Leaves out ${w.slice(1)}` : `Only ${w}`}>
+        <span className="tagchip-text">{text ? `"${w}"` : w}</span>
+        {!t.neg && !text && (
           <button
             className="tagchip-btn" aria-pressed={hide} aria-label={`${hide ? 'Show only' : 'Hide'} ${w}`}
             title={hide ? 'Show only these objects instead' : 'Hide these objects (not drawn, not listed) instead of showing only them'}
@@ -469,7 +484,7 @@ export function EntityBrowser() {
             <Eye off={hide} />
           </button>
         )}
-        <button className="tagchip-btn" aria-label={`Remove ${w}`} title="Remove this tag" onClick={() => removeTerm(t.key, t.value, !!t.neg)}>×</button>
+        <button className="tagchip-btn" aria-label={`Remove ${w}`} title={text ? 'Remove this text filter' : 'Remove this tag'} onClick={() => removeTerm(t.key, t.value, !!t.neg)}>×</button>
       </span>
     );
   };
@@ -478,16 +493,12 @@ export function EntityBrowser() {
     <aside className="panel left" ref={panelRef}>
       <div className="panel-head">
         <span>Objects</span>
-        <span className="seg" role="group" aria-label="Entity view">
-          <button className={mode === 'tree' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'tree'} onClick={() => setMode('tree')} title="Group objects under the body they orbit (Sun, Earth, Moon, Mars)">Tree</button>
-          <button className={mode === 'list' ? 'seg-btn on' : 'seg-btn'} aria-pressed={mode === 'list'} onClick={() => setMode('list')} title="One flat list">List</button>
-        </span>
         <select
           className="sort-select" value={sort} aria-label="Sort the list within each group" title="Sort the list within each group"
           onChange={(e) => setSort(parseSortMode(e.target.value))}>
           {SORT_MODES.map((m) => <option key={m.id} value={m.id} title={m.hint}>{m.id === 'default' ? 'Sort' : m.label}</option>)}
         </select>
-        <span className="mono dim">{rows.length.toLocaleString('en-US')}{query.terms.length ? '' : ` / ${entities.size.toLocaleString('en-US')}`}</span>
+        <span className="mono dim">{(searching ? searchResults : rows).length.toLocaleString('en-US')}{query.terms.length || searching ? '' : ` / ${entities.size.toLocaleString('en-US')}`}</span>
       </div>
       <div className="search">
         <div className="search-box" onClick={() => inputRef.current?.focus()}>
@@ -495,7 +506,7 @@ export function EntityBrowser() {
           <input
             ref={inputRef} type="text" role="combobox" aria-expanded={suggestOpen} aria-controls="tag-suggest" aria-autocomplete="list"
             aria-activedescendant={suggestOpen ? `tag-opt-${cur}` : undefined}
-            placeholder={chips.length ? '' : 'Name or #tag, e.g. type:probe'}
+            placeholder={chips.length ? '' : 'Search by name or #tag, e.g. type:probe'}
             value={input} onChange={(e) => onInput(e.target.value)} onKeyDown={onKeyDown}
             onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
             spellCheck={false} autoComplete="off" aria-label="Search entities by name or tag"
@@ -504,6 +515,11 @@ export function EntityBrowser() {
             className={help ? 'search-help on' : 'search-help'} aria-pressed={help} aria-label="Tag help" title="How to search with tags"
             onMouseDown={(e) => e.preventDefault()} onClick={() => setHelp((h) => !h)}>
             ?
+          </button>
+          <button
+            className="search-filter" disabled={!searching} onMouseDown={(e) => e.preventDefault()} onClick={applyFilter}
+            title="Apply what is typed as a filter: the tree and the scene show only the matches">
+            Filter
           </button>
         </div>
         {suggestOpen && (
@@ -521,13 +537,13 @@ export function EntityBrowser() {
         )}
         {help && (
           <div className="search-helptext">
-            <div>Type words to search by name, or tags to pick a group. A tag is kept as a chip once you press space, Enter or Tab. Different keys combine; the same key twice means either.</div>
+            <div>Type words to search by name, or tags to pick a group: the matches are listed and nothing else changes. Click a result, or press Up/Down and Enter, to select it; Enter alone takes the first. Filter (or a category chip) applies the search as a filter: the tree and the scene show only the matches, as chips you can remove. Esc clears the search. Different keys combine; the same key twice means either.</div>
             <dl>
               {HELP_TAGS.map(([t, d]) => (
                 <div key={t}><dt className="mono">{t}</dt><dd>{d}</dd></div>
               ))}
             </dl>
-            <div>Type <span className="mono">group:</span>, <span className="mono">#</span> or <span className="mono">launch:</span> to list the groups or launches. The eye on a category, a tag chip or a tree header hides it: not drawn, not listed. The search and the tags also thin the scene; highlight dims instead.</div>
+            <div>Type <span className="mono">group:</span>, <span className="mono">#</span> or <span className="mono">launch:</span> to list the groups or launches. The eye on a category, a tag chip or a tree header hides it: not drawn, not listed. A filter also thins the scene; highlight dims instead.</div>
           </div>
         )}
       </div>
@@ -561,23 +577,22 @@ export function EntityBrowser() {
           {(filtering || input !== '') && <button className="chip clear" onClick={clearAll} title="Clear the search: the chips and the typed text (hidden groups stay)">Clear</button>}
         </div>
       </div>
-      {rows.length === 0 ? (
-        <div className="empty">No matching entities.</div>
-      ) : (
-        mode === 'tree' ? (
-          <VirtualList key="tree" ref={listRef} count={treeRows.length} rowHeight={ROW_H} render={renderTree} sticky={stickyOf} />
+      {searching ? (
+        searchList.length === 0 ? (
+          <div className="empty">No matches.</div>
         ) : (
           <VirtualList
-            key="list"
-            ref={listRef}
-            count={listRows.length}
-            rowHeight={ROW_H}
+            key="search" ref={listRef} count={searchList.length} rowHeight={ROW_H}
             render={(i) => {
-              const r = listRows[i];
-              return entityRow(r.id, r.name, r.kind, 0, r.id);
+              const r = searchList[i];
+              return entityRow(r.id, r.name, r.kind, 0, r.id, true, i === hi);
             }}
           />
         )
+      ) : rows.length === 0 ? (
+        <div className="empty">No matching entities.</div>
+      ) : (
+        <VirtualList key="tree" ref={listRef} count={treeRows.length} rowHeight={ROW_H} render={renderTree} sticky={stickyOf} />
       )}
     </aside>
   );

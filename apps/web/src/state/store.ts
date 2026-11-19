@@ -69,6 +69,10 @@ interface State {
   textHits: SearchHit[] | null;
   /** the ids of `textHits`: the `ctx.text` of `classify` */
   textIds: ReadonlySet<string> | null;
+  /** the text being typed in the search field (a search, not yet a filter), and what it matches: as `textHits` / `textIds` */
+  searchText: string;
+  searchHits: SearchHit[] | null;
+  searchIds: ReadonlySet<string> | null;
   launches: Launch[];
   news: Article[];
   dsn: DsnSnapshot | null;
@@ -144,6 +148,8 @@ interface State {
   addTerms(terms: readonly Term[], override?: boolean): void;
   /** The typed text of the search field (the text term; '' removes it). */
   setText(text: string): void;
+  /** The text of the search being typed; it filters nothing, it only has its matches looked up for the search list. */
+  setSearchText(text: string): void;
   /** CLEAR: no only term and no text; the hide terms stay unless `hidden` (SHOW ALL clears those alone). */
   clearQuery(hidden?: boolean): void;
   /** SHOW ALL: no hide term left. */
@@ -204,7 +210,15 @@ function saveHighlight(on: boolean): void {
 }
 
 type TextState = Pick<State, 'textHits' | 'textIds'>;
+type SearchState = Pick<State, 'searchHits' | 'searchIds'>;
 const NO_TEXT: TextState = { textHits: null, textIds: null };
+const NO_SEARCH: SearchState = { searchHits: null, searchIds: null };
+/** the two looked-up texts: the applied query's (filters the scene) and the one being typed (only the search list) */
+type Channel = 'text' | 'search';
+const asSearch = (t: TextState): SearchState => ({ searchHits: t.textHits, searchIds: t.textIds });
+const place = (ch: Channel, t: TextState): TextState | SearchState => (ch === 'text' ? t : asSearch(t));
+const currentOf = (ch: Channel, s: State): TextState => (ch === 'text' ? s : { textHits: s.searchHits, textIds: s.searchIds });
+const textOfChannel = (ch: Channel, s: State): string => (ch === 'text' ? textOf(s.query) : s.searchText);
 /** What a typed text matches while the server has not answered yet: nothing (the previous answer is kept when there is one). */
 const EMPTY_TEXT: TextState = { textHits: [], textIds: new Set() };
 
@@ -215,11 +229,12 @@ const EMPTY_TEXT: TextState = { textHits: [], textIds: new Set() };
  */
 let textMatcher: MatchFn | null = null;
 export const setTextMatcher = (fn: MatchFn | null): void => { textMatcher = fn; cancelRemoteText(); };
-let remoteSeq = 0;
-let remoteTimer: ReturnType<typeof setTimeout> | undefined;
-function cancelRemoteText(): void {
-  remoteSeq++;
-  clearTimeout(remoteTimer);
+const remote: Record<Channel, { seq: number; timer?: ReturnType<typeof setTimeout> }> = { text: { seq: 0 }, search: { seq: 0 } };
+function cancelRemoteText(ch?: Channel): void {
+  for (const c of ch ? [ch] : (['text', 'search'] as const)) {
+    remote[c].seq++;
+    clearTimeout(remote[c].timer);
+  }
 }
 
 /** Every entity the text matches, best first, ranked here over the whole catalogue (small catalogues, no server, a failed or truncated answer). */
@@ -232,15 +247,15 @@ function localText(text: string, entities: ReadonlyMap<string, EntityRecord>): T
 }
 
 /** Ask the server for `text` (after a short pause for typing); the answer replaces the text state if it is still the current one. */
-function askServer(text: string, match: MatchFn): void {
-  cancelRemoteText();
-  const mine = remoteSeq;
-  remoteTimer = setTimeout(() => {
+function askServer(text: string, match: MatchFn, ch: Channel): void {
+  cancelRemoteText(ch);
+  const mine = remote[ch].seq;
+  remote[ch].timer = setTimeout(() => {
     const done = (build: (entities: ReadonlyMap<string, EntityRecord>) => TextState) => {
-      if (mine !== remoteSeq) return; // a newer query, or the text was cleared
+      if (mine !== remote[ch].seq) return; // a newer query, or the text was cleared
       const s = useStore.getState();
-      if (textOf(s.query) !== text) return;
-      useStore.setState(build(s.entities));
+      if (textOfChannel(ch, s) !== text) return;
+      useStore.setState(place(ch, build(s.entities)));
     };
     match(text).then(
       (a) => done((entities) => {
@@ -258,17 +273,17 @@ function askServer(text: string, match: MatchFn): void {
 }
 
 /** The text term looked up once, here, not per frame: every entity the text matches, best first. `current` is kept while a server answer is awaited. */
-function lookUpText(text: string, entities: ReadonlyMap<string, EntityRecord>, current: TextState = NO_TEXT): TextState {
+function lookUpText(text: string, entities: ReadonlyMap<string, EntityRecord>, current: TextState = NO_TEXT, ch: Channel = 'text'): TextState {
   if (!text) {
-    cancelRemoteText();
+    cancelRemoteText(ch);
     return NO_TEXT;
   }
   if (textMatcher && entities.size >= SERVER_SEARCH_MIN) {
-    askServer(text, textMatcher);
+    askServer(text, textMatcher, ch);
     // only the two text fields: `current` may be the whole store state, which must not be spread into a patch
     return current.textIds ? { textHits: current.textHits, textIds: current.textIds } : EMPTY_TEXT;
   }
-  cancelRemoteText();
+  cancelRemoteText(ch);
   return localText(text, entities);
 }
 /** the remembered frame is restored once, when the first full catalog arrives */
@@ -301,6 +316,8 @@ export const useStore = create<State>((set, get) => ({
   query: loadQuery(),
   highlight: loadHighlight(),
   ...NO_TEXT,
+  searchText: '',
+  ...NO_SEARCH,
   launches: [],
   news: [],
   dsn: null,
@@ -346,6 +363,8 @@ export const useStore = create<State>((set, get) => ({
     // the text term follows the catalog (the ids it matches), but only when the catalog changed in size or was replaced
     const text = textOf(get().query);
     if (text && (replace || next.size !== prevSize)) Object.assign(patch, lookUpText(text, next, get()));
+    const search = get().searchText;
+    if (search && (replace || next.size !== prevSize)) Object.assign(patch, asSearch(lookUpText(search, next, currentOf('search', get()), 'search')));
     set(patch);
     if (perf.on) {
       perf.time('ingest', performance.now() - t0);
@@ -426,6 +445,7 @@ export const useStore = create<State>((set, get) => ({
   removeTerm: (key, value, neg = false) => get().setQuery(removeTerm(get().query, key, value, neg)),
   addTerms: (terms, override = false) => get().setQuery(addTerms(get().query, terms, override)),
   setText: (text) => get().setQuery(withText(get().query, text)),
+  setSearchText: (text) => set((s) => (s.searchText === text ? s : { searchText: text, ...asSearch(lookUpText(text, s.entities, currentOf('search', s), 'search')) })),
   clearQuery: (hidden = false) => get().setQuery(hidden ? NO_QUERY : withoutFilter(get().query)),
   showAll: () => get().setQuery(withoutHidden(get().query)),
   setHighlight: (highlight) => set((s) => (s.highlight === highlight ? s : { highlight })),

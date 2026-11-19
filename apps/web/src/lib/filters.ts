@@ -21,15 +21,6 @@ export function rankEntities(records: Iterable<EntityRecord>, q: string, limit =
   return rankMatches(records, q, limit).map(({ rec }) => searchHitOf(rec));
 }
 
-/**
- * The entity Enter in the search box jumps to: the first hit of the text's ranking (the order the list shows) that the query
- * lists. Blank text, or nothing listed, jumps nowhere.
- */
-export function jumpTarget(text: string, hits: readonly SearchHit[] | null, listed: (hit: SearchHit) => boolean): string | undefined {
-  if (!text.trim() || !hits) return undefined;
-  return hits.find(listed)?.id;
-}
-
 /** Facet counts for the filter chips, most common first. */
 export function facetCounts(records: Iterable<Pick<EntityRecord, 'kind' | 'group'> & Partial<Pick<EntityRecord, 'bodyId' | 'provider'>>>): {
   kinds: [string, number][];
