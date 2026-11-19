@@ -716,6 +716,10 @@ video.stream-frame { background: #000; object-fit: contain; }
 .search-box input:focus { border: 0; }
 .search-help { flex: none; width: 17px; height: 17px; padding: 0; border: 1px solid var(--line-2); border-radius: 50%; background: transparent; color: var(--dim); font: 10px var(--mono); line-height: 1; }
 .search-help:hover, .search-help.on { color: var(--accent); border-color: var(--accent); }
+.search-filter { flex: none; padding: 1px 8px; border: 1px solid var(--accent); border-radius: var(--r-pill); background: transparent; color: var(--accent); font-size: 11px; font-stretch: var(--narrow); }
+.search-filter:hover:not(:disabled) { background: var(--on-bg); color: var(--on-fg); border-color: var(--on-bg); }
+.search-filter:disabled { border-color: var(--rule-2); color: var(--ink-3); cursor: default; }
+.row.hi { background: var(--lit); box-shadow: inset 2px 0 0 var(--accent); }
 .tagchip {
   display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 0 2px 0 6px; border: 1px solid var(--accent);
   border-radius: var(--r-pill-s); background: rgba(var(--ink-rgb), 0.1); color: var(--accent); font: 10.5px var(--mono);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EntityRecord } from '@eio/core';
-import { browseOrder, facetCounts, jumpTarget, matchScore, rankEntities } from '../src/lib/filters';
+import { browseOrder, facetCounts, matchScore, rankEntities } from '../src/lib/filters';
 import { colorKeyOf } from '../src/lib/entity';
 
 const rec = (id: string, name: string, kind: string, group?: string, aliases: Record<string, string> = {}): EntityRecord => ({
@@ -67,23 +67,3 @@ describe('colour keys', () => {
   });
 });
 
-describe('search jump (Enter)', () => {
-  const hits = rankEntities(CATALOG, 'starlink', Infinity);
-
-  it('picks the first hit of the ranking', () => {
-    expect(hits.length).toBe(2);
-    expect(jumpTarget('starlink', hits, () => true)).toBe(hits[0].id);
-  });
-
-  it('skips hits the query does not list', () => {
-    expect(jumpTarget('starlink', hits, (h) => h.id !== hits[0].id)).toBe(hits[1].id);
-  });
-
-  it('does nothing for blank text, no hits, or nothing listed', () => {
-    expect(jumpTarget('', hits, () => true)).toBeUndefined();
-    expect(jumpTarget('  ', hits, () => true)).toBeUndefined();
-    expect(jumpTarget('starlink', null, () => true)).toBeUndefined();
-    expect(jumpTarget('nope', rankEntities(CATALOG, 'nope', Infinity), () => true)).toBeUndefined();
-    expect(jumpTarget('starlink', hits, () => false)).toBeUndefined();
-  });
-});

@@ -146,3 +146,101 @@ describe('HIGHLIGHT', () => {
     expect(storage.data.get('eio.highlight')).toBe('off');
   });
 });
+
+describe('the search text (typed, not applied)', () => {
+  it('is looked up on its own and filters nothing', async () => {
+    const store = await freshStore(mem());
+    const s = store.getState;
+    store.setState({ entities: new Map(CATALOG.map((r) => [r.id, r])) });
+    s().setSearchText('starlink');
+    expect(s().searchHits?.map((h) => h.id)).toEqual(['sat-2', 'sat-3']);
+    expect([...s().searchIds!]).toEqual(['sat-2', 'sat-3']);
+    expect(s().query.terms).toEqual([]);
+    expect(s().textHits).toBeNull();
+    s().setText('iss'); // the applied text has its own lookup
+    expect(s().textHits?.map((h) => h.id)).toEqual(['sat-1']);
+    expect(s().searchHits?.length).toBe(2);
+    s().setSearchText('');
+    expect(s().searchHits).toBeNull();
+    expect(s().textHits?.length).toBe(1);
+  });
+});
+
+describe('the search text on the server-ranked path', () => {
+  type Answer = { ids: string[]; total: number; truncated: boolean };
+  const big = (): Map<string, EntityRecord> => new Map(Array.from({ length: 20_000 }, (_, i) => [`e${i}`, rec(`e${i}`, `OBJ ${i}`, 'satellite', 'g')] as const));
+  const deferred = () => {
+    let resolve!: (v: Answer) => void;
+    const promise = new Promise<Answer>((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+  const answer = (...ids: string[]): Answer => ({ ids, total: ids.length, truncated: false });
+  async function setup() {
+    install(mem());
+    vi.resetModules();
+    const m = await import('../src/state/store');
+    m.useStore.setState({ entities: big() });
+    const asked: Record<string, ReturnType<typeof deferred>> = {};
+    m.setTextMatcher((text) => (asked[text] = deferred()).promise);
+    return { s: m.useStore.getState, asked };
+  }
+
+  it('shows no hits while the answer is awaited, then those of the text', async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, asked } = await setup();
+      s().setSearchText('obj 1');
+      expect(s().searchHits).toBeNull();
+      vi.advanceTimersByTime(200);
+      asked['obj 1'].resolve(answer('e1', 'e10'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s().searchHits?.map((h) => h.id)).toEqual(['e1', 'e10']);
+      s().setSearchText('obj 2'); // the old hits are not kept for the new text
+      expect(s().searchHits).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('an answer for a changed text is ignored', async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, asked } = await setup();
+      s().setSearchText('aa');
+      vi.advanceTimersByTime(200);
+      s().setSearchText('bb');
+      vi.advanceTimersByTime(200);
+      asked['aa'].resolve(answer('e1'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s().searchHits).toBeNull();
+      asked['bb'].resolve(answer('e2'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s().searchHits?.map((h) => h.id)).toEqual(['e2']);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a cleared field cancels the pending answer', async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, asked } = await setup();
+      s().setSearchText('aa');
+      vi.advanceTimersByTime(200);
+      s().setSearchText('');
+      asked['aa'].resolve(answer('e1'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(s().searchHits).toBeNull();
+      expect(s().searchIds).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('Filter seeds the applied lookup with the search hits of the same text', async () => {
+    vi.useFakeTimers();
+    try {
+      const { s, asked } = await setup();
+      s().setSearchText('aa');
+      vi.advanceTimersByTime(200);
+      asked['aa'].resolve(answer('e1'));
+      await vi.advanceTimersByTimeAsync(0);
+      s().applySearchQuery({ terms: [{ key: 'text', value: 'aa', effect: 'only' }] });
+      expect([...s().textIds!]).toEqual(['e1']); // the scene is not empty while the applied lookup is asked again
+    } finally { vi.useRealTimers(); }
+  });
+});
