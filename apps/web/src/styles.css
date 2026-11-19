@@ -286,7 +286,7 @@ button.chip:hover { border-color: var(--ink-3); color: var(--ink); }
 .brand-icon { display: inline-flex; }
 .brand-icon .dev-hit { cursor: pointer; outline: none; }
 .brand-icon .dev-hit:focus-visible circle:first-child { stroke: currentColor; stroke-width: 0.9; }
-.brand-icon .popover { left: 0; right: auto; width: 300px; }
+.brand-icon .popover { left: 0; right: auto; width: max-content; min-width: 300px; max-width: min(460px, calc(100vw - 12px)); white-space: normal; }
 .dev-input { grid-area: switch; width: 72px; background: var(--hull); border: 1px solid var(--rule-2); border-radius: var(--r-2); color: var(--ink); font-family: var(--mono); font-size: 11.5px; padding: 3px 5px; }
 .menu-note { padding: 6px 0 2px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-3); line-height: 1.35; }
 .menu-row:hover .menu-name { text-decoration: underline; text-decoration-color: var(--rule-2); text-underline-offset: 2px; }
@@ -684,7 +684,7 @@ video.stream-frame { background: #000; object-fit: contain; }
 .frame-hint { color: var(--warn); font-size: 11.5px; }
 .panel-head .seg { margin-left: auto; flex: none; }
 .panel-head .seg + .mono { margin-left: 8px; }
-.panel-head .sort-select { flex: none; margin-left: 8px; max-width: 76px; background: transparent; color: var(--ink-2); border: 1px solid var(--rule-2); border-radius: var(--r-1); padding: 1px 2px; font-size: 11.5px; font-weight: 500; }
+.panel-head .sort-select { flex: none; margin-left: 8px; max-width: 76px; font-size: 11.5px; }
 .panel-head .sort-select + .mono { margin-left: 8px; }
 .row.tree-body, .row.tree-group { cursor: default; }
 .row.tree-group { color: var(--ink-2); cursor: pointer; }
@@ -833,7 +833,11 @@ video.stream-frame { background: #000; object-fit: contain; }
   position: absolute; left: 10px; top: 10px; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: calc(100% - 150px); /* where the Back button and the frame bar are: on a narrow scene the bar wraps instead of running under them */
   padding: 3px 6px; background: rgba(0, 0, 0, 0.62); font-size: 10.5px; font-stretch: var(--narrow); color: var(--ink-2);
 }
-.sky-select { max-width: min(60vw, 100%); min-width: 0; flex: 0 1 auto; font-size: 10.5px; background: var(--hull-2); color: var(--ink); border: 1px solid var(--rule-2); }
+/* the one select style (sky survey picker, entity list sort): app font, dark control, hover like other controls, dark option list */
+.sky-select, .sort-select { font: inherit; color: var(--ink); background: var(--hull-2); border: 1px solid var(--rule-2); border-radius: var(--r-1); padding: 1px 2px; cursor: pointer; color-scheme: dark; }
+.sky-select:hover, .sort-select:hover { border-color: var(--ink-3); }
+.sky-select option, .sort-select option { background: var(--hull-2); color: var(--ink); }
+.sky-select { max-width: min(60vw, 100%); min-width: 0; flex: 0 1 auto; font-size: 10.5px; }
 .sky-credit { white-space: nowrap; }
 .sky-follow { font-size: 10.5px; padding: 1px 7px; background: var(--hull-2); color: var(--ink-2); border: 1px solid var(--rule-2); cursor: pointer; }
 .sky-follow[aria-pressed='true'] { color: var(--ink); border-color: var(--ink-2); }
