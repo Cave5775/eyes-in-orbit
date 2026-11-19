@@ -100,8 +100,12 @@ export interface BeltResult {
   h: Uint16Array;
   /** orbit index (over all the chunks, in file order) of each slot */
   index: Uint32Array;
-  /** cell number of each slot (the vertex attribute: the shader looks the cell's offset up in a texture) */
-  cell: Uint32Array;
+  /**
+   * cell number of each slot (the vertex attribute: the shader looks the cell's offset up in a texture). FLOAT32, not Uint32: three.js binds a
+   * 32-bit integer array with `vertexAttribIPointer`, and a shader that declares `attribute float` over it reads garbage (every point took cell
+   * 0's texel and was dropped: the cloud never showed). A float32 holds every cell number exactly (below 2^24).
+   */
+  cell: Float32Array;
   /** how long the pass took, ms */
   ms: number;
 }
@@ -155,7 +159,7 @@ export function propagateBelt(chunks: readonly UnpackedOrbits[], tMs: number): B
     next[c] = at;
     at += counts[c];
   }
-  const offsets = new Float32Array(n * 3), h = new Uint16Array(n), index = new Uint32Array(n), cell = new Uint32Array(n);
+  const offsets = new Float32Array(n * 3), h = new Uint16Array(n), index = new Uint32Array(n), cell = new Float32Array(n);
   k = 0;
   for (const u of chunks) {
     for (let i = 0; i < u.count; i++, k++) {

@@ -86,6 +86,25 @@ describe('the cloud layer: one draw, in-place uploads', () => {
     expect(layer.group.children[0]).toBe(before);
     layer.dispose();
   });
+
+  it('feeds every vertex attribute as a float: a 32-bit integer array is bound with vertexAttribIPointer and `attribute float` reads garbage (the cloud never drew)', async () => {
+    const { layer, worker, api } = setup();
+    layer.load(() => api);
+    await flush();
+    layer.update(frame());
+    worker.reply(await cellsFor(20, worker.runs()[0].seq));
+    const geo = (layer.group.children[0] as THREE.Points).geometry;
+    for (const name of ['position', 'aH', 'aCell']) {
+      const a = geo.getAttribute(name) as THREE.BufferAttribute;
+      expect(a.array instanceof Int32Array || a.array instanceof Uint32Array, name).toBe(false);
+      expect(a.gpuType, name).toBe(THREE.FloatType);
+    }
+    // the cell numbers are what the cell texture is indexed by, exactly
+    const cell = geo.getAttribute('aCell').array;
+    const cells = (layer as unknown as { cells: { start: number; count: number }[] }).cells;
+    for (let c = 0; c < cells.length; c++) for (let s = cells[c].start; s < cells[c].start + cells[c].count; s++) expect(cell[s]).toBe(c);
+    layer.dispose();
+  });
 });
 
 describe('load race: a chunk posted while a pass is in flight is not lost', () => {
