@@ -150,6 +150,8 @@ interface State {
   setText(text: string): void;
   /** The text of the search being typed; it filters nothing, it only has its matches looked up for the search list. */
   setSearchText(text: string): void;
+  /** Filter: apply a query built from the search. The text's hits the search already holds seed the applied lookup (the scene is not empty while a server answer is awaited). */
+  applySearchQuery(q: Query): void;
   /** CLEAR: no only term and no text; the hide terms stay unless `hidden` (SHOW ALL clears those alone). */
   clearQuery(hidden?: boolean): void;
   /** SHOW ALL: no hide term left. */
@@ -280,6 +282,8 @@ function lookUpText(text: string, entities: ReadonlyMap<string, EntityRecord>, c
   }
   if (textMatcher && entities.size >= SERVER_SEARCH_MIN) {
     askServer(text, textMatcher, ch);
+    // the search list never shows the hits of an earlier text: nothing until the answer for this one arrives
+    if (ch === 'search') return NO_TEXT;
     // only the two text fields: `current` may be the whole store state, which must not be spread into a patch
     return current.textIds ? { textHits: current.textHits, textIds: current.textIds } : EMPTY_TEXT;
   }
@@ -445,6 +449,12 @@ export const useStore = create<State>((set, get) => ({
   removeTerm: (key, value, neg = false) => get().setQuery(removeTerm(get().query, key, value, neg)),
   addTerms: (terms, override = false) => get().setQuery(addTerms(get().query, terms, override)),
   setText: (text) => get().setQuery(withText(get().query, text)),
+  applySearchQuery: (q) => {
+    const s = get();
+    const text = textOf(q);
+    if (text && text === s.searchText && s.searchIds && text !== textOf(s.query)) set({ textHits: s.searchHits, textIds: s.searchIds });
+    get().setQuery(q);
+  },
   setSearchText: (text) => set((s) => (s.searchText === text ? s : { searchText: text, ...asSearch(lookUpText(text, s.entities, currentOf('search', s), 'search')) })),
   clearQuery: (hidden = false) => get().setQuery(hidden ? NO_QUERY : withoutFilter(get().query)),
   showAll: () => get().setQuery(withoutHidden(get().query)),

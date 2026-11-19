@@ -57,5 +57,51 @@ export function moveHighlight(cur: number, key: 'ArrowDown' | 'ArrowUp', count: 
   return key === 'ArrowDown' ? Math.min(at + 1, count - 1) : Math.max(at - 1, -1);
 }
 
-/** The result Enter takes: the highlighted one, else the first (undefined when there is none). */
-export const pickedResult = <T extends { id: string }>(rows: readonly T[], highlight: number): string | undefined => (rows[highlight] ?? rows[0])?.id;
+/**
+ * The result Enter takes: the highlighted row of the list as displayed (which may be sorted), else the best-ranked match whatever
+ * the Sort setting is (undefined when there is none).
+ */
+export const pickedResult = <T extends { id: string }>(displayed: readonly T[], ranked: readonly T[], highlight: number): string | undefined =>
+  (displayed[highlight] ?? ranked[0])?.id;
+
+export interface SearchSourceInput<T> {
+  typed: string;
+  /** the text the store has looked up for the search, and its answer (null while it is awaited) */
+  storeText: string;
+  searchHits: readonly T[] | null;
+  searchIds: ReadonlySet<string> | null;
+  /** the applied query's text and its lookup */
+  appliedText: string;
+  textHits: readonly T[] | null;
+  textIds: ReadonlySet<string> | null;
+}
+
+/**
+ * What the search list ranks and matches the text by. Typed text: its own lookup, and not ready until the answer for exactly that
+ * text is in (no stale hits of an earlier text). No typed text: the applied text's lookup, because the pending query keeps the
+ * applied text term, so the list, Enter and Filter all agree.
+ */
+export function searchSource<T>(i: SearchSourceInput<T>): { hits: readonly T[] | null; ids: ReadonlySet<string> | null; text: string; ready: boolean } {
+  if (i.typed) return { hits: i.searchHits, ids: i.searchIds, text: i.typed, ready: i.storeText === i.typed && i.searchHits !== null };
+  if (i.appliedText) return { hits: i.textHits, ids: i.textIds, text: i.appliedText, ready: i.textIds !== null };
+  return { hits: null, ids: null, text: '', ready: true };
+}
+
+/** A key that belongs to an input method (a composition in progress; Safari reports keyCode 229): the search leaves it alone. */
+export const IME_KEYS: readonly string[] = ['Enter', 'ArrowUp', 'ArrowDown', 'Tab', 'Escape'];
+export const isImeKey = (key: string, isComposing: boolean, keyCode: number): boolean => IME_KEYS.includes(key) && (isComposing || keyCode === 229);
+
+export type SearchKeyAction = 'ignore' | 'suggest-move' | 'suggest-accept' | 'suggest-dismiss' | 'highlight-move' | 'clear-search' | 'pick' | 'none';
+
+/** Which thing a key does in the search field: the suggestion dropdown first, then the result list; Esc closes the dropdown before it clears the search. */
+export function searchKeyAction(k: { key: string; ime: boolean; suggestOpen: boolean; searching: boolean; input: string }): SearchKeyAction {
+  if (k.ime && IME_KEYS.includes(k.key)) return 'ignore';
+  const arrow = k.key === 'ArrowDown' || k.key === 'ArrowUp';
+  if (k.suggestOpen && arrow) return 'suggest-move';
+  if (k.searching && arrow) return 'highlight-move';
+  if (k.suggestOpen && (k.key === 'Enter' || k.key === 'Tab')) return 'suggest-accept';
+  if (k.key === 'Escape' && k.suggestOpen) return 'suggest-dismiss';
+  if (k.key === 'Escape' && k.input !== '') return 'clear-search';
+  if (k.key === 'Enter' && k.searching) return 'pick';
+  return 'none';
+}

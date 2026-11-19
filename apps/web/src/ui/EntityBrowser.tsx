@@ -7,7 +7,10 @@ import { bodyGroupLabel, bodyGroupOrder, registryBodyKinds } from '../lib/body-g
 import { listComparator, loadSortMode, saveSortMode, SORT_MODES, parseSortMode, type SortInfo, type SortMode } from '../lib/list-sort';
 import { colorKeyOf, kindLabel } from '../lib/entity';
 import { browseOrder, facetCounts, searchHitOf, type SearchHit } from '../lib/filters';
-import { afterPick, isSearching, moveHighlight, pendingQuery, pickedResult, searchRows, searchTagTerms, searchTextOf } from '../lib/search-pending';
+import {
+  afterPick, isImeKey, isSearching, moveHighlight, pendingQuery, pickedResult, searchKeyAction, searchRows, searchSource, searchTagTerms, searchTextOf,
+} from '../lib/search-pending';
+import { SERVER_SEARCH_MIN } from '../lib/text-match';
 import { typeOf } from '../lib/view-class';
 import { centreStateEci, graphLookup, isEarthCentre } from '../lib/frame';
 import { buildLaunchGroups, launchMembers } from '../lib/launch-group';
@@ -74,11 +77,13 @@ export function EntityBrowser() {
   const searchIds = useStore((s) => s.searchIds);
   const selectedId = useStore((s) => s.selectedId);
   const frame = useStore((s) => s.frame);
-  const { setQuery, setSearchText, removeTerm, toggleTerm, setTermEffect, clearQuery, showAll, selectObject } = useStore.getState();
+  const { applySearchQuery, setSearchText, removeTerm, toggleTerm, setTermEffect, clearQuery, showAll, selectObject } = useStore.getState();
   /** what is typed (a search: free text and tag words; nothing is applied until Filter). The applied query's terms are the chips. */
   const [input, setInput] = useState('');
   /** the highlighted search result (-1: none) */
   const [hi, setHi] = useState(-1);
+  /** an Enter given while the answer for the typed text was still awaited: it takes the first result of that text when it arrives */
+  const [enterFor, setEnterFor] = useState<string | null>(null);
   const searching = isSearching(input);
   const [sort, setSortState] = useState<SortMode>(loadSortMode);
   const setSort = (m: SortMode) => {
@@ -132,17 +137,19 @@ export function EntityBrowser() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // the typed text is looked up for the search list (never the scene). Typing is debounced; a cleared text goes at once.
+  // the typed text is looked up for the search list (never the scene). A cleared text goes at once, so does a catalogue the browser
+  // ranks itself; one the server ranks (store.ts askServer) waits for a pause in the typing.
   const typed = searchTextOf(input);
+  const remoteRanked = entities.size >= SERVER_SEARCH_MIN;
   useEffect(() => {
-    if (!typed) {
-      setSearchText('');
+    if (!typed || !remoteRanked) {
+      setSearchText(typed);
       return;
     }
     const h = setTimeout(() => setSearchText(typed), DEBOUNCE_MS);
     return () => clearTimeout(h);
-  }, [typed, setSearchText]);
-  useEffect(() => setHi(-1), [input]);
+  }, [typed, remoteRanked, setSearchText]);
+  useEffect(() => setEnterFor((e) => (e === typed ? e : null)), [typed]);
 
   const facets = useMemo(() => facetCounts(entities.values()), [shape]);
   const categories = useMemo(() => categoryCounts(entities.values()), [shape]);
@@ -179,9 +186,14 @@ export function EntityBrowser() {
     return out;
   }, [shape, ordered, query, textHits, textIds]);
   /** the search results: the same predicate over the pending query (the applied one plus what is typed), ranked by the typed text */
+  const storeSearchText = useStore((s) => s.searchText);
+  const source = searchSource<SearchHit>({ typed, storeText: storeSearchText, searchHits, searchIds, appliedText: textOf(query), textHits, textIds });
+  /** the finished tag words as one string: the search list depends on these and on the looked-up text, not on every keystroke */
+  const tagKey = searchTagTerms(input).map(termWord).join(' ');
   const searchResults: SearchHit[] = useMemo(
-    () => (searching ? searchRows(ordered, searchHits, typed, listedBy(entities, pendingQuery(query, input), searchIds)) : []),
-    [searching, shape, ordered, query, input, typed, searchHits, searchIds],
+    () => (searching && source.ready ? searchRows(ordered, source.hits as SearchHit[] | null, source.text, listedBy(entities, pendingQuery(query, `${tagKey} ${typed}`), source.ids)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `source` is read through its parts
+    [searching, source.ready, source.hits, source.ids, source.text, shape, ordered, query, tagKey, typed],
   );
 
   /**
@@ -220,6 +232,8 @@ export function EntityBrowser() {
   const listRows = useMemo(() => (sorters.item ? [...rows].sort(sorters.item) : rows), [rows, sorters]);
   /** the search results in the chosen order */
   const searchList = useMemo(() => (sorters.item ? [...searchResults].sort(sorters.item) : searchResults), [searchResults, sorters]);
+  // a highlight never moves to another entity under the cursor: a new result set (or order) starts without one
+  useEffect(() => setHi(-1), [searchList]);
 
   // the tree: the same filtered, ordered rows, nested under their primary body and flattened to the rows that are open
   const pick = (id: string) => {
@@ -338,7 +352,7 @@ export function EntityBrowser() {
   /** FILTER: what is typed becomes the applied query (the tree and the scene filter by it, the chips show it); a launch fits the camera to its members */
   const applyFilter = () => {
     if (!searching) return;
-    setQuery(pendingQuery(useStore.getState().query, input));
+    applySearchQuery(pendingQuery(useStore.getState().query, input));
     for (const t of searchTagTerms(input)) if (t.key === 'launch' && !t.neg) {
       const ids = launchMembers(launchGroups, t.value);
       if (ids.length) runtime.onFitRequest?.(ids);
@@ -350,40 +364,42 @@ export function EntityBrowser() {
     selectObject(id);
     if (afterPick().clearField) {
       endSearch();
+      setEnterFor(null);
       revealEntity(id); // the tree comes back with the pick's path open (also when it was selected already)
     }
   };
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && e.nativeEvent.isComposing) return; // the Enter that confirms an IME candidate is not ours
-    if (suggestOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    const action = searchKeyAction({ key: e.key, ime: isImeKey(e.key, e.nativeEvent.isComposing, e.nativeEvent.keyCode), suggestOpen, searching, input });
+    if (action === 'ignore') return; // a key of the input method (the Enter that confirms a candidate ...) is not ours
+    if (action === 'suggest-move') {
       e.preventDefault();
       setSel((cur + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
-    } else if (searching && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    } else if (action === 'highlight-move') {
       e.preventDefault();
-      const next = moveHighlight(hi, e.key, searchList.length);
+      const next = moveHighlight(hi, e.key as 'ArrowDown' | 'ArrowUp', searchList.length);
       setHi(next);
       if (next >= 0) listRef.current?.reveal(next);
-    } else if (suggestOpen && (e.key === 'Enter' || e.key === 'Tab')) {
+    } else if (action === 'suggest-accept') {
       e.preventDefault();
       accept(suggestions[cur]);
-    } else if (e.key === 'Escape' && suggestOpen) {
+    } else if (action === 'suggest-dismiss') {
       e.preventDefault();
       setDismissed(true);
-    } else if (e.key === 'Escape' && input !== '') {
+    } else if (action === 'clear-search') {
       // Esc clears the search first: it must not also deselect and reset the view (App.tsx), the next Esc does
       e.preventDefault();
       e.stopPropagation();
       endSearch();
-    } else if (e.key === 'Enter' && searching) {
-      // select the highlighted result, else the first. The text is looked up now (not after the typing pause) so the ranking is
-      // for what is typed; a server-ranked catalogue (store.ts askServer) answers a moment later, so a very quick Enter there
-      // still sees the previous ranking
+      setEnterFor(null);
+    } else if (action === 'pick') {
+      // select the highlighted row, else the best-ranked match (whatever the Sort says). While the answer for the typed text is
+      // still awaited (a server-ranked catalogue) the Enter waits for it: it takes that text's first result, never an older text's
       e.preventDefault();
       setSearchText(typed);
-      const s = useStore.getState();
-      const fresh = searchRows(ordered, s.searchHits, typed, listedBy(s.entities, pendingQuery(s.query, input), s.searchIds));
-      const id = pickedResult(sorters.item ? [...fresh].sort(sorters.item) : fresh, hi);
-      if (id) pickResult(id);
+      if (source.ready) {
+        const id = pickedResult(searchList, searchResults, hi);
+        if (id) pickResult(id);
+      } else setEnterFor(typed);
     } else if (e.key === 'Backspace' && backspaceRemovesChip(input, e.currentTarget.selectionStart, e.currentTarget.selectionEnd, chips.length)) {
       // nothing in front of the caret to delete: the chip before the field goes (the typed text stays)
       e.preventDefault();
@@ -391,6 +407,14 @@ export function EntityBrowser() {
       removeTerm(last.key, last.value, !!last.neg);
     }
   };
+  // the answer an Enter was waiting for has arrived
+  useEffect(() => {
+    if (enterFor === null || enterFor !== typed || !source.ready) return;
+    setEnterFor(null);
+    const id = pickedResult(searchList, searchResults, -1);
+    if (id) pickResult(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the arrival of the results matters
+  }, [enterFor, source.ready, searchResults]);
   /** CLEAR: the applied chips and text and the typed search; the hidden groups stay (SHOW ALL) */
   const clearAll = () => {
     endSearch();
@@ -537,7 +561,7 @@ export function EntityBrowser() {
         )}
         {help && (
           <div className="search-helptext">
-            <div>Type words to search by name, or tags to pick a group: the matches are listed and nothing else changes. Click a result, or press Up/Down and Enter, to select it; Enter alone takes the first. Filter (or a category chip) applies the search as a filter: the tree and the scene show only the matches, as chips you can remove. Esc clears the search. Different keys combine; the same key twice means either.</div>
+            <div>Type words to search by name, or tags to pick a group: the matches are listed and nothing else changes. Click a result, or press Up/Down and Enter, to select it; Enter alone takes the best match. Filter (or a category chip) applies the search as a filter: the tree and the scene show only the matches, as chips you can remove. Esc clears the search. Different keys combine; the same key twice means either.</div>
             <dl>
               {HELP_TAGS.map(([t, d]) => (
                 <div key={t}><dt className="mono">{t}</dt><dd>{d}</dd></div>
@@ -578,7 +602,9 @@ export function EntityBrowser() {
         </div>
       </div>
       {searching ? (
-        searchList.length === 0 ? (
+        !source.ready ? (
+          <div className="empty">Searching…</div>
+        ) : searchList.length === 0 ? (
           <div className="empty">No matches.</div>
         ) : (
           <VirtualList

@@ -3,7 +3,8 @@ import type { EntityRecord } from '@eio/core';
 import { NO_FOCUS, NO_QUERY, classify, isDrawn, termFromWord, termWord, textOf, type Query } from '../src/lib/query';
 import { rankEntities, searchHitOf } from '../src/lib/filters';
 import {
-  afterPick, isSearching, moveHighlight, pendingQuery, pickedResult, searchRows, searchTagTerms, searchTextOf, KEEP_SEARCH_AFTER_PICK,
+  afterPick, isImeKey, isSearching, moveHighlight, pendingQuery, pickedResult, searchKeyAction, searchRows, searchSource, searchTagTerms, searchTextOf,
+  KEEP_SEARCH_AFTER_PICK,
 } from '../src/lib/search-pending';
 
 const rec = (id: string, name: string, kind: string, group: string, bodyId = 'EARTH'): EntityRecord => ({ id, name, kind, group, aliases: {}, bodyId, updatedAt: 0 });
@@ -94,17 +95,78 @@ describe('keyboard highlight and the pick', () => {
     expect(moveHighlight(0, 'ArrowDown', 0)).toBe(-1);
   });
 
-  it('Enter takes the highlighted result, else the first, else nothing', () => {
-    const rows = [{ id: 'x' }, { id: 'y' }];
-    expect(pickedResult(rows, 1)).toBe('y');
-    expect(pickedResult(rows, -1)).toBe('x');
-    expect(pickedResult(rows, 9)).toBe('x');
-    expect(pickedResult([], -1)).toBeUndefined();
+  it('Enter takes the highlighted displayed row, else the best-ranked match whatever the sort', () => {
+    const ranked = [{ id: 'x' }, { id: 'y' }, { id: 'z' }];
+    const sorted = [{ id: 'z' }, { id: 'y' }, { id: 'x' }]; // displayed by a Sort setting
+    expect(pickedResult(sorted, ranked, 1)).toBe('y');
+    expect(pickedResult(sorted, ranked, 0)).toBe('z');
+    expect(pickedResult(sorted, ranked, -1)).toBe('x');
+    expect(pickedResult(sorted, ranked, 9)).toBe('x');
+    expect(pickedResult([], [], -1)).toBeUndefined();
   });
 
   it('after a pick the field is cleared (one switch to flip it)', () => {
     expect(KEEP_SEARCH_AFTER_PICK).toBe(false);
     expect(afterPick().clearField).toBe(true);
     expect(afterPick(true).clearField).toBe(false);
+  });
+});
+
+describe('what the search list reads its text from', () => {
+  const hit = (id: string) => ({ id });
+  const base = { typed: '', storeText: '', searchHits: null, searchIds: null, appliedText: '', textHits: null, textIds: null };
+
+  it('typed text uses its own lookup and is not ready until the answer for exactly that text is in', () => {
+    expect(searchSource({ ...base, typed: 'moon', storeText: 'moo', searchHits: [hit('a')], searchIds: new Set(['a']) }).ready).toBe(false); // an older text's hits
+    expect(searchSource({ ...base, typed: 'moon', storeText: 'moon' }).ready).toBe(false); // asked, not answered
+    const s = searchSource({ ...base, typed: 'moon', storeText: 'moon', searchHits: [hit('a')], searchIds: new Set(['a']) });
+    expect(s.ready).toBe(true);
+    expect(s.text).toBe('moon');
+  });
+
+  it('only tag words typed: the applied text still restricts, so list, Enter and Filter agree', () => {
+    const applied: Query = { terms: [{ key: 'text', value: 'moon', effect: 'only' }] };
+    const textIds = new Set(['d']);
+    const src = searchSource({ ...base, appliedText: 'moon', textHits: [hit('d')], textIds });
+    expect(src).toMatchObject({ text: 'moon', ready: true, ids: textIds });
+    const ordered = CATALOG.map(searchHitOf);
+    const listed = (q: Query) => (r: { id: string }) => isDrawn(classify(CATALOG.find((c) => c.id === r.id)!, q, { focus: NO_FOCUS, text: src.ids }));
+    const q = pendingQuery(applied, 'type:satellite');
+    expect(textOf(q)).toBe('moon');
+    expect(searchRows(ordered, src.hits as typeof ordered, src.text, listed(q)).map((r) => r.id)).toEqual(['d']); // not every satellite
+  });
+
+  it('nothing typed, nothing applied: no restriction', () => {
+    expect(searchSource(base)).toMatchObject({ text: '', ready: true, hits: null, ids: null });
+  });
+});
+
+describe('keys in the search field', () => {
+  const k = (key: string, o: Partial<Parameters<typeof searchKeyAction>[0]> = {}) => searchKeyAction({ key, ime: false, suggestOpen: false, searching: false, input: '', ...o });
+
+  it('the dropdown wins: arrows and Enter/Tab go to the suggestions, Esc closes it before it clears the search', () => {
+    const o = { suggestOpen: true, searching: true, input: 'type:p' };
+    expect(k('ArrowDown', o)).toBe('suggest-move');
+    expect(k('Enter', o)).toBe('suggest-accept');
+    expect(k('Tab', o)).toBe('suggest-accept');
+    expect(k('Escape', o)).toBe('suggest-dismiss');
+    expect(k('Escape', { suggestOpen: false, searching: true, input: 'type:p' })).toBe('clear-search');
+  });
+
+  it('with the dropdown closed the arrows move the result highlight and Enter picks', () => {
+    expect(k('ArrowUp', { searching: true, input: 'x' })).toBe('highlight-move');
+    expect(k('Enter', { searching: true, input: 'x' })).toBe('pick');
+    expect(k('Enter')).toBe('none');
+    expect(k('Escape')).toBe('none'); // an empty field: Esc is the app's (deselect)
+    expect(k('Escape', { input: 'group:' })).toBe('clear-search'); // anything typed is cleared first
+  });
+
+  it('keys of an input method in progress are left alone, keyCode 229 included', () => {
+    expect(isImeKey('Enter', true, 13)).toBe(true);
+    expect(isImeKey('ArrowDown', false, 229)).toBe(true);
+    expect(isImeKey('Escape', false, 27)).toBe(false);
+    expect(isImeKey('a', true, 229)).toBe(false);
+    expect(k('Tab', { ime: true, suggestOpen: true })).toBe('ignore');
+    expect(k('Escape', { ime: true, input: 'x' })).toBe('ignore');
   });
 });
