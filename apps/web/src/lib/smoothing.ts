@@ -18,7 +18,7 @@ export interface SmoothParams {
   cutoff: number;
 }
 
-export const SMOOTH_DEFAULTS: SmoothParams = { orbitTau: 0.12, zoomTau: 0.15, panTau: 0.12, inertia: true, cutoff: 6 };
+export const SMOOTH_DEFAULTS: SmoothParams = { orbitTau: 0.12, zoomTau: 0.03, panTau: 0.05, inertia: true, cutoff: 1 };
 
 /** Developer options of the smoothing (registered in `DEV_OPTIONS`); the ids are read back by `smoothParams`. */
 export const SMOOTH_OPTIONS: readonly DevOptionDef[] = [
