@@ -15,16 +15,18 @@ const server = process.env.EIO_SERVER ?? 'localhost:8787';
 const host = process.env.EIO_WEB_HOST || '127.0.0.1';
 
 // The stateless upstream relay (apps/relay) mounted on the dev server at /relay, so dev needs no separate process.
-// Same origin as the page, so no CORS is needed; the dev origins are allowed for a page served from another port.
+// Same origin as the page, so no CORS is needed; the dev server's own origins are allowed too.
 function relayPlugin(): Plugin {
   return {
     name: 'eio-relay',
     configureServer(s) {
-      const port = s.config.server.port ?? 5173;
-      const relay = createRelay({
-        fetch: (u, i) => fetch(u, i),
-        allowedOrigins: [`http://localhost:${port}`, `http://127.0.0.1:${port}`],
+      // the list is filled from the address the server really got (the port may differ from the configured one)
+      const origins: string[] = [];
+      s.httpServer?.once('listening', () => {
+        const a = s.httpServer?.address();
+        if (a && typeof a === 'object') origins.push(`http://localhost:${a.port}`, `http://127.0.0.1:${a.port}`);
       });
+      const relay = createRelay({ fetch: (u, i) => fetch(u, i), allowedOrigins: origins });
       s.middlewares.use('/relay', nodeListener(relay));
     },
   };

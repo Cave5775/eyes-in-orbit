@@ -3,7 +3,8 @@
 //   WEB_DIST (default apps/web/dist), RELAY_ALLOWED_ORIGINS (comma list or *, default none = same-origin only)
 import { createReadStream } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRelay, type FetchLike } from './handler';
 import { nodeListener } from './adapter';
 import { resolveStatic } from './static';
@@ -53,7 +54,9 @@ function origins(v: string | undefined): string[] | '*' | undefined {
   return v.trim() === '*' ? '*' : v.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// run as a program (not when imported by a test); compared as paths, case-insensitive on Windows
+const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+if (process.argv[1] && norm(process.argv[1]) === norm(fileURLToPath(import.meta.url))) {
   const webDist = process.env.WEB_DIST ?? fileURLToPath(new URL('../../web/dist', import.meta.url));
   const port = Number(process.env.PORT ?? 8080);
   const host = process.env.HOST ?? '127.0.0.1';

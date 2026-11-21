@@ -1,5 +1,5 @@
 // Static file lookup for the built web app: correct MIME type, SPA fallback, no directory listing, no traversal.
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 
 const MIME: Record<string, string> = {
@@ -60,6 +60,8 @@ export async function resolveStatic(root: string, urlPath: string): Promise<Stat
     return null;
   }
   if (rel.includes('\0') || rel.includes('\\')) return null;
+  // no dotfiles or dot directories (.git, .env, ...)
+  if (rel.split('/').some((seg) => seg.startsWith('.'))) return null;
   const rootAbs = resolve(root);
   const target = resolve(join(rootAbs, rel));
   if (target !== rootAbs && !target.startsWith(rootAbs + sep)) return null;
@@ -72,7 +74,17 @@ export async function resolveStatic(root: string, urlPath: string): Promise<Stat
   });
 
   const size = await isFile(target);
-  if (size !== null) return hit(target, size);
+  if (size !== null) {
+    // a symlink inside the folder must not lead out of it
+    try {
+      const real = await realpath(target);
+      const realRoot = await realpath(rootAbs);
+      if (!real.startsWith(realRoot + sep)) return null;
+    } catch {
+      return null;
+    }
+    return hit(target, size);
+  }
   if (extname(target)) return null;
   const index = join(rootAbs, 'index.html');
   const isize = await isFile(index);

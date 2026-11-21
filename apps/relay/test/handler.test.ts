@@ -240,12 +240,12 @@ describe('relay limits', () => {
     expect(res.status).toBe(504);
   });
 
-  it('rejects an oversized request body with 400', async () => {
+  it('rejects an oversized request body with 413', async () => {
     const { f, calls } = fake([() => ok()]);
     const res = await createRelay({ fetch: f })(
       new Request(relayUrl('https://mast.stsci.edu/api/v0/invoke'), { method: 'POST', body: new Uint8Array(1024 * 1024 + 1) }),
     );
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(413);
     expect(calls).toHaveLength(0);
   });
 });
@@ -319,7 +319,7 @@ describe('relay space-track', () => {
     const relay = createRelay({ fetch: f });
     await relay(post(good));
     const second = await relay(post(good));
-    expect(second.status).toBe(502);
+    expect(second.status).toBe(401);
     expect(calls[3].headers.get('cookie')).toBeNull();
   });
 
@@ -343,11 +343,11 @@ describe('relay space-track', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('reports a rejected login as 502 and never queries', async () => {
+  it('reports a rejected login as 401 and never queries', async () => {
     const { f, calls } = fake([() => new Response('{"Login":"Failed"}', { status: 200 })]);
     const res = await createRelay({ fetch: f })(post(good));
-    expect(res.status).toBe(502);
-    expect(await res.json()).toMatchObject({ stage: 'login' });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ stage: 'login', error: 'login failed' });
     expect(calls).toHaveLength(1);
   });
 
