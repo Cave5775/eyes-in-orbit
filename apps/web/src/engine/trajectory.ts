@@ -1,7 +1,7 @@
 import { defaultBodies, profileToFixedSamples, reconstructDownrange, type Launch, type Sample } from '@eio/core';
 
 /**
- * Ascent trajectory file format (`data/trajectories/*.json|csv`, example in data/trajectories/example.json).
+ * Ascent trajectory file format (JSON or CSV text, parsed here; the Hub keeps the parsed list).
  *
  * JSON: { "id", "source"?, "azimuthDeg"?, "match": { "launchId"?, "nameContains"? }, "rows": [...] }
  * CSV:  `# key: value` comment lines (id, source, azimuthDeg, launchId, nameContains), then a header

@@ -3,15 +3,17 @@ import {
   sampleAscentRows, type AscentEvent, type AscentRow, type AscentSeries, type AscentSegmentBoundary, type CompositeSegment,
   type EntityEvent, type Launch, type LiveAscent, type ModeledAscent, type TrajectorySource,
 } from '@eio/core';
-import type { Trajectory } from './trajectory';
+import type { Hub } from './hub';
+import type { KvStore } from './store';
+import { matchTrajectory, type Trajectory } from './trajectory';
 
 /**
  * Ascent telemetry ingest + trajectory selection.
  *
- * Source precedence for a launch entity's path: live (posted rows) > file (data/trajectories) >
+ * Source precedence for a launch entity's path: live (posted rows) > file (bundled trajectory) >
  * modeled (nominal Falcon 9 model, `@eio/core` ascent-model) > pad only.
  *
- * Ingest format (`POST /api/telemetry/:launchId`, application/json), either a bare array
+ * Ingest format (the body of `TelemetryService.ingest`, JSON-like), either a bare array
  *   [{ "tSec": 62, "altKm": 9.8, "speedKmS": 0.41 }, ...]
  * or an object
  *   { "rows": [...], "events": [{ "name": "MECO", "tSec": 151 }], "azimuthDeg": 158, "source": "webcast OCR", "replace": false }
@@ -47,7 +49,7 @@ export type Validation = { ok: true; input: TelemetryInput } | { ok: false; erro
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** Validate a POST body. Collects the first problem into a message that names the offending row. */
+/** Validate an ingest body. Collects the first problem into a message that names the offending row. */
 export function validateTelemetryBody(body: unknown): Validation {
   const obj = Array.isArray(body) ? { rows: body } : body;
   if (!obj || typeof obj !== 'object') return { ok: false, error: 'body must be an array of rows or an object with "rows"' };
@@ -210,7 +212,7 @@ export function planAscent(launch: Launch, trajectory?: Trajectory, live?: LiveA
   return none;
 }
 
-/** `GET /api/telemetry/:launchId` payload. */
+/** The series of one launch: the modeled plan next to the file and the measured rows. */
 export function buildSeries(launch: Launch, trajectory: Trajectory | undefined, live: LiveAscent | undefined): AscentSeries {
   const plan = planAscent(launch, trajectory, live);
   const lastLive = live?.rows[live.rows.length - 1];
@@ -223,4 +225,91 @@ export function buildSeries(launch: Launch, trajectory: Trajectory | undefined, 
     file: trajectory ? { id: trajectory.id, source: trajectory.source, rows: trajectory.rows } : null,
     live: live && lastLive ? { ...live, lastTSec: lastLive.tSec, extrapolatedFromSec: plan.extrapolatedFromSec } : null,
   };
+}
+
+export const LIVE_KEY = 'telemetry:live:';
+export const LIVE_TTL_MS = 7 * 86_400_000;
+
+export type IngestResult =
+  | { ok: true; launchId: string; entityId?: string; source: AscentSeries['source']; rows: number; lastTSec: number; extrapolatedFromSec: number | null }
+  | { ok: false; error: string; notFound?: boolean };
+
+export interface TelemetryDeps {
+  hub: Hub;
+  store: KvStore;
+  /** called after the live rows changed: re-derive the launch entities (the Launch Library connector's sync) and flush the hub */
+  refresh?: () => void;
+  now?: () => number;
+}
+
+/**
+ * Measured ascent rows kept per LL2 launch id: the Hub map for readers, the kv rows `telemetry:live:<id>` (7 days) for the next
+ * start. `ingest` is a plain function; how rows reach it is up to the caller (there is no HTTP endpoint any more).
+ */
+export class TelemetryService {
+  private now: () => number;
+
+  constructor(private deps: TelemetryDeps) {
+    this.now = deps.now ?? Date.now;
+  }
+
+  private findLaunch(id: string): Launch | undefined {
+    return this.deps.hub.launches.find((l) => l.id === id.replace(/^launch-/, ''));
+  }
+
+  /** Reload the rows persisted by an earlier run into the Hub; returns how many launches had some. */
+  async load(): Promise<number> {
+    let n = 0;
+    for (const { key, row } of await this.deps.store.list<LiveAscent>(LIVE_KEY)) {
+      if (Array.isArray(row.value?.rows) && row.value.rows.length) {
+        this.deps.hub.liveTelemetry.set(key.slice(LIVE_KEY.length), row.value);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /** The series of a launch (`launch-<id>` is accepted too); undefined for an unknown launch. */
+  series(launchId: string): AscentSeries | undefined {
+    const { hub } = this.deps;
+    const launch = this.findLaunch(launchId);
+    return launch ? buildSeries(launch, matchTrajectory(hub.trajectories, launch), hub.liveTelemetry.get(launch.id)) : undefined;
+  }
+
+  /**
+   * Validate `body`, merge it into the launch's live rows, persist and announce the change. Nothing is stored on a rejection.
+   * Trusted callers only: call `ingest` and `clear` from the data worker's own UI code paths, never from an unfiltered
+   * `postMessage` handler or any page-reachable input, since they overwrite what the app draws for a launch.
+   */
+  async ingest(launchId: string, body: unknown): Promise<IngestResult> {
+    const { hub, store } = this.deps;
+    const launch = this.findLaunch(launchId);
+    if (!launch) return { ok: false, error: `unknown launch ${launchId}`, notFound: true };
+    const v = validateTelemetryBody(body);
+    if (!v.ok) return v;
+    let live: LiveAscent;
+    try {
+      live = mergeLive(hub.liveTelemetry.get(launch.id), v.input, this.now());
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+    hub.liveTelemetry.set(launch.id, live);
+    await store.put(`${LIVE_KEY}${launch.id}`, live, LIVE_TTL_MS, this.now());
+    this.deps.refresh?.();
+    const series = this.series(launch.id)!;
+    return {
+      ok: true, launchId: launch.id, entityId: launch.entityId, source: series.source, rows: live.rows.length,
+      lastTSec: live.rows[live.rows.length - 1].tSec, extrapolatedFromSec: series.live?.extrapolatedFromSec ?? null,
+    };
+  }
+
+  /** Drop a launch's live rows (the modeled or file path returns). */
+  async clear(launchId: string): Promise<{ ok: true; launchId: string; cleared: boolean } | { ok: false; error: string; notFound: true }> {
+    const launch = this.findLaunch(launchId);
+    if (!launch) return { ok: false, error: `unknown launch ${launchId}`, notFound: true };
+    const had = this.deps.hub.liveTelemetry.delete(launch.id);
+    await this.deps.store.delete(`${LIVE_KEY}${launch.id}`);
+    this.deps.refresh?.();
+    return { ok: true, launchId: launch.id, cleared: had };
+  }
 }
