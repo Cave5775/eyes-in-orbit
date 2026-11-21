@@ -1,0 +1,459 @@
+import { readFileSync } from 'node:fs';
+import { bodyEntityRecords, classifyFeed, composeFallback, isTrustedDescribeUrl, type EntityRecord } from '@eio/core';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Credentials } from '../../src/engine/credentials';
+import { DescribeService, ERROR_TTL_MS, HIT_TTL_MS, MISS_TTL_MS } from '../../src/engine/describe/service';
+import {
+  BODY_ARTICLES, WIKIMEDIA_API_USER_AGENT, bodyArticleTitle, discosUrl, parseDiscos, parseWikidataEntities, parseWikidataNameSearch, parseWikidataSearch,
+  parseWikipediaSummary, pickWikidataItem, uniqueSpaceCandidate, wikidataEntitiesUrl, wikidataNameSearchUrl, wikidataSearchUrl, wikipediaSummaryUrl,
+} from '../../src/engine/describe/sources';
+import { Http } from '../../src/engine/http';
+import { Hub } from '../../src/engine/hub';
+import { Limiter } from '../../src/engine/net/limiter';
+import { LIMITS } from '../../src/engine/net/limits';
+import { MemoryKv } from '../../src/engine/store';
+
+// the real Wikidata / Wikipedia / DISCOS-shaped fixtures are the server's (kept in one place)
+const fx = (name: string): string => readFileSync(new URL(`../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+const SEARCH = fx('wikidata-search-p377-25544.json');
+const MISS = fx('wikidata-search-miss.json');
+const ENTITIES = fx('wikidata-entities-iss.json');
+const SUMMARY = fx('wikipedia-summary-iss.json');
+const NAME_SEARCH = fx('wikidata-wbsearch-voyager-1.json');
+const DISCOS = fx('discos-object-docs-shape.json');
+
+const DAY = 86_400_000;
+
+const iss: EntityRecord = {
+  id: 'sat-25544', name: 'ISS (ZARYA)', kind: 'station', bodyId: 'EARTH', group: 'stations', updatedAt: 0,
+  aliases: { norad: '25544', cospar: '1998-067A', common: 'ISS' },
+};
+
+describe('describe parsers (fixtures: real Wikidata and Wikipedia responses)', () => {
+  it('reads item ids from the P377 search, and an empty list for a miss', () => {
+    expect(parseWikidataSearch(SEARCH)).toEqual(['Q25271', 'Q331785']);
+    expect(parseWikidataSearch(MISS)).toEqual([]);
+    expect(wikidataSearchUrl(25544)).toContain('haswbstatement%3AP377%3D25544');
+  });
+
+  it('reads label, English article and catalogue ids from wbgetentities', () => {
+    const items = parseWikidataEntities(ENTITIES);
+    expect(items.find((i) => i.id === 'Q25271')).toMatchObject({
+      label: 'International Space Station', enwiki: 'International Space Station', norad: ['25544'], cospar: ['1998-067A'],
+    });
+    expect(items.find((i) => i.id === 'Q331785')).toMatchObject({ enwiki: 'Zarya (ISS module)', cospar: [] });
+    expect(wikidataEntitiesUrl(['Q1', 'Q2'])).toContain('ids=Q1|Q2');
+  });
+
+  it('picks the ISS over its Zarya module by COSPAR id, and refuses to guess otherwise', () => {
+    const items = parseWikidataEntities(ENTITIES);
+    expect(pickWikidataItem(items, { name: 'ISS (ZARYA)', cospar: '1998-067A', norad: 25544 })?.id).toBe('Q25271');
+    expect(pickWikidataItem(items, { name: 'Zarya', norad: 25544 })?.id).toBe('Q331785');
+    expect(pickWikidataItem(items, { name: 'ISS (ZARYA)', norad: 25544 })).toBeNull();
+    expect(pickWikidataItem(items.slice(0, 1), { name: 'whatever', norad: 25544 })?.id).toBe('Q25271');
+  });
+
+  it('finds the one spacecraft among same-named Wikidata items (Voyager 1 is also an EP, a comic and a game)', () => {
+    const cands = parseWikidataNameSearch(NAME_SEARCH);
+    expect(cands.length).toBe(5);
+    expect(uniqueSpaceCandidate(cands, 'Voyager 1')?.id).toBe('Q48469');
+    expect(uniqueSpaceCandidate(cands, 'Voyager 2')).toBeNull();
+    expect(uniqueSpaceCandidate([...cands, { ...cands[1], id: 'Q1' }], 'Voyager 1')).toBeNull();
+  });
+
+  it('reads the Wikipedia summary: text, page link, blurb and a small https thumbnail', () => {
+    const s = parseWikipediaSummary(SUMMARY)!;
+    expect(s.title).toBe('International Space Station');
+    expect(s.text).toMatch(/^The International Space Station \(ISS\) is a space station/);
+    expect(s.url).toBe('https://en.wikipedia.org/wiki/International_Space_Station');
+    expect(s.blurb).toBe('Modular space station in low Earth orbit');
+    expect(s.thumbnail).toMatchObject({ width: 330, height: 219 });
+    expect(s.thumbnail!.url).toMatch(/^https:\/\//);
+    expect(wikipediaSummaryUrl('Zarya (ISS module)')).toBe('https://en.wikipedia.org/api/rest_v1/page/summary/Zarya_(ISS_module)');
+  });
+
+  it('drops disambiguation pages and rejects wrong shapes with a classifiable message', () => {
+    expect(parseWikipediaSummary(JSON.stringify({ type: 'disambiguation', title: 'Io', extract: 'Io may refer to:' }))).toBeNull();
+    expect(() => parseWikipediaSummary('{}')).toThrow(/unexpected Wikipedia summary response/);
+    expect(() => parseWikidataSearch('[]')).toThrow(/unexpected Wikidata search response/);
+    expect(() => parseWikidataEntities('<html>')).toThrow(/unexpected Wikidata entities response/);
+    expect(() => parseDiscos('{"errors":[]}')).toThrow(/unexpected DISCOS response/);
+  });
+
+  it('reads DISCOS facts from the documented JSON:API shape (docs-shaped fixture, not a live answer)', () => {
+    const o = parseDiscos(DISCOS)!;
+    const facts = Object.fromEntries(o.facts.map((f) => [f.label, f.value]));
+    expect(facts).toMatchObject({
+      'Object class': 'Payload', Mass: '1234.5 kg', Shape: 'Box + 2 Sol Pnl', Size: '2 m x 3 m x 1.5 m', Span: '12.5 m', Operator: 'Fixture Space Agency',
+      Status: 'active', 'First epoch': '2099-01-02',
+    });
+    expect(facts['Predicted decay']).toBeUndefined();
+    expect(o.url).toBe('https://discosweb.esoc.esa.int/objects/99001');
+    expect(parseDiscos('{"data":[]}')).toBeNull();
+    expect(discosUrl(25544)).toBe('https://discosweb.esoc.esa.int/api/objects?filter=eq(satno%2C25544)&include=operators');
+  });
+});
+
+describe('URL allow-list', () => {
+  it('accepts https on the Wikimedia and DISCOS hosts only', () => {
+    expect(isTrustedDescribeUrl('https://en.wikipedia.org/wiki/X')).toBe(true);
+    expect(isTrustedDescribeUrl('https://upload.wikimedia.org/a.jpg')).toBe(true);
+    expect(isTrustedDescribeUrl('https://discosweb.esoc.esa.int/objects/1')).toBe(true);
+    for (const bad of ['javascript:alert(1)', 'http://en.wikipedia.org/x', 'https://evil.example/x', 'https://wikipedia.org.evil.example/x', 'https://user:pw@en.wikipedia.org/x', 'data:text/html,x', 'nope', undefined]) {
+      expect(isTrustedDescribeUrl(bad), String(bad)).toBe(false);
+    }
+  });
+
+  it('drops a foreign thumbnail and replaces a foreign page link in the Wikipedia parser', () => {
+    const j = JSON.parse(SUMMARY);
+    j.thumbnail.source = 'https://evil.example/x.png';
+    j.content_urls.desktop.page = 'javascript:alert(1)';
+    const s = parseWikipediaSummary(JSON.stringify(j))!;
+    expect(s.thumbnail).toBeUndefined();
+    expect(s.url).toBe('https://en.wikipedia.org/wiki/International_Space_Station');
+  });
+});
+
+describe('composeFallback', () => {
+  it('uses only what the entity carries', () => {
+    expect(composeFallback(iss)).toBe('ISS (ZARYA) is a station in the "stations" group, launched in 1998. International designator 1998-067A, NORAD catalogue number 25544.');
+  });
+  it('copes with an object that has no ids', () => {
+    const odd: EntityRecord = { id: 'x', name: 'Odd', kind: 'launch_vehicle', bodyId: 'EARTH', aliases: {}, updatedAt: 0 };
+    expect(composeFallback(odd)).toBe('Odd is a launch vehicle.');
+  });
+});
+
+
+describe('Wikimedia request rules', () => {
+  it('Wikidata URLs carry origin=* (anonymous CORS) and the identifying agent is one constant', () => {
+    for (const u of [wikidataSearchUrl(25544), wikidataNameSearchUrl('Voyager 1'), wikidataEntitiesUrl(['Q1'])]) expect(u).toContain('&origin=*');
+    expect(WIKIMEDIA_API_USER_AGENT).toMatch(/^EyesInOrbit\//);
+  });
+});
+
+describe('DescribeService', () => {
+  let now: number;
+  let store: MemoryKv;
+  let hub: Hub;
+  let creds: Credentials;
+  let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+  let routes: Record<string, () => Response>;
+
+  const reply = (body: string, status = 200) => () => new Response(body, { status });
+  const urls = () => fetchMock.mock.calls.map((c) => String(c[0]));
+
+  const make = (opts: { offline?: boolean; limiter?: Limiter } = {}) => {
+    const limiter = opts.limiter ?? new Limiter(store, { limits: {} });
+    const http = new Http(store, { fetch: fetchMock, offline: opts.offline, limiter, clock: { now: () => now } });
+    const svc = new DescribeService({ store, http, config: { offline: !!opts.offline }, hub, credentials: creds }, { now: () => now });
+    return { svc, limiter };
+  };
+
+  beforeEach(() => {
+    now = 1_800_000_000_000;
+    store = new MemoryKv();
+    creds = new Credentials({ store, limiter: new Limiter(store, { limits: {} }) });
+    hub = new Hub(0);
+    routes = {
+      'list=search': reply(SEARCH),
+      wbgetentities: reply(ENTITIES),
+      'page/summary/International_Space_Station': reply(SUMMARY),
+      'discosweb.esoc.esa.int': reply(DISCOS),
+    };
+    fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      const key = Object.keys(routes).find((k) => url.includes(k));
+      return key ? routes[key]() : new Response('not found', { status: 404 });
+    });
+  });
+
+  it('chains Wikidata (P377) to the Wikipedia summary, skips DISCOS without a token, and says so in health', async () => {
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(urls()).toHaveLength(3);
+    expect(d.wikidata).toMatchObject({ id: 'Q25271', url: 'https://www.wikidata.org/wiki/Q25271' });
+    expect(d.summary?.title).toBe('International Space Station');
+    expect(d.sources).toEqual({ wikidata: 'ok', wikipedia: 'ok', discos: 'off' });
+    expect(d.discos).toBeUndefined();
+    expect(d.fallback).toContain('NORAD catalogue number 25544');
+    expect(d.searchUrl).toBe('https://en.wikipedia.org/w/index.php?search=ISS%20(ZARYA)');
+    const byId = Object.fromEntries((await hub.healthList()).map((h) => [h.id, h]));
+    expect(byId.discos.feed).toMatchObject({ level: 'off', reason: 'no-credentials' });
+    expect(byId.wikipedia.feed).toMatchObject({ level: 'ok' });
+  });
+
+  it('sends Api-User-Agent to Wikimedia and never to DISCOS', async () => {
+    const { svc } = make();
+    await creds.set('discosToken', 'tok');
+    await svc.describe(iss);
+    for (const c of fetchMock.mock.calls) {
+      const h = c[1]?.headers as Record<string, string>;
+      if (String(c[0]).includes('discosweb')) expect(h['api-user-agent']).toBeUndefined();
+      else expect(h['api-user-agent']).toBe(WIKIMEDIA_API_USER_AGENT);
+    }
+  });
+
+  it('adds DISCOS facts with a bearer token from the credentials and re-asks once when a token appears after a cached answer', async () => {
+    const { svc } = make();
+    await svc.describe(iss);
+    expect(urls().some((u) => u.includes('discosweb'))).toBe(false);
+    await creds.set('discosToken', 'secret-token');
+    await svc.syncHealth();
+    expect(hub.healthOf('discos').status).toBe('idle');
+    fetchMock.mockClear();
+    now += 1000;
+    const d = await svc.describe(iss);
+    expect(d.sources.discos).toBe('ok');
+    expect(d.discos?.facts.find((f) => f.label === 'Mass')?.value).toBe('1234.5 kg');
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes('discosweb'))!;
+    const headers = call[1]?.headers as Record<string, string>;
+    expect(headers.authorization).toBe('Bearer secret-token');
+    expect(headers['discosweb-api-version']).toBe('2');
+    fetchMock.mockClear();
+    expect((await svc.describe(iss)).fromCache).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the description under describe:v1:<id>', async () => {
+    const { svc } = make();
+    await svc.describe(iss);
+    expect((await store.get(`describe:v1:${iss.id}`))?.ttlMs).toBe(HIT_TTL_MS);
+  });
+
+  it('serves a hit from the cache for 30 days, then asks again', async () => {
+    const { svc } = make();
+    await svc.describe(iss);
+    fetchMock.mockClear();
+    now += HIT_TTL_MS - DAY;
+    expect((await svc.describe(iss)).fromCache).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+    now += 2 * DAY;
+    await svc.describe(iss);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('caches a miss for 7 days (no repeated lookups for an unknown object)', async () => {
+    routes['list=search'] = reply(MISS);
+    const { svc } = make();
+    const unknown: EntityRecord = { ...iss, id: 'sat-99999', aliases: { norad: '99999' } };
+    const d = await svc.describe(unknown);
+    expect(d.summary).toBeUndefined();
+    expect(d.sources.wikidata).toBe('miss');
+    expect(urls()).toHaveLength(1);
+    fetchMock.mockClear();
+    now += MISS_TTL_MS - DAY;
+    await svc.describe(unknown);
+    expect(fetchMock).not.toHaveBeenCalled();
+    now += 2 * DAY;
+    await svc.describe(unknown);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a 404 article as a miss, not an error', async () => {
+    delete routes['page/summary/International_Space_Station'];
+    routes['page/summary'] = reply('{"title":"Not found."}', 404);
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.sources.wikipedia).toBe('miss');
+    expect(hub.healthOf('wikipedia').status).toBe('ok');
+  });
+
+  it('shares one lookup between concurrent requests for the same object', async () => {
+    const { svc } = make();
+    const [a, b, c] = await Promise.all([svc.describe(iss), svc.describe(iss), svc.describe(iss)]);
+    expect(urls()).toHaveLength(3);
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+  });
+
+  it('keeps the 1.5 s spacing between the requests of one lookup: only follow-ups wait, and only up to 2 s', async () => {
+    const sleeps: number[] = [];
+    let t = now;
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => t, sleep: async (ms) => { sleeps.push(ms); t += ms; } });
+    const { svc } = make({ limiter });
+    const d = await svc.describe(iss);
+    expect(d.sources).toMatchObject({ wikidata: 'ok', wikipedia: 'ok' });
+    expect(urls()).toHaveLength(3);
+    expect(sleeps).toEqual([1500, 1500]); // the first request went at once
+    expect(d.limitedUntil).toBeUndefined();
+  });
+
+  it('answers limited at once, without a request, sleep or cache entry, while the source is blocked', async () => {
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => now, sleep: async (ms) => void (now += ms) });
+    await limiter.block('wikimedia', 600_000, 'HTTP 429');
+    const { svc } = make({ limiter });
+    const blockedUntil = now + 600_000;
+    const d = await svc.describe(iss);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(d.sources.wikidata).toBe('limited');
+    expect(d.limitedUntil).toBe(blockedUntil);
+    expect(d.fallback).toBeTruthy();
+    expect(await store.get(`describe:v1:${iss.id}`)).toBeUndefined();
+    expect(hub.healthOf('wikipedia').failures ?? 0).toBe(0);
+    // once the block is over the same object is looked up for real
+    now = blockedUntil + 1;
+    const again = await svc.describe(iss);
+    expect(again.sources.wikidata).toBe('ok');
+    expect(again.limitedUntil).toBeUndefined();
+  });
+
+  it('a burst of lookups: one goes out, the rest answer limited immediately and none is cached', async () => {
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => now, sleep: async () => { throw new Error('a demand lookup must not sleep'); } });
+    const { svc } = make({ limiter });
+    const recs = Array.from({ length: 8 }, (_, i): EntityRecord => ({ ...iss, id: `sat-${70000 + i}`, aliases: { norad: String(70000 + i) } }));
+    const done = await Promise.all(recs.map((r) => svc.describe(r)));
+    expect(done.filter((d) => d.sources.wikidata === 'limited').length).toBe(7);
+    expect(urls().length).toBeLessThanOrEqual(1);
+    for (const d of done.filter((x) => x.limitedUntil !== undefined)) expect(await store.get(`describe:v1:${d.entityId}`)).toBeUndefined();
+  });
+
+  it('keeps a source error out of the long cache, reports it in health, and closes the gate after a 429', async () => {
+    routes['list=search'] = reply('slow down', 429);
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.sources.wikidata).toBe('error');
+    expect(d.fallback).toBeTruthy();
+    expect(hub.healthOf('wikipedia')).toMatchObject({ status: 'error', failures: 1 });
+    expect(classifyFeed(hub.healthOf('wikipedia')).reason).toBe('rate-limited');
+    fetchMock.mockClear();
+    now += ERROR_TTL_MS + 1000; // the short error cache expired, the persistent gate (hours) has not
+    const e = await svc.describe(iss);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(e.sources.wikidata).toBe('error');
+    expect(hub.healthOf('wikipedia').lastError).toMatch(/waiting until \d\d:\d\dZ/);
+  });
+
+  it('reports a malformed answer as invalid', async () => {
+    routes['list=search'] = reply('{"nope":1}');
+    const { svc } = make();
+    await svc.describe(iss);
+    expect(classifyFeed(hub.healthOf('wikipedia')).reason).toBe('invalid');
+  });
+
+  it('finds a probe without a catalogue number by its unique spacecraft label', async () => {
+    routes.wbsearchentities = reply(NAME_SEARCH);
+    const { svc } = make();
+    const probe: EntityRecord = { id: 'dsn-VGR1', name: 'Voyager 1', kind: 'probe', bodyId: 'EARTH', aliases: { dsn: 'VGR1' }, updatedAt: 0 };
+    await svc.describe(probe);
+    expect(urls()[0]).toContain('wbsearchentities');
+    expect(urls()[1]).toContain('ids=Q48469');
+  });
+
+  it('never searches by name for an object that is neither catalogued nor a probe, and uses a body name as the article title', async () => {
+    const { svc } = make();
+    const stage: EntityRecord = { id: 'launch-x-booster', name: 'Falcon 9 (booster)', kind: 'stage', bodyId: 'EARTH', aliases: {}, updatedAt: 0 };
+    const d = await svc.describe(stage);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(d.fallback).toBe('Falcon 9 (booster) is a stage.');
+    routes['page/summary/Mars'] = reply(SUMMARY);
+    await svc.describe({ id: 'body-mars', name: 'Mars', kind: 'planet', bodyId: 'SUN', aliases: {}, updatedAt: 0 });
+    expect(urls()).toEqual([wikipediaSummaryUrl('Mars')]);
+  });
+
+  it('asks for the qualified article of a body whose plain name is a disambiguation page (Io, Ceres)', async () => {
+    const { svc } = make();
+    routes['page/summary/Io_(moon)'] = reply(SUMMARY);
+    routes['page/summary/Ceres_(dwarf_planet)'] = reply(SUMMARY);
+    await svc.describe({ id: 'body-io', name: 'Io', kind: 'moon', bodyId: 'JUPITER', aliases: {}, updatedAt: 0 });
+    await svc.describe({ id: 'body-ceres', name: 'Ceres', kind: 'planet', bodyId: 'SUN', aliases: {}, updatedAt: 0 });
+    expect(urls()).toEqual([wikipediaSummaryUrl('Io (moon)'), wikipediaSummaryUrl('Ceres (dwarf planet)')]);
+  });
+
+  it('does not cache an OFFLINE answer: back online the same object is looked up for real', async () => {
+    const off = make({ offline: true }).svc;
+    expect((await off.describe(iss)).sources.wikipedia).toBe('off');
+    expect(fetchMock).not.toHaveBeenCalled();
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.summary?.title).toBe('International Space Station');
+    expect(d.fromCache).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('asks DISCOS again after a credential change: gate cleared, cached error and off re-asked', async () => {
+    routes['discosweb.esoc.esa.int'] = reply('denied', 401);
+    await creds.set('discosToken', 'bad');
+    const { svc, limiter } = make();
+    const dcreds = new Credentials({ store, limiter });
+    expect((await svc.describe(iss)).sources.discos).toBe('error');
+    fetchMock.mockClear();
+    now += 1000;
+    expect((await svc.describe(iss)).fromCache).toBe(true); // same token: the short error cache holds
+    expect(fetchMock).not.toHaveBeenCalled();
+    routes['discosweb.esoc.esa.int'] = reply(DISCOS);
+    await dcreds.set('discosToken', 'good');
+    await svc.syncHealth();
+    now += 1000;
+    const d = await svc.describe(iss);
+    expect(d.sources.discos).toBe('ok');
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('discosweb'))).toBe(true);
+  });
+
+  it('a DISCOS error does not shorten the cache of a description that has its summary', async () => {
+    routes['discosweb.esoc.esa.int'] = reply('denied', 401);
+    await creds.set('discosToken', 'bad');
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.sources).toMatchObject({ wikipedia: 'ok', discos: 'error' });
+    expect((await store.get(`describe:v1:${iss.id}`))?.ttlMs).toBe(HIT_TTL_MS);
+    // a failing Wikipedia answer still gets the short error cache
+    routes['list=search'] = reply('slow down', 429);
+    const other: EntityRecord = { ...iss, id: 'sat-5', aliases: { norad: '5' } };
+    await svc.describe(other);
+    expect((await store.get(`describe:v1:sat-5`))?.ttlMs).toBe(ERROR_TTL_MS);
+  });
+
+  it('reads the DISCOS token once per lookup and survives a failing credential read', async () => {
+    const get = vi.fn(async () => { throw new Error('idb closed'); });
+    const svc = new DescribeService({ store, http: new Http(store, { fetch: fetchMock, limiter: new Limiter(store, { limits: {} }) }), config: { offline: false }, hub, credentials: { get } }, { now: () => now });
+    await new Promise((r) => setTimeout(r, 0)); // the constructor's sync rejected: no unhandled rejection
+    expect(get).toHaveBeenCalledTimes(1);
+    get.mockImplementation(async () => 'tok' as never);
+    get.mockClear();
+    await svc.describe(iss);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a Wikimedia call without Api-User-Agent after an opaque failure, and then leaves the header out', async () => {
+    const withUa = (init?: RequestInit) => !!(init?.headers as Record<string, string>)['api-user-agent'];
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => { if (withUa(init)) throw new TypeError('Failed to fetch'); return base(input, init); });
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.sources).toMatchObject({ wikidata: 'ok', wikipedia: 'ok' });
+    const calls = fetchMock.mock.calls.map((c) => withUa(c[1]));
+    expect(calls.slice(0, 2)).toEqual([true, false]);
+    expect(calls.slice(2).every((x) => !x)).toBe(true); // remembered: no more header this session
+    expect(hub.healthOf('wikipedia').failures ?? 0).toBe(0);
+  });
+
+  it('counts a failure of the header-less retry as the lookup\x27s error', async () => {
+    fetchMock.mockImplementation(async () => { throw new TypeError('Failed to fetch'); });
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.sources.wikidata).toBe('error');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(hub.healthOf('wikipedia')).toMatchObject({ status: 'error', failures: 1 });
+  });
+
+  it('under OFFLINE serves the fallback with no request', async () => {
+    const { svc } = make({ offline: true });
+    const d = await svc.describe(iss);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(d.sources).toEqual({ wikidata: 'off', wikipedia: 'off', discos: 'off' });
+    expect(d.fallback).toBeTruthy();
+  });
+});
+
+describe('body article titles', () => {
+  it('only name real bodies (a typo would silently fall back to the plain name)', () => {
+    const names = new Set(bodyEntityRecords().map((b) => b.name));
+    for (const k of Object.keys(BODY_ARTICLES)) expect(names.has(k), k).toBe(true);
+  });
+  it('qualify with a parenthesis and fall back to the name', () => {
+    expect(bodyArticleTitle('Titan')).toBe('Titan (moon)');
+    expect(bodyArticleTitle('Mars')).toBe('Mars');
+    for (const t of Object.values(BODY_ARTICLES)) expect(t).toMatch(/ [(](moon|planet|dwarf planet)[)]$/);
+  });
+});

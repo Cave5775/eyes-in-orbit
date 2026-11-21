@@ -264,3 +264,42 @@ describe('scheduler with an injected clock', () => {
     scheduler.stop();
   });
 });
+
+describe('health announcements never stop a connector', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('a rejecting limit read (the store failing) does not stop the connector or the 30 s health timer', async () => {
+    let n = 0;
+    const { hub, scheduler } = setup([{ id: 'c', intervalMs: 31_000, run: async () => void n++ }]);
+    hub.limitOf = async () => { throw new Error('idb closed'); };
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(n).toBeGreaterThanOrEqual(3);
+    expect(hub.healthOf('c').status).toBe('ok');
+    scheduler.stop();
+  });
+
+  it('a kick() while the health announcement is pending is not pushed back to the normal delay', async () => {
+    let n = 0;
+    const { hub, scheduler } = setup([{ id: 'c', intervalMs: 3_600_000, run: async () => void n++ }]);
+    let release!: () => void;
+    hub.limitOf = () => new Promise((r) => { release = () => r(undefined); });
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(1); // the first run is done; its announcement waits on the limit read
+    expect(n).toBe(1);
+    scheduler.kick('c');
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(n).toBe(2);
+    scheduler.stop();
+  });
+});

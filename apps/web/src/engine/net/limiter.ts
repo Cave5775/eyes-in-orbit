@@ -37,7 +37,19 @@ export interface LimitState {
   /** timestamps of recent failed answers (for `failureStop`) */
   failures?: number[];
   consecutiveFailures?: number;
+  /** hidden (CORS) failures in a row; reset by any readable success */
+  opaqueStrikes?: number;
+  /** when the last hidden failure counted (a burst within `OPAQUE_BURST_MS` is one strike) */
+  lastOpaqueAt?: number;
+  /** the upstream kind a hidden-failure block was raised under; a different upstream lifts it (a relay may work where direct did not) */
+  opaqueUpstream?: string;
 }
+
+/** Hidden fetch failures cannot say whether the source blocked us, so they never feed `failureStop`; they back off briefly instead. */
+export const OPAQUE_BASE_MS = 30_000;
+export const OPAQUE_MAX_MS = 5 * 60_000;
+/** hidden failures closer together than this are one strike (a startup burst of parallel requests) */
+export const OPAQUE_BURST_MS = 5_000;
 
 export type LimitKind = 'spacing' | 'cap' | 'blocked';
 export type BlockKind = 'rate' | 'failure';
@@ -95,9 +107,11 @@ export interface ReportInput {
   networkError?: boolean;
   /**
    * the browser threw a bare fetch `TypeError` while online: a CORS-less block answer or a real network failure, which it does
-   * not tell apart. Counts as a failed answer only for sources flagged `opaqueIsAnswer`; elsewhere it is a network error.
+   * not tell apart. For sources flagged `opaqueIsAnswer` it backs off briefly (see `recordOpaque`), never toward `failureStop`; elsewhere it is a network error.
    */
   opaque?: boolean;
+  /** the upstream kind the request went through (`direct`, `relay`); stamps a hidden-failure block so changing it lifts the block */
+  upstream?: string;
   /** upstream host, for the backoff record */
   host?: string;
 }
@@ -150,20 +164,25 @@ export class Limiter {
     if (out.blockedUntil !== undefined && out.blockedUntil <= now) {
       delete out.blockedUntil;
       delete out.blockReason;
+      delete out.opaqueUpstream;
     }
     return out;
   }
 
   /** One attempt: decide, and when allowed count it and persist BEFORE the caller sends anything. */
-  tryAcquire(source: string, mode: LimitMode, commit = true): Promise<AcquireResult> {
-    return this.locked(source, () => this.decide(source, mode, commit));
+  tryAcquire(source: string, mode: LimitMode, commit = true, upstream?: string): Promise<AcquireResult> {
+    return this.locked(source, () => this.decide(source, mode, commit, upstream));
   }
 
-  private async decide(source: string, mode: LimitMode, commit: boolean): Promise<AcquireResult> {
+  private async decide(source: string, mode: LimitMode, commit: boolean, upstream?: string): Promise<AcquireResult> {
     const lim = this.limits[source];
     if (!lim) return { ok: true };
     const now = this.now();
     const s = this.rolled(await this.state(source), now);
+    if (s.opaqueUpstream !== undefined && upstream !== undefined && s.opaqueUpstream !== upstream) {
+      // the block came from unreadable failures of another upstream: the new route has not failed yet
+      delete s.blockedUntil; delete s.blockReason; delete s.blockKind; delete s.opaqueUpstream; delete s.opaqueStrikes; delete s.lastOpaqueAt;
+    }
     if (s.blockedUntil !== undefined) return { limited: true, retryAt: s.blockedUntil, reason: s.blockReason ?? 'blocked by the source', kind: 'blocked', blockKind: s.blockKind ?? 'rate' };
     const capped = (name: WindowName, cap: number | undefined, label: string): AcquireResult | undefined => {
       const w = s[name];
@@ -191,19 +210,19 @@ export class Limiter {
   }
 
   /** Would an attempt be allowed now? Counts nothing (Space-Track checks its query before it logs in). */
-  peek(source: string, mode: LimitMode): Promise<AcquireResult> {
-    return this.tryAcquire(source, mode, false);
+  peek(source: string, mode: LimitMode, upstream?: string): Promise<AcquireResult> {
+    return this.tryAcquire(source, mode, false, upstream);
   }
 
   /**
    * `tryAcquire` with a bounded wait for the spacing gap: a `poll` caller waits up to the source's `maxWaitMs`
    * (default 15 s), a `demand` caller only `waitMs` (default 0). Caps and blocks never wait.
    */
-  async acquire(source: string, mode: LimitMode, waitMs?: number): Promise<AcquireResult> {
+  async acquire(source: string, mode: LimitMode, waitMs?: number, upstream?: string): Promise<AcquireResult> {
     const maxWait = waitMs ?? (mode === 'poll' ? this.limits[source]?.maxWaitMs ?? 15_000 : 0);
     let waited = 0;
     for (;;) {
-      const r = await this.tryAcquire(source, mode);
+      const r = await this.tryAcquire(source, mode, true, upstream);
       if ('ok' in r || r.kind !== 'spacing') return r;
       const gap = Math.max(r.retryAt - this.now(), 1);
       if (waited + gap > maxWait) return r;
@@ -225,7 +244,8 @@ export class Limiter {
     const { status, headers } = input;
     // a hidden (CORS) answer counts as a failed response only where the table says the source blocks that way
     const opaque = !!input.opaque && !!lim.opaqueIsAnswer && !input.networkError;
-    const failed = !!input.networkError || opaque || (status !== undefined && !(status >= 200 && status < 300) && status !== 304);
+    if (opaque) return this.recordOpaque(source, s, now, input);
+    const failed = !!input.networkError || (status !== undefined && !(status >= 200 && status < 300) && status !== 304);
     let until = 0;
     let reason = '';
     let kind: BlockKind = 'rate';
@@ -244,7 +264,7 @@ export class Limiter {
     if (rl !== undefined) raise(rl, 'X-Rate-Limit: no requests remaining');
     const b = lim.backoff;
     // with `backoff.statuses` only those statuses (and network errors) count as failures: a 404 is a working source
-    const backoffFailure = failed && (!b?.statuses || !!input.networkError || opaque || (status !== undefined && b.statuses.includes(status)));
+    const backoffFailure = failed && (!b?.statuses || !!input.networkError || (status !== undefined && b.statuses.includes(status)));
     if (failed && !backoffFailure) s.consecutiveFailures = 0;
     if (failed) {
       if (backoffFailure) s.consecutiveFailures = (s.consecutiveFailures ?? 0) + 1;
@@ -264,19 +284,47 @@ export class Limiter {
       }
     } else if (status !== undefined) {
       s.consecutiveFailures = 0;
+      s.opaqueStrikes = 0;
     }
     if (until > (s.blockedUntil ?? 0)) {
       recordBackoff({
         source, host: input.host, origin: 'limiter', blockKind: kind, reason, waitMs: until - now, until,
         trigger: {
           status, retryAfter: headers?.get('retry-after') ?? undefined, rateLimitExhausted: rl !== undefined || undefined,
-          networkError: input.networkError, opaque: opaque || undefined, failures: s.consecutiveFailures,
+          networkError: input.networkError, failures: s.consecutiveFailures,
         },
         previous: s.blockedUntil !== undefined ? { until: s.blockedUntil } : undefined,
       }, now);
       s.blockedUntil = until;
       s.blockReason = reason;
       s.blockKind = kind;
+      delete s.opaqueUpstream; // a readable or manual block replaces a hidden-failure one
+    }
+    await this.save(source, s);
+  }
+
+  /**
+   * A hidden (CORS) failure of a source flagged `opaqueIsAnswer`. It may be a CDN block, or a captive portal, an ad blocker, a
+   * failed preflight: the browser does not say. So it never counts toward `failureStop` and never sets the long `blockOn` /
+   * `backoff` blocks; it only backs off for seconds to minutes (30 s doubling, at most 5 min), a burst counts once, and the
+   * block is stamped with the upstream so switching to a relay lifts it.
+   */
+  private async recordOpaque(source: string, s: LimitState, now: number, input: ReportInput): Promise<void> {
+    if (s.lastOpaqueAt !== undefined && now - s.lastOpaqueAt < OPAQUE_BURST_MS) return;
+    s.lastOpaqueAt = now;
+    s.opaqueStrikes = (s.opaqueStrikes ?? 0) + 1;
+    const n = s.opaqueStrikes;
+    const until = now + Math.min(OPAQUE_BASE_MS * 2 ** (Math.min(n, 20) - 1), OPAQUE_MAX_MS);
+    if (until > (s.blockedUntil ?? 0)) {
+      const reason = `unreadable (CORS) failure ${n}`;
+      recordBackoff({
+        source, host: input.host, origin: 'limiter', blockKind: 'failure', reason, waitMs: until - now, until,
+        trigger: { opaque: true, failures: n }, previous: s.blockedUntil !== undefined ? { until: s.blockedUntil } : undefined,
+      }, now);
+      s.blockedUntil = until;
+      s.blockReason = reason;
+      s.blockKind = 'failure';
+      s.opaqueUpstream = input.upstream ?? 'direct';
     }
     await this.save(source, s);
   }
@@ -297,6 +345,7 @@ export class Limiter {
       s.blockedUntil = now + ms;
       s.blockReason = reason;
       s.blockKind = kind;
+      delete s.opaqueUpstream; // a readable or manual block replaces a hidden-failure one
       await this.save(source, s);
     }
   }

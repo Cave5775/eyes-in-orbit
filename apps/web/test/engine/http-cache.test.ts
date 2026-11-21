@@ -200,3 +200,16 @@ describe('Http conditional requests', () => {
     await expect(http.cachedFetch('k', 'https://x.test/a', 1000, String)).rejects.toBeInstanceOf(HttpError);
   });
 });
+
+describe('Http.cachedFetch when the cache cannot be written', () => {
+  it('returns the fresh value with a storageError instead of discarding it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { http, fetchMock, store } = setup();
+    vi.spyOn(store, 'put').mockRejectedValue(new DOMException('full', 'QuotaExceededError'));
+    fetchMock.mockResolvedValue(response('{"n":2}'));
+    const res = await http.cachedFetch('k', 'https://x.test/a', 60_000, (t) => JSON.parse(t));
+    expect(res).toMatchObject({ value: { n: 2 }, fromCache: false, stale: false, storageError: 'full' });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

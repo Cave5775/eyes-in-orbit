@@ -25,8 +25,9 @@ export interface SourceLimit {
   maxWaitMs?: number;
   /**
    * The host's block answers (403/429 from a CDN) carry no CORS headers, so the browser hides them behind a bare fetch
-   * `TypeError`. For these sources such a failure while online counts as an answer (a failed response for `failureStop` and
-   * `backoff`) instead of an ignorable network error; otherwise the app would keep retrying a host that blocks it.
+   * `TypeError`; so does a captive portal, an ad blocker or a failed preflight. For these sources such a failure while online
+   * backs off for minutes (never toward `failureStop`, never the hours-long blocks) so the app does not keep retrying a host that
+   * may block it; the block is lifted when the upstream (direct, relay) changes. See `Limiter.recordOpaque`.
    */
   opaqueIsAnswer?: boolean;
 }
@@ -105,7 +106,7 @@ export const LIMITS: Record<string, SourceLimit> = {
     minSpacingMs: 200, perHour: 1000, maxWaitMs: 1000,
     blockOn: { 429: 15 * MIN, 503: 15 * MIN },
   },
-  // MAST archive queries for the Sky view's image card (engine/archive-images.ts): on demand only, cached 6 h per body
+  // MAST archive queries for the Sky view's image card (engine/archive.ts): on demand only, cached 6 h per body
   mast: {
     label: 'MAST archive (STScI)', policy: 'unpublished',
     minSpacingMs: 1500, perHour: 60, demandPerHour: 40,

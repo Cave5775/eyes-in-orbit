@@ -171,7 +171,12 @@ export class Scheduler {
   /** Announce the health records (with each feed's current request budget) to the hub's listeners. */
   private async emitHealth(): Promise<void> {
     const { hub } = this.deps;
-    hub.emit('health', await hub.healthList());
+    try {
+      hub.emit('health', await hub.healthList());
+    } catch (err) {
+      // e.g. the store rejecting a limit read: the announcement is lost, the connectors keep running
+      console.warn(`[scheduler] health announcement failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /** Run a connector as soon as possible (used when its topic gains a subscriber). */
@@ -215,11 +220,6 @@ export class Scheduler {
       else this.fail(slot, err);
     }
     slot.running = false;
-    // fast pollers (iss-rest every 2 s) only announce health when it changes
-    if ((connector.intervalMs ?? Infinity) >= 30_000 || before !== `${ctx.health.status}|${ctx.health.lastError}`) {
-      await this.emitHealth();
-    }
-
     const offlineDone = config.offline && connector.network !== false;
     if (offlineDone) {
       if (ctx.health.status === 'error') Object.assign(ctx.health, { status: 'disabled', note: 'OFFLINE=1 and nothing cached' });
@@ -227,6 +227,12 @@ export class Scheduler {
     } else if (!slot.stopped && connector.intervalMs !== undefined) {
       this.schedule(slot, this.nextDelay(slot));
     } else ctx.health.nextRunAt = undefined;
+    // The next run is scheduled before health goes out: a storage failure while reading the limits must not stop this connector,
+    // and a kick() or refresh() during the announcement must not be pushed back to the normal delay.
+    // Fast pollers (iss-rest every 2 s) only announce health when it changes.
+    if ((connector.intervalMs ?? Infinity) >= 30_000 || before !== `${ctx.health.status}|${ctx.health.lastError}`) {
+      await this.emitHealth();
+    }
   }
 
   private fail(slot: Slot, err: unknown): void {

@@ -27,6 +27,8 @@ export interface Cached<T> {
   error?: string;
   /** the stale copy is served because a request limit applies (nothing was sent): the time asking is possible again */
   limitedUntil?: number;
+  /** the fresh value could not be written to the store (quota, closed database); it is still returned, but is not cached */
+  storageError?: string;
 }
 
 export interface HttpOptions {
@@ -97,6 +99,18 @@ export class Http {
     return p;
   }
 
+  /** Write to the cache; a failure is returned as text (and logged), never thrown over a good answer. */
+  private async persist(key: string, value: unknown, ttlMs: number, fetchedAt: number): Promise<string | undefined> {
+    try {
+      await this.store.put(key, value, ttlMs, fetchedAt);
+      return undefined;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[http] could not cache ${key}: ${msg}`);
+      return msg;
+    }
+  }
+
   private async load<T>(
     key: string, url: string, ttlMs: number, parse: (text: string) => T, headers?: Record<string, string>, ro?: RequestOptions,
   ): Promise<Cached<T>> {
@@ -110,14 +124,14 @@ export class Http {
       if (res.status === 304 && row) {
         // not modified since the `if-modified-since` the caller sent: keep the entry and restart its TTL
         const fetchedAt = this.clock.now();
-        await this.store.put(key, row.value, ttlMs, fetchedAt);
-        return { value: row.value, fromCache: true, stale: false, fetchedAt };
+        const storageError = await this.persist(key, row.value, ttlMs, fetchedAt);
+        return { value: row.value, fromCache: true, stale: false, fetchedAt, ...(storageError ? { storageError } : {}) };
       }
       if (!res.ok) throw httpError(res, url, body);
       const value = parse(body);
       const fetchedAt = this.clock.now();
-      await this.store.put(key, value, ttlMs, fetchedAt);
-      return { value, fromCache: false, stale: false, fetchedAt };
+      const storageError = await this.persist(key, value, ttlMs, fetchedAt);
+      return { value, fromCache: false, stale: false, fetchedAt, ...(storageError ? { storageError } : {}) };
     } catch (err) {
       if (!row) throw err;
       return {

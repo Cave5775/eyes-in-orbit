@@ -3,8 +3,8 @@ import { guardedFetch, guardedWebSocket } from '../../src/engine/net/guarded-fet
 import { LimitedError, Limiter } from '../../src/engine/net/limiter';
 import { LIMITS, type SourceLimit } from '../../src/engine/net/limits';
 import { inProcessLock } from '../../src/engine/net/lock';
-import { webLocks } from '../../src/engine/net/lock.browser';
-import { applyUpstream, defaultUpstreams, resolveUpstream, setUpstreams } from '../../src/engine/net/upstream';
+import { webLocks, webLocksAvailable } from '../../src/engine/net/lock.browser';
+import { applyUpstream, defaultUpstreams, resolveUpstream, setAppBase, setUpstreams } from '../../src/engine/net/upstream';
 import { MemoryKv, type KvStore } from '../../src/engine/store';
 
 const T0 = Date.parse('2026-11-01T10:00:00Z');
@@ -17,17 +17,56 @@ describe('opaque CORS failures', () => {
   const call = (l: Limiter, source: string, url: string, online = true) =>
     guardedFetch(l, source, url, undefined, { mode: 'poll', fetch: reject, online: () => online });
 
-  it('CelesTrak: three hidden failures within 2 h stop it for 24 h, like three failed answers', async () => {
+  it('CelesTrak: a burst of hidden failures with the browser online is one strike and never the 24 h stop', async () => {
     let t = T0;
     const limiter = new Limiter(new MemoryKv(), { limits: LIMITS, now: () => t, sleep: async (ms) => { t += ms; } });
-    for (let i = 0; i < 3; i++) {
-      await expect(call(limiter, 'celestrak', 'https://celestrak.org/NORAD/elements/gp.php')).rejects.toThrow('Failed to fetch');
-      t += 30 * 60_000;
+    await expect(call(limiter, 'celestrak', 'https://celestrak.org/NORAD/elements/gp.php')).rejects.toThrow('Failed to fetch');
+    for (let i = 0; i < 5; i++) { // the rest of a startup burst: requests already in flight fail within seconds
+      t += 800;
+      await limiter.report('celestrak', { opaque: true, networkError: false });
     }
-    const s = await limiter.state('celestrak');
-    expect(s.blockedUntil).toBeDefined();
-    expect(s.blockKind).toBe('failure');
     expect(await limiter.tryAcquire('celestrak', 'poll')).toMatchObject({ limited: true, kind: 'blocked' });
+    const s = await limiter.state('celestrak');
+    expect(s.opaqueStrikes).toBe(1);
+    expect(s.blockedUntil! - T0).toBeLessThanOrEqual(30_000); // one strike: 30 s, not 24 h
+    expect(s.failures ?? []).toEqual([]); // never counted toward failureStop
+  });
+
+  it('repeated hidden failures back off in minutes at most (capped at 5 min), and a readable success resets the strikes', async () => {
+    let t = T0;
+    const limiter = new Limiter(new MemoryKv(), { limits: LIMITS, now: () => t, sleep: async (ms) => { t += ms; } });
+    for (let i = 0; i < 12; i++) {
+      await expect(call(limiter, 'celestrak', 'https://celestrak.org/x')).rejects.toThrow();
+      expect((await limiter.state('celestrak')).blockedUntil! - t).toBeLessThanOrEqual(5 * 60_000);
+      t = (await limiter.state('celestrak')).blockedUntil! + 6000;
+    }
+    expect((await limiter.state('celestrak')).opaqueStrikes).toBe(12);
+    await limiter.report('celestrak', { status: 200 });
+    expect((await limiter.state('celestrak')).opaqueStrikes).toBe(0);
+  });
+
+  it('switching the upstream lifts an opaque-induced block (but not a block the source itself announced)', async () => {
+    let t = T0;
+    const limiter = new Limiter(new MemoryKv(), { limits: LIMITS, now: () => t });
+    await expect(call(limiter, 'celestrak', 'https://celestrak.org/x')).rejects.toThrow();
+    expect(await limiter.tryAcquire('celestrak', 'poll', true, 'direct')).toMatchObject({ limited: true, kind: 'blocked' });
+    t += 3000; // past the 2 s spacing gap too
+    expect(await limiter.tryAcquire('celestrak', 'poll', true, 'relay')).toEqual({ ok: true });
+    expect((await limiter.state('celestrak')).opaqueUpstream).toBeUndefined();
+    await limiter.report('celestrak', { status: 403, upstream: 'relay' }); // a readable 403: the real 3 h block
+    expect(await limiter.tryAcquire('celestrak', 'poll', true, 'direct')).toMatchObject({ limited: true, kind: 'blocked' });
+  });
+
+  it('through the upstream table: a relay mapping gets through where the direct route was blocked by hidden failures', async () => {
+    let t = T0;
+    const limiter = new Limiter(new MemoryKv(), { limits: LIMITS, now: () => t, sleep: async (ms) => { t += ms; } });
+    await expect(call(limiter, 'celestrak', 'https://celestrak.org/x')).rejects.toThrow();
+    t += 3000;
+    const seen: string[] = [];
+    const fetchImpl = (async (u: string) => { seen.push(u); return ok(); }) as unknown as typeof fetch;
+    const r = await guardedFetch(limiter, 'celestrak', 'https://celestrak.org/x', undefined, { mode: 'poll', fetch: fetchImpl, upstreams: { celestrak: { kind: 'relay', base: '/relay' } }, appBase: 'https://app.test/eio/' });
+    expect(r).toMatchObject({ ok: true });
+    expect(seen).toEqual(['https://app.test/relay?url=https%3A%2F%2Fcelestrak.org%2Fx']);
   });
 
   it('a flagged source offline (navigator.onLine false) is a plain network error: CelesTrak has no backoff, so nothing is counted', async () => {
@@ -37,12 +76,12 @@ describe('opaque CORS failures', () => {
     expect((await limiter.state('celestrak')).blockedUntil).toBeUndefined();
   });
 
-  it('Wikimedia and MPC backoffs start on a hidden failure; a source not flagged treats it as a network error', async () => {
+  it('Wikimedia and MPC back off briefly (30 s), not for their hours-long steps; a source not flagged treats it as a network error', async () => {
     const limiter = new Limiter(new MemoryKv(), { limits: LIMITS, now: () => T0 });
     await expect(call(limiter, 'wikimedia', 'https://en.wikipedia.org/x')).rejects.toThrow();
-    expect((await limiter.state('wikimedia')).blockedUntil).toBe(T0 + 5000);
+    expect((await limiter.state('wikimedia')).blockedUntil).toBe(T0 + 30_000);
     await expect(call(limiter, 'mpcorb', 'https://www.minorplanetcenter.net/iau/MPCORB/MPCORB.DAT.gz')).rejects.toThrow();
-    expect((await limiter.state('mpcorb')).blockedUntil).toBe(T0 + H);
+    expect((await limiter.state('mpcorb')).blockedUntil).toBe(T0 + 30_000);
     // dsn is not flagged: the TypeError is a network error and starts its own backoff the usual way
     await expect(call(limiter, 'dsn', 'https://eyes.nasa.gov/dsn/data/dsn.xml')).rejects.toThrow();
     expect(await limiter.consecutiveFailures('dsn')).toBe(1);
@@ -246,5 +285,54 @@ describe('credential re-saves lift a failure block at most once per interval (cl
     c.t += H;
     expect(await limiter.clearBlock('spacetrack:login', H)).toBe(true);
     expect((await limiter.state('spacetrack:login')).blockedUntil).toBeUndefined();
+  });
+});
+
+describe('report failures and static files', () => {
+  it('a failing limiter write after a good fetch neither loses the response nor counts a network error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const limiter = new Limiter(new MemoryKv(), { limits: table(), now: () => T0 });
+    vi.spyOn(limiter, 'report').mockRejectedValue(new Error('idb closed'));
+    const r = await guardedFetch(limiter, 'src', 'https://x.test/', undefined, { mode: 'poll', fetch: (async () => ok()) as unknown as typeof fetch });
+    expect(r).toMatchObject({ ok: true });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('a static path resolves against the injected app base (sub-path deploys, workers under /assets/)', async () => {
+    const seen: string[] = [];
+    const fetchImpl = (async (u: string) => { seen.push(u); return new Response('{}', { headers: { 'content-type': 'application/json' } }); }) as unknown as typeof fetch;
+    const limiter = new Limiter(new MemoryKv(), { limits: {}, now: () => T0 });
+    await guardedFetch(limiter, 'bundled', 'https://c.test/q', undefined, { mode: 'poll', fetch: fetchImpl, upstreams: { bundled: { kind: 'static', path: 'data/x.json' } }, appBase: 'https://app.test/eio/' });
+    expect(seen).toEqual(['https://app.test/eio/data/x.json']);
+    expect(applyUpstream({ kind: 'static', path: '/data/x.json' }, 'u', 'https://app.test/eio/')).toBe('https://app.test/data/x.json');
+    expect(applyUpstream({ kind: 'relay', base: 'relay' }, 'https://h/x', 'https://app.test/eio/')).toBe('https://app.test/eio/relay?url=https%3A%2F%2Fh%2Fx');
+    const prev = setAppBase('https://app.test/eio/');
+    expect(applyUpstream({ kind: 'static', path: 'a.json' }, 'u')).toBe('https://app.test/eio/a.json');
+    setAppBase(prev);
+  });
+
+  it('a static answer that is the SPA fallback (HTTP 200, text/html) is a miss', async () => {
+    const fetchImpl = (async () => new Response('<!doctype html>', { headers: { 'content-type': 'text/html; charset=utf-8' } })) as unknown as typeof fetch;
+    const limiter = new Limiter(new MemoryKv(), { limits: {}, now: () => T0 });
+    const r = await guardedFetch(limiter, 'bundled', 'https://c.test/q', undefined, { mode: 'poll', fetch: fetchImpl, upstreams: { bundled: { kind: 'static', path: '/data/nope.json' } } });
+    expect(r).toMatchObject({ ok: true });
+    expect((r as { response: Response }).response.status).toBe(404);
+  });
+});
+
+describe('lock guards', () => {
+  it('a nested acquire of the same name is rejected by maxWaitMs instead of hanging', async () => {
+    const lock = inProcessLock({ maxWaitMs: 50 });
+    await expect(lock('a', () => lock('a', async () => 1))).rejects.toThrow(/nested acquire/);
+    expect(await lock('a', async () => 'free again')).toBe('free again');
+  });
+
+  it('webLocks: a timeout aborts a request that waits too long, and webLocksAvailable tells whether the API is there', async () => {
+    const request = vi.fn((_n: string, opts: { signal: AbortSignal }, _fn: () => Promise<unknown>) => new Promise((_res, rej) => opts.signal.addEventListener('abort', () => rej(opts.signal.reason))));
+    const lock = webLocks({ request } as unknown as LockManager, { timeoutMs: 20 });
+    await expect(lock('x', async () => 1)).rejects.toThrow(/not acquired within 20 ms/);
+    expect(webLocksAvailable(null)).toBe(false);
+    expect(webLocksAvailable({} as LockManager)).toBe(true);
   });
 });
