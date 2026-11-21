@@ -4,7 +4,7 @@ import { LimitedError, Limiter } from '../../src/engine/net/limiter';
 import { LIMITS, type SourceLimit } from '../../src/engine/net/limits';
 import { inProcessLock } from '../../src/engine/net/lock';
 import { webLocks } from '../../src/engine/net/lock.browser';
-import { applyUpstream, resolveUpstream, setUpstreams } from '../../src/engine/net/upstream';
+import { applyUpstream, defaultUpstreams, resolveUpstream, setUpstreams } from '../../src/engine/net/upstream';
 import { MemoryKv, type KvStore } from '../../src/engine/store';
 
 const T0 = Date.parse('2026-11-01T10:00:00Z');
@@ -121,9 +121,17 @@ describe('the lock around the limiter state', () => {
 });
 
 describe('upstream resolver', () => {
-  it('defaults every source to direct', () => {
-    for (const s of Object.keys(LIMITS)) expect(resolveUpstream(s)).toEqual({ kind: 'direct' });
+  it('defaults the no-CORS sources to the relay and every other source (CelesTrak included) to direct', () => {
+    const relay = { kind: 'relay', base: '/relay' };
+    for (const s of ['horizons', 'spacetrack:query', 'spacetrack:login', 'spacetrack:logout', 'discos', 'mast']) expect(resolveUpstream(s)).toEqual(relay);
+    for (const s of Object.keys(LIMITS).filter((k) => !['horizons', 'discos', 'mast'].includes(k) && !k.startsWith('spacetrack:'))) expect(resolveUpstream(s)).toEqual({ kind: 'direct' });
     expect(resolveUpstream('anything')).toEqual({ kind: 'direct' });
+  });
+
+  it('defaultUpstreams takes the relay base and can route CelesTrak through the relay', () => {
+    expect(defaultUpstreams({ relayBase: 'https://r.example/relay' }).horizons).toEqual({ kind: 'relay', base: 'https://r.example/relay' });
+    expect(defaultUpstreams().celestrak).toBeUndefined();
+    expect(defaultUpstreams({ celestrakViaRelay: true }).celestrak).toEqual({ kind: 'relay', base: '/relay' });
   });
 
   it('maps a source to a relay or a static file, and rewrites the URL', () => {
@@ -153,6 +161,7 @@ describe('upstream resolver', () => {
     expect(resolveUpstream('x')).toEqual({ kind: 'static', path: '/s' });
     setUpstreams(prev);
     expect(resolveUpstream('x')).toEqual({ kind: 'direct' });
+    expect(resolveUpstream('horizons')).toEqual({ kind: 'relay', base: '/relay' });
   });
 });
 

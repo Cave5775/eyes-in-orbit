@@ -136,6 +136,12 @@ export const LIMITS: Record<string, SourceLimit> = {
     blockOn: { 403: 6 * HOUR, 429: 6 * HOUR, 503: 3 * HOUR },
     backoff: { baseMs: HOUR, maxMs: 12 * HOUR },
   },
+  // the HEAD staleness check of the same download (engine/connectors/minor-planets.ts): its own source so the GET after it is not held back by the 60 s spacing above
+  'mpcorb-head': {
+    label: 'Minor Planet Center MPCORB (HEAD)', policy: 'unpublished',
+    minSpacingMs: 5000, perHour: 4, perDay: 12, maxWaitMs: 0,
+    blockOn: { 403: 6 * HOUR, 429: 6 * HOUR, 503: 3 * HOUR },
+  },
   other: { label: 'Other hosts', policy: 'unpublished', minSpacingMs: 1000, perHour: 120 },
 };
 
