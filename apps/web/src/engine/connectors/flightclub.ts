@@ -4,9 +4,9 @@ import { syncLaunchEntities } from './launchlibrary';
 
 /**
  * The trajectory files bundled with the app (`data/trajectories/*.json|csv`, read at build time; the glob is relative to this
- * file). A file added or changed there is picked up by the next build, not while the app runs.
+ * file; `*.local.*` files are git-ignored private ones and are never bundled). A file added or changed there is picked up by the next build, not while the app runs.
  */
-const BUNDLED = import.meta.glob('../../../../../data/trajectories/*.{json,csv}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const BUNDLED = import.meta.glob(['../../../../../data/trajectories/*.{json,csv}', '!../../../../../data/trajectories/*.local.*'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
 const baseName = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 

@@ -186,7 +186,8 @@ export const issLive: Connector = {
         ctx.clock.clearTimeout(idle);
         ctx.clock.clearInterval(flush);
         ctx.hub.off('topic', onTopic);
-        try { ws.close(); } catch { /* already closed */ }
+        // a failure closes the socket as a failure; a wanted end (nobody subscribed, the feed said END) is not a failed connect
+        if (err) { try { ws.close(); } catch { /* already closed */ } } else socket.cancel();
         if (err) {
           ctx.health.note = `Lightstreamer ISSLIVE unavailable (${err.message})`;
           reject(err);

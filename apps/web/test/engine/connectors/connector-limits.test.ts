@@ -4,7 +4,7 @@ import { engineConfig, type EngineConfig } from '../../../src/engine/config';
 import { FALLBACK_AFTER_FAILURES, dsn } from '../../../src/engine/connectors/dsn';
 import { issLive } from '../../../src/engine/connectors/iss-live';
 import { ISS_POLL_MS, issRest } from '../../../src/engine/connectors/iss-rest';
-import { createLaunchlibrary, launchlibrary } from '../../../src/engine/connectors/launchlibrary';
+import { TOKEN_UNUSABLE_NOTE, createLaunchlibrary, launchlibrary } from '../../../src/engine/connectors/launchlibrary';
 import { MAX_QUERY_CHARS, normalizeQuery, searchNews, snapi } from '../../../src/engine/connectors/snapi';
 import { Http } from '../../../src/engine/http';
 import { Hub } from '../../../src/engine/hub';
@@ -71,6 +71,47 @@ describe('each connector goes through the limiter under its own source key', () 
     await vi.advanceTimersByTimeAsync(10_000);
     without.scheduler.stop();
     expect(without.inits.every((i) => !(i?.headers as Record<string, string>).authorization)).toBe(true);
+  });
+
+  it('launchlibrary: a token that makes the browser fail the request (CORS preflight) is dropped for the run, remembered, and the health note says so', async () => {
+    const preflight = (_url: string, init?: RequestInit): Response => {
+      if ((init?.headers as Record<string, string>)?.authorization) throw new TypeError('Failed to fetch');
+      return new Response(fx('ll2-2.3.0-launch.json'));
+    };
+    const { calls, inits, scheduler, hub } = setup([createLaunchlibrary({ get: async () => 'secret' })], preflight);
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    // two requests with the token (both failed), then the same two without it
+    expect(calls).toHaveLength(4);
+    expect(inits.map((i) => !!(i?.headers as Record<string, string>).authorization)).toEqual([true, true, false, false]);
+    expect(hub.launches).toHaveLength(1);
+    expect(hub.healthOf('launchlibrary').status).toBe('ok');
+    expect(hub.healthOf('launchlibrary').note).toBe(TOKEN_UNUSABLE_NOTE);
+    // the next poll does not try the token again
+    await vi.advanceTimersByTimeAsync(16 * 60_000);
+    scheduler.stop();
+    expect(calls.length).toBeGreaterThan(4);
+    expect(inits.slice(4).every((i) => !(i?.headers as Record<string, string>).authorization)).toBe(true);
+    expect(hub.healthOf('launchlibrary').note).toBe(TOKEN_UNUSABLE_NOTE);
+  });
+
+  it('launchlibrary: when the retry without the token fails as well it is a plain network failure, and the token is not blamed', async () => {
+    const { calls, scheduler, hub } = setup([createLaunchlibrary({ get: async () => 'secret' })], () => { throw new TypeError('Failed to fetch'); });
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    scheduler.stop();
+    expect(calls).toHaveLength(4);
+    expect(hub.healthOf('launchlibrary').status).toBe('error');
+    expect(hub.healthOf('launchlibrary').note ?? '').not.toContain('token');
+  });
+
+  it('launchlibrary: the exported singleton has no credential source and never sends a token (the wiring must use createLaunchlibrary)', async () => {
+    const { inits, scheduler } = setup([launchlibrary], () => new Response(fx('ll2-2.3.0-launch.json')));
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    scheduler.stop();
+    expect(inits.length).toBeGreaterThan(0);
+    expect(inits.every((i) => !(i?.headers as Record<string, string>).authorization)).toBe(true);
   });
 
   it('launchlibrary: the base URL is a config field', async () => {

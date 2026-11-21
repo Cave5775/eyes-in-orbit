@@ -228,8 +228,23 @@ export function syncLaunchEntities(hub: Hub, nowMs = Date.now()): void {
   }));
 }
 
-/** The LL2 token is read from `credentials` at every run (a token entered while the app runs is used at the next poll). */
+/** Why a browser cannot use the token, shown in the health note once a run has proven it. */
+export const TOKEN_UNUSABLE_NOTE = 'the LL2 token is not used: sending it makes the browser block the request (CORS preflight), so requests go without it';
+
+/** A request that failed before any answer: a browser reports a blocked preflight like an unreachable host (a bare TypeError). */
+const NETWORK_FAILURE = /failed to fetch|fetch failed|networkerror|load failed/i;
+const isNetworkFailure = (r: PromiseSettledResult<{ error?: string; stale: boolean }>): boolean =>
+  r.status === 'rejected' ? (r.reason as Error)?.name === 'TypeError' || NETWORK_FAILURE.test(String((r.reason as Error)?.message)) : r.value.stale && NETWORK_FAILURE.test(r.value.error ?? '');
+
+/**
+ * The LL2 connector. The wiring MUST pass the credential source: `launchlibrary` below has none and never sends a token.
+ * The token is read at every run (a token entered while the app runs is used at the next poll). Sending it adds an
+ * `authorization` header, which makes the browser send a CORS preflight; if LL2 does not allow that, every request fails with a
+ * bare TypeError. So when a run with a token fails that way, it is retried once without the token; when that works, the token is
+ * remembered as unusable (until the app restarts) and the health note says so.
+ */
 export function createLaunchlibrary(credentials?: CredentialSource): Connector {
+  let tokenBlocked = false;
   let phaseTimer: TimerHandle | undefined;
   let phaseClock: Clock | undefined;
   return {
@@ -245,8 +260,8 @@ export function createLaunchlibrary(credentials?: CredentialSource): Connector {
     },
     async run(ctx) {
       const { ll2Base } = ctx.config;
-      const ll2Token = await credentials?.get('ll2Token');
-      const headers = ll2Token ? { authorization: `Token ${ll2Token}` } : undefined;
+      const ll2Token = tokenBlocked ? undefined : await credentials?.get('ll2Token');
+      let headers: Record<string, string> | undefined = ll2Token ? { authorization: `Token ${ll2Token}` } : undefined;
       // a run that fell back to a stale copy is retried at the normal interval (it was every 5 min: up to 24 requests per hour against a limit of 15)
       const ro = { source: 'll2', mode: 'poll', staleRetryMs: POLL_MS } as const;
       const results = (text: string): Json[] => {
@@ -254,10 +269,22 @@ export function createLaunchlibrary(credentials?: CredentialSource): Connector {
         if (!Array.isArray(j.results)) throw new Error(`unexpected LL2 response: ${text.slice(0, 120)}`);
         return j.results;
       };
-      const [upcoming, previous] = await Promise.allSettled([
+      const loadBoth = () => Promise.allSettled([
         ctx.cachedFetch('ll2:upcoming', `${ll2Base}/launches/upcoming/?limit=15&mode=detailed&ordering=net`, UPCOMING_TTL_MS, results, headers, ro),
         ctx.cachedFetch('ll2:previous', `${ll2Base}/launches/previous/?limit=10&mode=detailed&ordering=-net`, PREVIOUS_TTL_MS, results, headers, ro),
       ]);
+      let [upcoming, previous] = await loadBoth();
+      if (ll2Token && (isNetworkFailure(upcoming) || isNetworkFailure(previous))) {
+        // wait out the limiter's spacing, then ask once more without the token
+        await new Promise<void>((done) => ctx.clock.setTimeout(done, 1100));
+        headers = undefined;
+        const retry = await loadBoth();
+        if (!isNetworkFailure(retry[0]) && !isNetworkFailure(retry[1])) {
+          tokenBlocked = true;
+          ctx.log(TOKEN_UNUSABLE_NOTE);
+        }
+        [upcoming, previous] = retry;
+      }
       if (upcoming.status === 'rejected') throw upcoming.reason;
       const now = Date.now();
       const byId = new Map<string, Launch>();
@@ -266,10 +293,12 @@ export function createLaunchlibrary(credentials?: CredentialSource): Connector {
       }
       ctx.hub.setLaunches([...byId.values()]);
       syncLaunchEntities(ctx.hub, now);
-      ctx.health.note = previous.status === 'rejected' ? `previous launches unavailable: ${previous.reason.message}` : undefined;
+      const notes = [tokenBlocked ? TOKEN_UNUSABLE_NOTE : undefined, previous.status === 'rejected' ? `previous launches unavailable: ${previous.reason.message}` : undefined].filter(Boolean);
+      ctx.health.note = notes.length ? notes.join('; ') : undefined;
       ctx.log(`${byId.size} launches`);
     },
   };
 }
 
+/** No credential source: for tests and tooling that never use a token. The app wires `createLaunchlibrary(credentials)`. */
 export const launchlibrary: Connector = createLaunchlibrary();
