@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readBackoff } from '../../../src/engine/backoff';
-import { FAILED_LOGIN_WAIT_MS, NEEDS_CREDENTIALS, STARLINK_QUERY, createSpacetrack, fetchSpaceTrackGp } from '../../../src/engine/connectors/spacetrack';
+import { readBackoff, recordFailure } from '../../../src/engine/backoff';
+import { CLEAR_BLOCK_EVERY_MS, Credentials } from '../../../src/engine/credentials';
+import { FAILED_LOGIN_WAIT_MS, NEEDS_CREDENTIALS, SPACETRACK_SOURCE, STARLINK_QUERY, createSpacetrack, fetchSpaceTrackGp, isSafeRelayBase } from '../../../src/engine/connectors/spacetrack';
 import type { CredentialSource } from '../../../src/engine/connectors/types';
 import { Hub } from '../../../src/engine/hub';
 import { Http } from '../../../src/engine/http';
@@ -58,8 +59,8 @@ describe('fetchSpaceTrackGp (through the relay)', () => {
     expect(f.calls).toHaveLength(0);
   });
 
-  it('turns a rejected login (HTTP 401, or the Login Failed body at HTTP 200) into an error without the password, and blocks for 6 h', async () => {
-    for (const answer of [{ status: 401, body: 'unauthorised' }, { status: 200, body: '{"Login":"Failed"}' }]) {
+  it('turns the relay rejected-login answer (401, stage "login") into an error without the password, and blocks for 6 h', async () => {
+    for (const answer of [{ status: 401, body: '{"stage":"login","error":"login failed"}' }]) {
       let t = T0;
       const l = lim(() => t);
       const f = fakeRelay(answer);
@@ -71,6 +72,29 @@ describe('fetchSpaceTrackGp (through the relay)', () => {
       await expect(fetchSpaceTrackGp(l, 'me', 'hunter2', { fetch: f.impl, upstreams })).rejects.toBeInstanceOf(LimitedError);
       expect(f.calls).toHaveLength(1);
     }
+  });
+
+  it('only a 401 with stage "login" is a bad login: other 401s, 502 and 504 are transient errors that do not block for 6 h', async () => {
+    for (const answer of [
+      { status: 401, body: 'unauthorised' }, { status: 401, body: '{"stage":"query","error":"x"}' },
+      { status: 502, body: '{"stage":"login","error":"upstream failure"}' }, { status: 504, body: '{"stage":"query","error":"upstream timed out"}' },
+    ]) {
+      const l = lim();
+      const err = (await fetchSpaceTrackGp(l, 'me', 'secret', { fetch: fakeRelay(answer).impl, upstreams }).catch((e: Error) => e)) as Error;
+      expect(err.message).toMatch(new RegExp(`HTTP ${answer.status} for Space-Track query`));
+      expect(err.message).not.toMatch(/login failed/);
+      expect((await l.status('spacetrack:query'))!.blockedUntil).toBeUndefined();
+      expect((await l.status('spacetrack:login'))?.blockedUntil).toBeUndefined();
+    }
+  });
+
+  it('refuses a cross-origin http: relay and accepts a same-origin path or https:', async () => {
+    expect(isSafeRelayBase('/relay')).toBe(true);
+    expect(isSafeRelayBase('https://relay.example/r')).toBe(true);
+    for (const bad of ['http://relay.example/r', '//relay.example/r', 'ftp://x', 'relay']) expect(isSafeRelayBase(bad)).toBe(false);
+    const f = fakeRelay();
+    await expect(fetchSpaceTrackGp(lim(), 'a', 'b', { fetch: f.impl, upstreams: defaultUpstreams({ relayBase: 'http://relay.example/r' }) })).rejects.toThrow(/same-origin or https/);
+    expect(f.calls).toHaveLength(0);
   });
 
   it('an upstream failure (502) is an error naming the status, with the password scrubbed from the excerpt', async () => {
@@ -153,5 +177,30 @@ describe('spacetrack connector', () => {
   it('with nothing cached a failed download throws', async () => {
     const s = setup(creds({ spacetrackUser: 'u', spacetrackPassword: 'p' }), { status: 502, body: 'bad gateway' });
     await expect(s.connector.run!(s.ctx as never)).rejects.toThrow(/HTTP 502/);
+  });
+});
+
+describe('saving Space-Track credentials', () => {
+  it('lifts the failed-login block and the connector gate, but a second save inside the hour leaves a new block in place', async () => {
+    const c = { t: T0 };
+    const store = new MemoryKv();
+    const limiter = new Limiter(store, { limits: LIMITS, now: () => c.t });
+    const creds = new Credentials({ store, limiter });
+    const blockBoth = async () => { for (const s of ['spacetrack:login', SPACETRACK_SOURCE]) await limiter.block(s, 6 * 3600_000, 'failed login', 'failure'); };
+    await blockBoth();
+    await recordFailure(store, 'spacetrack', new Error('HTTP 502 for Space-Track query'), c.t);
+    expect(await readBackoff(store, 'spacetrack')).toBeDefined();
+    // the keys the credentials module clears are the ones the connector uses
+    await creds.update({ spacetrackPassword: 'one' });
+    for (const s of ['spacetrack:login', SPACETRACK_SOURCE]) expect((await limiter.state(s)).blockedUntil).toBeUndefined();
+    expect(await readBackoff(store, 'spacetrack')).toBeUndefined();
+    await blockBoth(); // the bad account failed again
+    c.t += 10 * 60_000;
+    await creds.update({ spacetrackPassword: 'two' });
+    expect((await limiter.state('spacetrack:login')).blockedUntil).toBeGreaterThan(c.t);
+    c.t += CLEAR_BLOCK_EVERY_MS;
+    await creds.update({ spacetrackPassword: 'three' });
+    expect((await limiter.state('spacetrack:login')).blockedUntil).toBeUndefined();
+    expect((await limiter.state(SPACETRACK_SOURCE)).blockedUntil).toBeUndefined();
   });
 });

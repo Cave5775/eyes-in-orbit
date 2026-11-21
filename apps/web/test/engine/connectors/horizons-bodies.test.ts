@@ -245,8 +245,6 @@ describe('recorded Horizons responses (2026-10-29)', () => {
     const plutoErr = err('PLUTO', pluto, 0);
     const ceresErr = err('CERES', ceres, 0);
     const ioErr = err('IO', io, 0);
-    // eslint-disable-next-line no-console
-    console.log(`fallback error vs Horizons @ ${new Date(jup[0][0]).toISOString()}: Mars ${marsErr.toExponential(2)} km, Jupiter ${jupErr.toExponential(2)} km, Pluto ${plutoErr.toExponential(2)} km, Ceres ${ceresErr.toExponential(2)} km, Io (arbitrary phase) ${ioErr.toExponential(2)} km`);
     // Mars: the registry's Kepler orbit is a mean-element circle-ish fit (about a degree)
     expect(marsErr).toBeLessThan(2e6);
     expect(jupErr).toBeLessThan(1e7); // Standish table 1 near 2026: a fraction of a degree

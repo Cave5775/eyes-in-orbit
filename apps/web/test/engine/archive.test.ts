@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { ARCHIVE_IMAGE_CAP, archiveOf, mastTargetOf } from '@eio/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   ArchiveImagesService, PER_DAY_CAP, TTL_MS, WINDOW_YEARS, mastUrl, mjdToMs, msToMjd, parseMast, portalUrl, previewUrl, selectImages, type MastRow,
 } from '../../src/engine/archive';
@@ -8,9 +8,15 @@ import { isBackedOff, readBackoff } from '../../src/engine/backoff';
 import { Http } from '../../src/engine/http';
 import { Limiter } from '../../src/engine/net/limiter';
 import { sourceForUrl } from '../../src/engine/net/limits';
+import { setUpstreams, type UpstreamTable } from '../../src/engine/net/upstream';
 import { MemoryKv } from '../../src/engine/store';
 
 // the real captured answers are the server's fixtures (kept in one place)
+// these tests read the MAST URL the service builds, so they run against the direct route (the relay default is tested in net.test.ts)
+let previousUpstreams: UpstreamTable;
+beforeAll(() => { previousUpstreams = setUpstreams({}); });
+afterAll(() => { setUpstreams(previousUpstreams); });
+
 const fx = (name: string): string => readFileSync(new URL(`../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
 // real Mast.Caom.Filtered answers captured 2026-11-16 with the shipped query (mastUrl: JUPITER, t_min >= MJD 59899, i.e. now minus 4 years), whole records deleted to ~60
 const HST = fx('mast-caom-hst-jupiter.json');

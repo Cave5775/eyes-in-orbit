@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { launchIdFromCospar } from '@eio/core';
 import { backoffKey, readBackoff } from '../../../src/engine/backoff';
-import { AMATEUR_GROUP, DEBRIS_GROUPS, NAV_GROUPS, celestrakUrl, createCelestrak, normalizeCelestrak, parseOmmJson, satKind } from '../../../src/engine/connectors/celestrak';
+import { AMATEUR_GROUP, DEBRIS_GROUPS, NAV_GROUPS, OPAQUE_GATE_MS, celestrakUrl, createCelestrak, isOpaqueFailure, normalizeCelestrak, parseOmmJson, satKind } from '../../../src/engine/connectors/celestrak';
 import { Http } from '../../../src/engine/http';
 import { Limiter } from '../../../src/engine/net/limiter';
 import { defaultUpstreams, setUpstreams, type UpstreamTable } from '../../../src/engine/net/upstream';
@@ -297,6 +297,46 @@ describe('celestrak connector run', () => {
     const ctx = fakeCtx();
     ctx.cachedFetch = (async () => { throw new Error('HTTP 403'); }) as never;
     await expect(fast.run!(ctx as never)).rejects.toThrow(/stations: HTTP 403/);
+  });
+
+  it('a hidden (CORS) failure earns only the short gate, stops the run after one request and never a 30 min to 12 h backoff', async () => {
+    const ctx = fakeCtx();
+    ctx.cachedFetch = (async (key: string, url: string) => {
+      ctx.calls.push({ key, url });
+      throw new TypeError('Failed to fetch');
+    }) as never;
+    await expect(fast.run!(ctx as never)).rejects.toThrow(/Failed to fetch/);
+    expect(ctx.calls).toHaveLength(1);
+    const gate = (await readBackoff(ctx.store, 'celestrak:stations'))!;
+    expect(gate.failures).toBe(1);
+    expect(gate.notBefore - Date.now()).toBeLessThanOrEqual(OPAQUE_GATE_MS);
+    expect(gate.notBefore - Date.now()).toBeGreaterThan(OPAQUE_GATE_MS - 5000);
+    // a second hidden failure does not escalate
+    await ctx.store.put(backoffKey('celestrak:stations'), { failures: 1, notBefore: 1 }, 1e9);
+    await expect(fast.run!(ctx as never)).rejects.toThrow();
+    expect((await readBackoff(ctx.store, 'celestrak:stations'))!.failures).toBe(1);
+    expect(isOpaqueFailure('Failed to fetch')).toBe(true);
+    expect(isOpaqueFailure('HTTP 403 for https://celestrak.org/x')).toBe(false);
+    expect(isOpaqueFailure('fetch failed (UND_ERR_CONNECT_TIMEOUT)')).toBe(false);
+  });
+
+  it('switching the route (direct <-> relay) clears the per-group gates; staying on the same route keeps them', async () => {
+    const prev = setUpstreams({});
+    try {
+      const ctx = fakeCtx();
+      const gate = { failures: 3, notBefore: Date.now() + 3600_000, message: 'HTTP 403' };
+      await fast.run!(ctx as never); // first run records the route: direct
+      await ctx.store.put(backoffKey('celestrak:starlink'), gate, 1e9);
+      await fast.run!(ctx as never);
+      expect(await readBackoff(ctx.store, 'celestrak:starlink')).toMatchObject({ failures: 3 }); // same route: kept
+      setUpstreams(defaultUpstreams({ celestrakViaRelay: true }));
+      ctx.calls.length = 0;
+      await fast.run!(ctx as never);
+      expect(await readBackoff(ctx.store, 'celestrak:starlink')).toBeUndefined();
+      expect(ctx.calls.map((c) => c.key)).toContain('celestrak:starlink'); // and the group is requested again
+    } finally {
+      setUpstreams(prev);
+    }
   });
 
   const connectTimeout = new Error('fetch failed (UND_ERR_CONNECT_TIMEOUT)');

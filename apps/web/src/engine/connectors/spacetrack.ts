@@ -2,7 +2,7 @@ import type { Omm } from '@eio/core';
 import { clearBackoff, isBackedOff, readBackoff, recordFailure } from '../backoff';
 import { guardedFetch } from '../net/guarded-fetch';
 import { LimitedError, hhmmz, type Limiter } from '../net/limiter';
-import { resolveUpstream, type UpstreamTable } from '../net/upstream';
+import { applyUpstream, resolveUpstream, type UpstreamTable } from '../net/upstream';
 import type { Connector } from '../scheduler';
 import { isFresh } from '../store';
 import { parseOmmJson, satelliteEntity } from './celestrak';
@@ -23,6 +23,18 @@ export const FAILED_LOGIN_WAIT_MS = 6 * 3600_000;
 export const NEEDS_CREDENTIALS =
   'Needs a Space-Track username and password (free account at space-track.org, set in the credentials panel) to fetch Starlink elements as a second source next to CelesTrak.';
 
+/** Only the same origin (a relative base) or https: may carry credentials; a cross-origin http: relay would send them in the clear. */
+export function isSafeRelayBase(base: string): boolean {
+  if (base.startsWith('/') && !base.startsWith('//')) return true;
+  try { return new URL(base).protocol === 'https:'; } catch { return false; }
+}
+
+/** Is this the relay's bad-login answer? (401 with a JSON body whose `stage` is "login") */
+const isBadLogin = (status: number, text: string): boolean => {
+  if (status !== 401) return false;
+  try { return (JSON.parse(text) as { stage?: unknown }).stage === 'login'; } catch { return false; }
+};
+
 /**
  * Space-Track cannot be called from a browser: its login sets a cross-site session cookie and its answers carry no CORS headers.
  * The stateless relay does login, one query and logout in a single call, `POST <relayBase>/spacetrack` with the JSON body
@@ -31,8 +43,13 @@ export const NEEDS_CREDENTIALS =
  *
  * The relay base comes from the upstream table (`resolveUpstream('spacetrack:query')`, kind `relay`); any other kind is an error,
  * because the credentials must never go anywhere but the relay. The call is one request of the `spacetrack:query` limit (one per 2 h);
- * a failed login (HTTP 401, or the `{"Login":"Failed"}` body Space-Track answers with HTTP 200) blocks login and query for 6 h. The password
- * is never put into an error message.
+ * a failed login is ONLY a 401 whose JSON body says `"stage":"login"` (the relay's answer for a rejected login) and blocks login and query for 6 h;
+ * every other answer (401 without that stage, 502 and 504 with a stage, anything else) is a transient error. The password is never put into an
+ * error message.
+ *
+ * The attempt is counted when it is sent (the limiter persists it before the request), so a relay 502/504 still uses the 2 h query slot:
+ * refunding it would break the "attempt recorded before the request" rule, and a retry soon after an outage is what Space-Track's per-account
+ * lockouts punish. The connector's own gate (`backoff:spacetrack`) then waits 30 min and more before the next try.
  */
 export async function fetchSpaceTrackGp(
   limiter: Limiter, user: string, password: string, opts: { fetch?: typeof fetch; query?: string; upstreams?: UpstreamTable } = {},
@@ -40,7 +57,9 @@ export async function fetchSpaceTrackGp(
   const query = opts.query ?? STARLINK_QUERY;
   const upstream = resolveUpstream(SPACETRACK_SOURCE, opts.upstreams);
   if (upstream.kind !== 'relay') throw new Error('Space-Track is only reachable through the relay (no CORS headers, cookie login); no relay is configured');
-  const url = `${upstream.base.replace(/\/+$/, '')}/spacetrack`;
+  if (!isSafeRelayBase(upstream.base)) throw new Error('Space-Track credentials go only to a same-origin or https: relay');
+  // a relative base resolves against the app root like every relay call (`setAppBase`)
+  const url = applyUpstream({ kind: 'static', path: `${upstream.base.replace(/\/+$/, '')}/spacetrack` }, '', undefined);
   // a failed login's block and the query's own limit (one per 2 h) are checked before anything is sent, so a refused query never costs a login
   for (const source of ['spacetrack:login', SPACETRACK_SOURCE]) {
     const gate = await limiter.peek(source, 'poll');
@@ -54,7 +73,7 @@ export async function fetchSpaceTrackGp(
   }, { mode: 'poll', fetch: opts.fetch, upstreams: { [SPACETRACK_SOURCE]: { kind: 'direct' } } });
   if ('limited' in r) throw new LimitedError(SPACETRACK_SOURCE, r.retryAt, r.reason, r.kind, r.blockKind);
   const text = await r.response.text();
-  if (r.response.status === 401 || /"Login"\s*:\s*"Failed"/i.test(text)) {
+  if (isBadLogin(r.response.status, text)) {
     // a rejected login is retried only after 6 h, whatever the poll interval; new credentials lift it
     await limiter.block('spacetrack:login', FAILED_LOGIN_WAIT_MS, 'failed login', 'failure');
     await limiter.block(SPACETRACK_SOURCE, FAILED_LOGIN_WAIT_MS, 'failed login', 'failure');

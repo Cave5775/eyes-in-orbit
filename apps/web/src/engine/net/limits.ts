@@ -75,7 +75,9 @@ export const LIMITS: Record<string, SourceLimit> = {
   horizons: {
     label: 'JPL Horizons', policy: 'unpublished (HTTP 503 = overloaded)',
     minSpacingMs: 1500, perHour: 120,
-    blockOn: { 503: 15 * MIN, 429: 15 * MIN },
+    // the relay passes Horizons' 429/503 through and answers 502/504 itself when Horizons is unreachable or slow; a longer Retry-After
+    // (exposed by the relay) wins over these floors
+    blockOn: { 503: 15 * MIN, 429: 15 * MIN, 502: 15 * MIN, 504: 15 * MIN },
   },
   // https://wheretheiss.at/w/developer : about one request per second
   wheretheiss: {
@@ -129,8 +131,8 @@ export const LIMITS: Record<string, SourceLimit> = {
     blockOn: { 429: 15 * MIN, 503: 15 * MIN },
     backoff: { baseMs: MIN, maxMs: HOUR, statuses: [500, 502, 503, 504] },
   },
-  // Minor Planet Center MPCORB (engine/connectors/minor-planets.ts): one ~70 MB gz download a month (cache TTL 30 days, conditional
-  // request), so 2 attempts an hour is far more than needed; 403/429/503 block for hours, failures back off from 1 h to 12 h
+  // Minor Planet Center MPCORB (engine/connectors/minor-planets.ts): one ~70 MB gz download a month (cache TTL 30 days, a HEAD
+  // on Last-Modified decides whether it is needed), so 2 attempts an hour is far more than needed; 403/429/503 block for hours, failures back off from 1 h to 12 h
   mpcorb: {
     label: 'Minor Planet Center MPCORB', policy: 'unpublished (https://www.minorplanetcenter.net/iau/MPCORB.html: the file is updated daily, software may include it with the header and credit)',
     minSpacingMs: 60_000, perHour: 2, perDay: 6, maxWaitMs: 0, opaqueIsAnswer: true,

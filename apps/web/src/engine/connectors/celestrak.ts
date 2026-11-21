@@ -1,8 +1,10 @@
 import { FERMI_NORAD, HUBBLE_NORAD, SPACE_OBSERVATORY_META, XMM_NORAD, observatoryAttrs, type Omm, type StreamLink } from '@eio/core';
-import { clearBackoff, isBackedOff, isBlockError, isConnectError, readBackoff, recordFailure } from '../backoff';
+import { backoffKey, clearBackoff, isBackedOff, isBlockError, isConnectError, readBackoff, recordFailure, type Backoff } from '../backoff';
 import type { NewEntity } from '../hub';
 import { LimitedError } from '../net/limiter';
+import { resolveUpstream } from '../net/upstream';
 import type { Connector, ConnectorContext } from '../scheduler';
+import type { KvStore } from '../store';
 
 /**
  * Fragmentation-event debris clouds. GROUP names verified against the CelesTrak index page
@@ -150,6 +152,31 @@ async function localGroup(ctx: ConnectorContext, group: SatGroup): Promise<Omm[]
  */
 export const celestrakUrl = (group: SatGroup): string => `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=json`;
 
+/**
+ * A failure the browser hides: a bare `TypeError` ("Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource")
+ * with no status. It may be a CDN block without CORS headers, but also a captive portal, an ad blocker or a lost network, so it earns only
+ * a short gate (`OPAQUE_GATE_MS`, no escalation), never the 30 min to 12 h schedule of a failure that was read.
+ */
+export const isOpaqueFailure = (message: string): boolean => /^(TypeError: )?(Failed to fetch|Load failed|NetworkError when attempting to fetch resource.?)$/i.test(message.trim());
+export const OPAQUE_GATE_MS = 5 * 60_000;
+
+/** The kind of upstream (direct or relay) the stored per-group gates were earned under. */
+const UPSTREAM_KEY = 'celestrak-upstream';
+
+/** Drop every per-group gate (`backoff:celestrak:<group>`): the upstream changed, so an earlier failure says nothing about the new route. */
+export async function clearCelestrakBackoffs(store: KvStore): Promise<void> {
+  for (const g of FETCH_ORDER) await clearBackoff(store, `${CELESTRAK_CACHE_PREFIX}${g}`);
+}
+
+/** Count a failed group: a hidden failure gets the short gate, anything else the normal backoff. Returns the new gate. */
+async function failGroup(store: KvStore, source: string, err: unknown): Promise<Backoff> {
+  const message = err instanceof Error ? err.message : String(err);
+  if (!isOpaqueFailure(message)) return recordFailure(store, source, err);
+  const gate: Backoff = { failures: 1, notBefore: Date.now() + OPAQUE_GATE_MS, message };
+  await store.put(backoffKey(source), gate, 2 * 3600_000);
+  return gate;
+}
+
 const hhmm = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
 
 /**
@@ -169,6 +196,13 @@ export function createCelestrak(): Connector {
       let retryAt = Infinity;
       /** set by the first block or connect error (or a stored connect-error gate): the rest of the run stays off the network */
       let halt: string | undefined;
+      // a gate earned on the other route (direct <-> relay) does not apply to this one
+      const kind = resolveUpstream('celestrak').kind;
+      const was = (await ctx.store.get<string>(UPSTREAM_KEY))?.value;
+      if (was !== kind) {
+        if (was !== undefined) await clearCelestrakBackoffs(ctx.store);
+        await ctx.store.put(UPSTREAM_KEY, kind, 10 * 365 * 86_400_000);
+      }
       for (const group of FETCH_ORDER) {
         const source = `${CELESTRAK_CACHE_PREFIX}${group}`;
         if (halt) {
@@ -205,12 +239,12 @@ export function createCelestrak(): Connector {
             halt = `${group} is rate limited`;
           } else if (res.stale) {
             // cachedFetch fell back to an old entry because the download failed
-            const next = await recordFailure(ctx.store, source, res.error ?? 'download failed');
+            const next = await failGroup(ctx.store, source, res.error ?? 'download failed');
             retryAt = Math.min(retryAt, next.notBefore);
             const local = await localGroup(ctx, group);
             if (local) groups[group] = local;
             degraded.push(`${group}: ${res.error ?? 'download failed'}, using cache`);
-            if (isBlockError(res.error ?? '')) halt = `${group} failed`;
+            if (isBlockError(res.error ?? '') || isOpaqueFailure(res.error ?? '')) halt = `${group} failed`;
           } else await clearBackoff(ctx.store, source);
         } catch (err) {
           if (err instanceof LimitedError) {
@@ -219,10 +253,10 @@ export function createCelestrak(): Connector {
             halt = `${group} is rate limited`;
             continue;
           }
-          const next = await recordFailure(ctx.store, source, err);
+          const next = await failGroup(ctx.store, source, err);
           retryAt = Math.min(retryAt, next.notBefore);
           give(await localGroup(ctx, group), (err as Error).message);
-          if (isBlockError((err as Error).message ?? '')) halt = `${group} failed`;
+          if (isBlockError((err as Error).message ?? '') || isOpaqueFailure((err as Error).message ?? '')) halt = `${group} failed`;
         }
       }
       const skippedNote = skipped.length ? `skipped ${skipped.length} group${skipped.length === 1 ? '' : 's'} (${halt}): ${skipped.join(', ')}` : '';
