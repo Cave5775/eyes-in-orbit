@@ -1,0 +1,611 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  BodyProvider, BodyRegistry, bodyEntityRecords, bodyOf, entityRank, isBodyEntity, isOrbitable, bodyPeriodSec, bodyStateEci, bodyStateInParent, defaultBodies, precessDir, providerFromSpec,
+  setBodyStream, DEG, type Sample,
+} from '@eio/core';
+import { engineConfig } from '../../../src/engine/config';
+import { Scheduler } from '../../../src/engine/scheduler';
+import {
+  BODY_TARGETS, activeBodyTargets, MOON_STEPS_OVERRIDE, MOON_STEPS_PER_REV, MOON_WINDOW_STEPS, bodyCacheKey, bodyUrl, horizonsBodies, moonTarget, targetRows,
+} from '../../../src/engine/connectors/horizons-bodies';
+import { parseHorizonsVectors } from '../../../src/engine/connectors/horizons';
+import { J2000_MS } from '@eio/core';
+import { Http } from '../../../src/engine/http';
+import { Hub } from '../../../src/engine/hub';
+import { Limiter } from '../../../src/engine/net/limiter';
+import { applyUpstream, defaultUpstreams, resolveUpstream, setUpstreams } from '../../../src/engine/net/upstream';
+import { MemoryKv } from '../../../src/engine/store';
+
+// trimmed real Horizons responses, shared with the server's tests by path
+const fixture = (name: string) => readFileSync(join(__dirname, '../../../../server/test/fixtures', name), 'utf8');
+const NOW = Date.parse('2026-10-29T11:30:00Z');
+const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+describe('horizons-bodies targets', () => {
+  const byBody = Object.fromEntries(BODY_TARGETS.map((t) => [t.bodyId, t]));
+
+  it('has exactly one target per registry body except the Sun, Earth and the Moon', () => {
+    const want = defaultBodies.all().map((b) => b.id).filter((id) => !['SUN', 'EARTH', 'MOON'].includes(id)).sort();
+    expect(BODY_TARGETS.map((t) => t.bodyId).sort()).toEqual(want);
+    expect(want).toHaveLength(59);
+  });
+
+  it('centres each body on its parent and states the vectors in the parent inertial frame', () => {
+    // Didymos: Horizons' own SPK id of the system barycentre (20065803), the centre of Dimorphos (an asteroid has no NAIF body id)
+    const naif: Record<string, string> = { SUN: '10', MARS: '499', JUPITER: '599', SATURN: '699', URANUS: '799', NEPTUNE: '899', PLUTO: '999', DIDYMOS: '20065803' };
+    for (const t of BODY_TARGETS) {
+      const parent = defaultBodies.get(t.bodyId).parentId!;
+      expect(t.frame, t.bodyId).toBe(`${parent}:inertial`);
+      expect(t.center, t.bodyId).toBe(`500@${naif[parent]}`);
+    }
+  });
+
+  it('table: command id, centre, step and window for representative targets', () => {
+    expect(byBody.MERCURY).toMatchObject({ horizons: '199', center: '500@10', frame: 'SUN:inertial', stepMin: 2880, pastDays: 365, futureDays: 365 });
+    expect(byBody.JUPITER).toMatchObject({ horizons: '599', center: '500@10', frame: 'SUN:inertial', stepMin: 28_800 });
+    expect(byBody.NEPTUNE).toMatchObject({ horizons: '899', center: '500@10', frame: 'SUN:inertial', stepMin: 86_400 });
+    expect(byBody.CERES).toMatchObject({ horizons: '1;', center: '500@10', stepMin: 14_400 });
+    expect(byBody.PLUTO).toMatchObject({ horizons: '999', center: '500@10', frame: 'SUN:inertial' });
+    expect(byBody.IO).toMatchObject({ horizons: '501', center: '500@599', frame: 'JUPITER:inertial', stepMin: 105 });
+    expect(byBody.PHOBOS).toMatchObject({ horizons: '401', center: '500@499', frame: 'MARS:inertial' });
+    expect(byBody.TITAN).toMatchObject({ horizons: '606', center: '500@699', frame: 'SATURN:inertial' });
+    expect(byBody.TRITON).toMatchObject({ horizons: '801', center: '500@899', frame: 'NEPTUNE:inertial' });
+    expect(byBody.CHARON).toMatchObject({ horizons: '901', center: '500@999', frame: 'PLUTO:inertial' });
+    // the NAIF ids of the Uranus moons are not in order of distance (Ariel 701 ... Miranda 705)
+    expect([byBody.MIRANDA, byBody.ARIEL, byBody.OBERON].map((t) => t.horizons)).toEqual(['705', '701', '704']);
+  });
+
+  it('the smaller moons: NAIF command ids (checked against Horizons 2026-11-17), parent centres, 401 rows', () => {
+    const want: Record<string, [string, string]> = {
+      AMALTHEA: ['505', '599'], THEBE: ['514', '599'], HIMALIA: ['506', '599'],
+      HYPERION: ['607', '699'], PHOEBE: ['609', '699'], JANUS: ['610', '699'], EPIMETHEUS: ['611', '699'],
+      PUCK: ['715', '799'],
+      NEREID: ['802', '899'], DESPINA: ['805', '899'], GALATEA: ['806', '899'], LARISSA: ['807', '899'], PROTEUS: ['808', '899'],
+      NIX: ['902', '999'], HYDRA: ['903', '999'],
+    };
+    for (const [id, [cmd, planet]] of Object.entries(want)) {
+      expect(byBody[id], id).toMatchObject({ horizons: cmd, center: `500@${planet}`, frame: `${defaultBodies.get(id).parentId}:inertial` });
+      expect(Math.abs(targetRows(byBody[id]) - (2 * MOON_WINDOW_STEPS + 1)), id).toBeLessThanOrEqual(1);
+    }
+    expect(Object.keys(want)).toHaveLength(15);
+    expect(BODY_TARGETS).toHaveLength(59);
+    // the three moons of an eccentric or far orbit are sampled finer than the default 24 steps per revolution
+    expect(MOON_STEPS_OVERRIDE).toEqual({ NEREID: 240, HIMALIA: 48, PHOEBE: 48, HYPERION: 36 });
+    expect(byBody.NEREID.stepMin).toBe(2160); // 360 d / 240 = 36 h
+    expect(byBody.AMALTHEA.stepMin).toBe(30);
+  });
+
+  it('request volume: one request per target, 59 per refresh (a refresh uses the 24 h cache, so about 59 a day), 1.5 s apart: about 90 s of requests', () => {
+    expect(BODY_TARGETS.length).toBe(59);
+    expect(BODY_TARGETS.length * 1.5).toBeLessThan(90);
+  });
+
+  it('keeps every response under 150 kB: at most 600 rows (about 210 bytes each in the JSON), moons 401', () => {
+    for (const t of BODY_TARGETS) {
+      expect(targetRows(t), t.bodyId).toBeLessThanOrEqual(600);
+      expect(targetRows(t) * 210, t.bodyId).toBeLessThan(150_000);
+    }
+    for (const t of BODY_TARGETS.filter((x) => defaultBodies.get(x.bodyId).parentId !== 'SUN')) {
+      expect(Math.abs(targetRows(t) - (2 * MOON_WINDOW_STEPS + 1)), t.bodyId).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('samples a moon 24 times per revolution, so n h = 0.26 rad and a window of 8 revolutions each side', () => {
+    for (const t of BODY_TARGETS.filter((x) => defaultBodies.get(x.bodyId).parentId !== 'SUN')) {
+      const period = bodyPeriodSec(defaultBodies.get(t.bodyId))! / 60; // minutes
+      const stepsPerRev = period / t.stepMin;
+      const want = MOON_STEPS_OVERRIDE[t.bodyId] ?? MOON_STEPS_PER_REV;
+      expect(stepsPerRev, t.bodyId).toBeGreaterThan(want - 2 - want / 12);
+      expect(stepsPerRev, t.bodyId).toBeLessThan(want + 4 + 5 / t.stepMin * want + want / 12); // 5 min rounding, Phobos steps are 20 min
+      expect((t.pastDays * 1440) / t.stepMin, t.bodyId).toBeCloseTo(MOON_WINDOW_STEPS, 6);
+    }
+    expect(moonTarget('IO', '501', '599').stepMin).toBe(105);
+  });
+
+  it('Hermite error budget: R (n h)^4 / 384 stays under 1.5e-5 of the orbit radius for moons and under 100 km for the planets', () => {
+    for (const t of BODY_TARGETS) {
+      const b = defaultBodies.get(t.bodyId);
+      const n = (2 * Math.PI) / bodyPeriodSec(b)!; // rad/s
+      const h = t.stepMin * 60;
+      const err = (b.orbit!.a * (n * h) ** 4) / 384;
+      const moon = b.parentId !== 'SUN';
+      if (moon) expect(err / b.orbit!.a, t.bodyId).toBeLessThan(1.5e-5);
+      else expect(err, t.bodyId).toBeLessThan(120);
+      expect(err, t.bodyId).toBeLessThan(b.radiusKm * 0.1 + 5); // under a tenth of the body radius (Phobos 11 km: 6 km)
+    }
+  });
+
+  it('builds the Horizons query: body centre command, VECTORS, ICRF plane, hour-aligned window', () => {
+    const p = new URL(bodyUrl(byBody.JUPITER, NOW)).searchParams;
+    expect(p.get('COMMAND')).toBe("'599'");
+    expect(p.get('CENTER')).toBe("'500@10'");
+    expect(p.get('EPHEM_TYPE')).toBe('VECTORS');
+    expect(p.get('REF_PLANE')).toBe('FRAME');
+    expect(p.get('STEP_SIZE')).toBe("'28800 m'");
+    expect(p.get('START_TIME')).toBe("'2022-10-29 11:00'");
+    expect(p.get('STOP_TIME')).toBe("'2030-10-29 11:00'");
+    expect(p.get('VEC_TABLE')).toBe('2');
+    expect(p.get('OUT_UNITS')).toBe('KM-S');
+    expect(bodyCacheKey(byBody.IO)).toBe('horizons-bodies:v1:501:500@599:105m:-14.583333333333334d+14.583333333333334d');
+    expect(new URL(bodyUrl(byBody.CERES, NOW)).searchParams.get('COMMAND')).toBe("'1;'");
+  });
+});
+
+describe('recorded Horizons responses (2026-10-29)', () => {
+  const jup = parseHorizonsVectors(fixture('horizons-body-jupiter.json'));
+  const io = parseHorizonsVectors(fixture('horizons-body-io.json'));
+  const pluto = parseHorizonsVectors(fixture('horizons-body-pluto.json'));
+  const mars = parseHorizonsVectors(fixture('horizons-body-mars.json'));
+  const ceres = parseHorizonsVectors(fixture('horizons-body-ceres.json'));
+  const AU = 149_597_870.7;
+  const norm = (s: number[], o = 1) => Math.hypot(s[o], s[o + 1], s[o + 2]);
+
+  it('parses the heliocentric Jupiter, Pluto, Mars and Ceres tables and the Jupiter-centred Io table', () => {
+    expect(jup).toHaveLength(5);
+    expect(jup[1][0] - jup[0][0]).toBeCloseTo(20 * 86_400_000, -2);
+    for (const s of jup) {
+      expect(norm(s) / AU).toBeGreaterThan(4.9); // Jupiter 4.95 .. 5.46 AU
+      expect(norm(s) / AU).toBeLessThan(5.5);
+      expect(norm(s, 4)).toBeGreaterThan(12); // 12 .. 13.7 km/s
+      expect(norm(s, 4)).toBeLessThan(14);
+    }
+    expect(io).toHaveLength(37);
+    expect(io[1][0] - io[0][0]).toBe(120 * 60_000);
+    for (const s of io) {
+      expect(norm(s)).toBeGreaterThan(4.1e5); // Io, a = 421,800 km, e = 0.004
+      expect(norm(s)).toBeLessThan(4.3e5);
+      expect(norm(s, 4)).toBeGreaterThan(17); // 17.3 km/s
+      expect(norm(s, 4)).toBeLessThan(17.6);
+    }
+    expect(pluto.every((s) => norm(s) / AU > 30 && norm(s) / AU < 40)).toBe(true);
+    expect(ceres).toHaveLength(7);
+    expect(ceres.every((s) => norm(s) / AU > 2.5 && norm(s) / AU < 3.0)).toBe(true);
+    expect(mars).toHaveLength(2);
+  });
+
+  it('parses the recorded tables of the smaller moons (2026-11-17, 1 d steps) and they sit where the registry orbit says, within 5 %', () => {
+    const planetOf = (id: string) => defaultBodies.get(id).parentId!;
+    // Nix and Hydra are centred on Pluto (500@999), not the Pluto-Charon barycentre: Pluto wobbles about it by about 2100 km, which
+    // is 4 % of Nix's orbit radius, so their distances sit close to the 5 % margin and the margin cannot be tightened
+    for (const id of ['hyperion', 'himalia', 'nereid', 'nix', 'hydra', 'puck', 'amalthea', 'phoebe', 'larissa', 'despina', 'galatea', 'janus', 'thebe', 'epimetheus', 'proteus']) {
+      const rows = parseHorizonsVectors(fixture(`horizons-body-${id}.json`));
+      expect(rows, id).toHaveLength(4);
+      expect(rows[1][0] - rows[0][0], id).toBe(86_400_000);
+      const orbit = defaultBodies.get(id.toUpperCase()).orbit!;
+      expect(planetOf(id.toUpperCase()), id).toBeTruthy();
+      for (const s of rows) {
+        expect(norm(s), id).toBeGreaterThan(orbit.a * (1 - orbit.e) * 0.95);
+        expect(norm(s), id).toBeLessThan(orbit.a * (1 + orbit.e) * 1.05);
+        expect(norm(s, 4), id).toBeGreaterThan(0.05); // every moon moves
+      }
+    }
+    // Nereid is near apoapsis: slow and far, as e = 0.751 says
+    const nereid = parseHorizonsVectors(fixture('horizons-body-nereid.json'));
+    expect(norm(nereid[0], 4)).toBeLessThan(1.5);
+  });
+
+  it('the registry orbit plane of Phoebe, Himalia and Nereid matches the recorded orbit normal (r x v) within 3 degrees', () => {
+    const unit = (v: number[]) => v.map((x) => x / Math.hypot(...v));
+    const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const reg = new BodyRegistry();
+    for (const id of ['phoebe', 'himalia', 'nereid']) {
+      const row = parseHorizonsVectors(fixture(`horizons-body-${id}.json`))[0];
+      const real = unit(cross(row.slice(1, 4), row.slice(4, 7)));
+      const s = bodyStateInParent(reg.get(id.toUpperCase()), row[0], reg)!;
+      const model = unit(cross(s.r, s.v));
+      const deg = (Math.acos(Math.min(1, real[0] * model[0] + real[1] * model[1] + real[2] * model[2])) * 180) / Math.PI;
+      expect(deg, id).toBeLessThan(3);
+    }
+  });
+
+  it('Phoebe, Janus and Epimetheus (2000-01-01 12:00 TDB) and Himalia (2026-11-17 00:00 TDB) take the recorded Horizons osculating elements, ecliptic of J2000', () => {
+    const el = (id: string) => {
+      const j = JSON.parse(fixture(`horizons-elements-${id}.json`)).result as string;
+      const row = j.split('$$SOE')[1].split('$$EOE')[0].trim().split(String.fromCharCode(10))[0].split(',').map(Number);
+      // JDTDB, date (NaN), EC, QR, IN, OM, W, Tp, N, MA, TA, A
+      return { e: row[2], i: row[4], node: row[5], argp: row[6], ma: row[9], a: row[11] };
+    };
+    for (const id of ['phoebe', 'janus', 'epimetheus', 'himalia']) {
+      const w = el(id);
+      const o = defaultBodies.get(id.toUpperCase()).orbit!;
+      expect(defaultBodies.get(id.toUpperCase()).orbitPlane, id).toBe('ecliptic');
+      expect(o.a, id).toBeCloseTo(w.a, -1);
+      expect(o.e, id).toBeCloseTo(w.e, 3);
+      expect(o.i / DEG, id).toBeCloseTo(w.i, 2);
+      expect(o.raan / DEG, id).toBeCloseTo(w.node, 2);
+      expect(o.argp / DEG, id).toBeCloseTo(w.argp, 2);
+      expect(o.m0 / DEG, id).toBeCloseTo(w.ma, 2);
+    }
+    // the co-orbital pair no longer starts on top of each other
+    const reg = new BodyRegistry();
+    const t = Date.UTC(2000, 0, 1, 12);
+    const j = bodyStateInParent(reg.get('JANUS'), t, reg)!.r, e = bodyStateInParent(reg.get('EPIMETHEUS'), t, reg)!.r;
+    expect(dist(j, e)).toBeGreaterThan(1e5);
+  });
+
+  it('Hermite interpolation of every other Io row reproduces the skipped row (4 h steps: 3x coarser than the plan)', () => {
+    // the plan uses 105 min (n h = 0.26); this fixture is 120 min, taking rows 0 and 2 gives n h = 0.59: the error is bounded by about 140 km
+    const reg = new BodyRegistry();
+    expect(setBodyStream('IO', { frame: 'JUPITER:inertial', samples: [io[0], io[2]] as Sample[] }, reg)).toBe(true);
+    const jupiterAt = (t: number) => bodyStateInParent(reg.get('IO'), t, reg)!.r;
+    const err = dist(jupiterAt(io[1][0]), io[1].slice(1));
+    expect(err).toBeLessThan(150);
+    // full-rate data: exact at the nodes
+    setBodyStream('IO', { frame: 'JUPITER:inertial', samples: io as Sample[] }, reg);
+    expect(dist(bodyStateInParent(reg.get('IO'), io[10][0], reg)!.r, io[10].slice(1))).toBeLessThan(1e-6);
+  });
+
+  it('compares the analytic fallback with Horizons (km): the fallback is approximate by design', () => {
+    const reg = new BodyRegistry();
+    const err = (id: string, rows: number[][], i: number) => dist(bodyStateInParent(reg.get(id), rows[i][0], reg)!.r, rows[i].slice(1));
+    const marsErr = err('MARS', mars, 0);
+    const jupErr = err('JUPITER', jup, 0);
+    const plutoErr = err('PLUTO', pluto, 0);
+    const ceresErr = err('CERES', ceres, 0);
+    const ioErr = err('IO', io, 0);
+    // Mars: the registry's Kepler orbit is a mean-element circle-ish fit (about a degree)
+    expect(marsErr).toBeLessThan(2e6);
+    expect(jupErr).toBeLessThan(1e7); // Standish table 1 near 2026: a fraction of a degree
+    expect(plutoErr).toBeLessThan(1e7);
+    expect(ceresErr).toBeLessThan(2e7);
+    expect(ioErr).toBeLessThan(2 * 421_800 * 1.01); // right orbit size, arbitrary phase: never farther than the diameter
+  });
+
+  it('a Horizons stream replaces the fallback inside its window and the moons follow the streamed planet', () => {
+    const reg = new BodyRegistry();
+    const t0 = jup[2][0];
+    const before = bodyStateEci('JUPITER', t0, reg).r;
+    expect(setBodyStream('JUPITER', { frame: 'SUN:inertial', samples: jup as Sample[] }, reg)).toBe(true);
+    expect(setBodyStream('IO', { frame: 'JUPITER:inertial', samples: io as Sample[] }, reg)).toBe(true);
+    const after = bodyStateEci('JUPITER', t0, reg).r;
+    expect(dist(before, after)).toBeGreaterThan(1e5); // the analytic orbit was off by far more than the sample interpolation
+    // Jupiter in the Sun frame is the sample (to the km); in EARTH:inertial it is sample + Sun in the Earth frame
+    const helio = bodyStateInParent(reg.get('JUPITER'), t0, reg)!.r;
+    expect(dist(helio, jup[2].slice(1))).toBeLessThan(1e-6);
+    // Io relative to Jupiter in the Earth frame is the sample too (Io's own frame hop goes through the streamed Jupiter)
+    const tIo = io[5][0];
+    const rel = bodyStateEci('IO', tIo, reg).r.map((x, k) => x - bodyStateEci('JUPITER', tIo, reg).r[k]);
+    // (rotated to the date with the planet: EARTH:inertial is of date, the Horizons sample is ICRF)
+    expect(dist(rel, precessDir(io[5].slice(1, 4) as [number, number, number], tIo, false))).toBeLessThan(1e-3);
+    // outside the window: the registered orbit shifted by the edge difference, fading out over a quarter period (3 y for Jupiter)
+    const fresh = new BodyRegistry();
+    const kep = (t: number) => bodyStateInParent(fresh.get('JUPITER'), t, fresh)!.r;
+    const far = jup[jup.length - 1][0] + 400 * 86_400_000;
+    const out = bodyStateInParent(reg.get('JUPITER'), far, reg)!.r;
+    expect(out.every(Number.isFinite)).toBe(true);
+    expect(dist(out, kep(far))).toBeGreaterThan(0); // still inside the fade
+    expect(dist(out, kep(far))).toBeLessThan(dist(before, after) * 1.01);
+    const gone = jup[jup.length - 1][0] + 4 * 365.25 * 86_400_000;
+    expect(dist(bodyStateInParent(reg.get('JUPITER'), gone, reg)!.r, kep(gone))).toBe(0); // 3 y later the plain orbit
+    // removing the stream restores it
+    setBodyStream('JUPITER', undefined, reg);
+    expect(dist(bodyStateEci('JUPITER', t0, reg).r, before)).toBe(0);
+  });
+
+  it('rejects a stream in the wrong frame or too short, and leaves the body analytic', () => {
+    const reg = new BodyRegistry();
+    const r0 = bodyStateEci('IO', io[3][0], reg).r;
+    expect(setBodyStream('IO', { frame: 'SUN:inertial', samples: io as Sample[] }, reg)).toBe(false);
+    expect(setBodyStream('IO', { frame: 'JUPITER:inertial', samples: [io[0]] as Sample[] }, reg)).toBe(false);
+    expect(setBodyStream('SUN', { frame: 'SUN:inertial', samples: io as Sample[] }, reg)).toBe(false);
+    expect(dist(bodyStateEci('IO', io[3][0], reg).r, r0)).toBe(0);
+  });
+});
+
+describe('named asteroids and Dimorphos (Horizons records of 2026-11-17)', () => {
+  const byBody = Object.fromEntries(BODY_TARGETS.map((t) => [t.bodyId, t]));
+  const ASTEROID_IDS = ['vesta', 'pallas', 'hygiea', 'psyche', 'bennu', 'ryugu', 'didymos', 'apophis', 'eros', 'itokawa', 'arrokoth'];
+  const AU = 149_597_870.7;
+  const result = (name: string): string => (JSON.parse(fixture(name)) as { result: string }).result;
+  const num = (s: string): number => Number(s.replace(/,$/, ''));
+
+  it('has the Horizons small-body command ids (record syntax with a semicolon), the Sun body centre and a step that keeps the Hermite error small', () => {
+    const want: Record<string, [string, number, number]> = {
+      VESTA: ['4;', 7200, 293], PALLAS: ['2;', 7200, 293], HYGIEA: ['10;', 14_400, 147], PSYCHE: ['16;', 7200, 293],
+      BENNU: ['101955;', 2880, 549], RYUGU: ['162173;', 2880, 549], EROS: ['433;', 2880, 549],
+      DIDYMOS: ['65803;', 2880, 549], APOPHIS: ['99942;', 2160, 487], ITOKAWA: ['25143;', 2880, 549],
+      ARROKOTH: ['486958;', 86_400, 122],
+    };
+    for (const [id, [cmd, stepMin, rows]] of Object.entries(want)) {
+      expect(byBody[id], id).toMatchObject({ horizons: cmd, center: '500@10', frame: 'SUN:inertial', stepMin });
+      expect(targetRows(byBody[id]), id).toBe(rows);
+      const p = new URL(bodyUrl(byBody[id], NOW)).searchParams;
+      expect(p.get('COMMAND'), id).toBe(`'${cmd}'`);
+      expect(p.get('CENTER'), id).toBe("'500@10'");
+    }
+    expect(Object.keys(want)).toHaveLength(11);
+    // a fast, eccentric orbit moves up to (1 + e)^2 / (1 - e^2)^1.5 times the mean motion at perihelion: the worst case over the real orbit stays under the 5 km budget stated in the connector header
+    for (const id of Object.keys(want)) {
+      const o = defaultBodies.get(id).orbit!;
+      const n = (2 * Math.PI) / bodyPeriodSec(defaultBodies.get(id))!;
+      const peri = (1 + o.e) ** 2 / (1 - o.e * o.e) ** 1.5;
+      const worst = (o.a * (n * byBody[id].stepMin * 60 * peri) ** 4) / 384;
+      expect(worst, id).toBeLessThan(5); // km, against the tens of millions of km of the orbit
+    }
+  });
+
+  it('Dimorphos has its own id 120065803, is centred on the Didymos system barycentre (500@20065803) and samples 24 times per revolution', () => {
+    expect(byBody.DIMORPHOS).toMatchObject({ horizons: '120065803', center: '500@20065803', frame: 'DIDYMOS:inertial', stepMin: 30 });
+    expect(targetRows(byBody.DIMORPHOS)).toBe(2 * MOON_WINDOW_STEPS + 1);
+    const p = new URL(bodyUrl(byBody.DIMORPHOS, NOW)).searchParams;
+    expect(p.get('COMMAND')).toBe("'120065803'");
+    expect(p.get('CENTER')).toBe("'500@20065803'");
+    expect(defaultBodies.get('DIMORPHOS').parentId).toBe('DIDYMOS');
+  });
+
+  it('the Dimorphos record ends 2027-06-30: the target is dropped once its request window would run past that day, all others stay', () => {
+    expect(byBody.DIMORPHOS.validUntil).toBe('2027-06-30');
+    expect(BODY_TARGETS.filter((t) => t.validUntil).map((t) => t.bodyId)).toEqual(['DIMORPHOS']);
+    const at = (iso: string) => activeBodyTargets(Date.parse(iso)).map((t) => t.bodyId);
+    expect(at('2026-11-17T12:00:00Z')).toHaveLength(59);
+    expect(at('2027-06-25T12:00:00Z')).toContain('DIMORPHOS'); // window ends 2027-06-29 16:00
+    // the window reaches 4.17 days (200 steps of 30 min) past the fetch hour, so the last fetch that fits is 2027-06-26 20:00
+    expect(at('2027-06-26T20:00:00Z')).toContain('DIMORPHOS');
+    expect(at('2027-06-26T21:00:00Z')).not.toContain('DIMORPHOS');
+    expect(at('2028-01-01T00:00:00Z')).toHaveLength(58);
+    expect(at('2028-01-01T00:00:00Z')).toContain('ITOKAWA');
+  });
+
+  it('parses every recorded table (4 rows, 1 day apart); the distance from the Sun lies in the registry orbit, within 10 %', () => {
+    for (const id of ASTEROID_IDS) {
+      const rows = parseHorizonsVectors(fixture(`horizons-body-${id}.json`));
+      expect(rows, id).toHaveLength(4);
+      expect(rows[1][0] - rows[0][0], id).toBe(86_400_000);
+      expect(Math.abs(rows[0][0] - Date.UTC(2026, 10, 17)), id).toBeLessThan(70_000); // 2026-11-17 00:00 TDB is 69 s earlier in UTC
+      const o = defaultBodies.get(id.toUpperCase()).orbit!;
+      for (const s of rows) {
+        const r = Math.hypot(s[1], s[2], s[3]);
+        expect(r, id).toBeGreaterThan(o.a * (1 - o.e) * 0.9);
+        expect(r, id).toBeLessThan(o.a * (1 + o.e) * 1.1);
+      }
+    }
+    // Vesta, row 0 (the file itself): 3.2679e8 km, 2.18 AU from the Sun
+    const vesta = parseHorizonsVectors(fixture('horizons-body-vesta.json'))[0];
+    expect(vesta[1]).toBeCloseTo(3.267853701007305e8, 0);
+    expect(Math.hypot(vesta[1], vesta[2], vesta[3]) / AU).toBeGreaterThan(2.15);
+    expect(Math.hypot(vesta[1], vesta[2], vesta[3]) / AU).toBeLessThan(2.58);
+  });
+
+  it('the registry constants are the ones printed in the recorded records: osculating elements, radius and GM', () => {
+    for (const id of ASTEROID_IDS) {
+      const text = result(`horizons-body-${id}.json`);
+      const g = (re: RegExp): number => num(re.exec(text)![1]);
+      const b = defaultBodies.get(id.toUpperCase());
+      const o = b.orbit!;
+      const jd = g(/EPOCH=\s*(\S+)/);
+      expect(o.epochMs, id).toBeCloseTo(J2000_MS + (jd - 2451545) * 86_400_000, 0);
+      expect(o.e, id).toBeCloseTo(g(/\bEC=\s*(\S+)/), 12);
+      expect(o.i / DEG, id).toBeCloseTo(g(/\bIN=\s*(\S+)/), 10);
+      expect(o.raan / DEG, id).toBeCloseTo(g(/\bOM=\s*(\S+)/), 10);
+      expect(o.argp / DEG, id).toBeCloseTo(g(/\sW=\s*(\S+)/), 10);
+      const phys = /GM=\s*(\S+)\s+RAD=\s*(\S+)\s+ROTPER=/.exec(text)!;
+      if (phys[1] !== 'n.a.') expect(b.gm, id).toBe(num(phys[1]));
+      else expect(b.gm, `${id} GM n.a.`).toBe(id === 'arrokoth' || id === 'bennu' || id === 'apophis' || id === 'didymos' ? (id === 'didymos' ? 3.51278e-8 : 0) : -1);
+      if (phys[2] !== 'n.a.') { if (id !== 'didymos') expect(b.radiusKm, id).toBe(num(phys[2])); } else expect(id).toBe('arrokoth');
+    }
+  });
+
+  it('the source block above the asteroids in bodies.ts names Horizons, the NAIF kernel, the IAU report and every body', () => {
+    const src = readFileSync(join(__dirname, '../../../../../packages/core/src/bodies.ts'), 'utf8');
+    const block = src.slice(src.indexOf('Named asteroids (added'), src.indexOf('const JD_J2000'));
+    expect(block.length).toBeGreaterThan(2000);
+    for (const cite of ['Horizons', 'pck00011', 'WGCCRE 2015', 'Archinal', 'Porter (2024)', '920065803', '120065803', 'NO_ROTATION', 'Keane']) expect(block, cite).toContain(cite);
+    for (const id of ['Vesta', 'Pallas', 'Hygiea', 'Psyche', 'Bennu', 'Ryugu', 'Didymos', 'Apophis', 'Eros', 'Itokawa', 'Arrokoth', 'Dimorphos']) expect(block, id).toContain(id);
+  });
+
+  it('Didymos and Dimorphos take radius, GM and spin from the header of the DART / Hera records', () => {
+    const prim = result('horizons-body-didymos-primary.json');
+    expect(prim).toContain('Radii   ~ (0.39167 x 0.39167 x 0.29195) km');
+    expect(prim).toContain('Volume  ~ 0.1876 km^3');
+    expect(prim).toContain('GM_Didy ~ 3.51278E-08 km^3/s^2');
+    expect(prim).toContain('RA  =  69.32686 deg.');
+    expect(prim).toContain('DEC = -72.72455 deg.');
+    expect(prim).toContain('3823.008849557522 deg/day');
+    const dimo = result('horizons-body-dimorphos.json');
+    expect(dimo).toContain('Radii   ~ (0.09594 x 0.07390 x 0.05856) km');
+    expect(dimo).toContain('Volume  ~ 0.001616 km^8'); // sic: the record prints km^8
+    expect(dimo).toContain('GM_Dimo ~ 3.02680E-10 km^3/s^2');
+    expect(dimo).toContain('Didymos system barycenter :  20065803');
+    expect(dimo).toContain('Center body name: Didymos (system barycenter) (20065803)');
+    const d = defaultBodies.get('DIDYMOS'), m = defaultBodies.get('DIMORPHOS');
+    expect(d.gm).toBe(3.51278e-8);
+    expect(m.gm).toBe(3.0268e-10);
+    expect((d.rotation as { poleRaDeg: number }).poleRaDeg).toBe(69.32686);
+  });
+
+  it('the Dimorphos table is a 1.15 km orbit about the barycentre and the registry fallback reproduces its first row (the elements were derived from it)', () => {
+    const rows = parseHorizonsVectors(fixture('horizons-body-dimorphos.json'));
+    expect(rows).toHaveLength(4);
+    const reg = new BodyRegistry();
+    const s = bodyStateInParent(reg.get('DIMORPHOS'), rows[0][0], reg)!;
+    // ecliptic J2000 -> ICRF, like the registry does: the position agrees to a few metres, the velocity to a per cent
+    expect(Math.hypot(rows[0][1], rows[0][2], rows[0][3])).toBeCloseTo(1.151, 2);
+    expect(dist(s.r, rows[0].slice(1, 4))).toBeLessThan(0.05); // 12 m: the elements are rounded to 4 digits and TDB is 69 s off UTC
+    for (const row of rows) expect(Math.hypot(row[1], row[2], row[3])).toBeLessThan(1.3);
+  });
+});
+
+describe('horizons-bodies connector', () => {
+  const T0 = Date.parse('2026-10-29T11:30:00Z');
+  beforeEach(() => {
+    setUpstreams({}); // direct: the relay routing has its own test below
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  });
+  afterEach(() => {
+    for (const id of ['JUPITER', 'IO', 'PLUTO', 'MARS', 'CERES', 'VESTA', 'DIMORPHOS']) setBodyStream(id, undefined);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    setUpstreams(defaultUpstreams());
+  });
+
+  /** answers every table request with a recorded response chosen by COMMAND; `fail` ids answer an HTTP status */
+  function setup(opts: { offline?: boolean; fail?: Record<string, number> } = {}) {
+    const files: Record<string, string> = { "'599'": 'horizons-body-jupiter.json', "'501'": 'horizons-body-io.json', "'999'": 'horizons-body-pluto.json', "'499'": 'horizons-body-mars.json', "'1;'": 'horizons-body-ceres.json', "'4;'": 'horizons-body-vesta.json', "'120065803'": 'horizons-body-dimorphos.json' };
+    const urls: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      urls.push(url);
+      const cmd = new URL(url).searchParams.get('COMMAND')!;
+      if (opts.fail?.[cmd]) return new Response('blocked', { status: opts.fail[cmd] });
+      return new Response(fixture(files[cmd] ?? 'horizons-body-pluto.json'), { status: 200 });
+    });
+    const hub = new Hub(0);
+    // the `bodies` connector registers the analytic records; here they are registered directly
+    hub.upsert(...bodyEntityRecords());
+    const store = new MemoryKv();
+    const config = engineConfig({ offline: !!opts.offline });
+    const http = new Http(store, { fetch: fetchMock, offline: config.offline, limiter: new Limiter(store) });
+    const scheduler = new Scheduler({ hub, config, store, http }, [horizonsBodies], 0);
+    return { hub, store, scheduler, fetchMock, urls };
+  }
+
+  it('replaces only the provider of the body entities; id, kind, hierarchy and createdAt stay', async () => {
+    const { hub, scheduler, urls } = setup();
+    await scheduler.start();
+    const before = Object.fromEntries(hub.graph.all().map((e) => [e.id, e]));
+    expect(before['body-jupiter'].provider).toEqual({ type: 'body', bodyId: 'JUPITER' });
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(urls).toHaveLength(59);
+    for (const id of ['body-jupiter', 'body-io', 'body-pluto', 'body-mars', 'body-ceres']) {
+      const e = hub.graph.get(id)!;
+      expect(e.provider).toMatchObject({ type: 'body', ephemeris: { samples: expect.any(Array) } });
+      expect({ id: e.id, name: e.name, kind: e.kind, bodyId: e.bodyId, parentId: e.parentId, group: e.group, aliases: e.aliases, render: e.render })
+        .toEqual({ id: before[id].id, name: before[id].name, kind: before[id].kind, bodyId: before[id].bodyId, parentId: before[id].parentId, group: before[id].group, aliases: before[id].aliases, render: before[id].render });
+      expect(e.createdAt).toBe(before[id].createdAt);
+    }
+    expect(hub.graph.get('body-jupiter')!.provider).toMatchObject({ bodyId: 'JUPITER', ephemeris: { frame: 'SUN:inertial' } });
+    expect(hub.graph.get('body-io')!.provider).toMatchObject({ bodyId: 'IO', ephemeris: { frame: 'JUPITER:inertial' } });
+    // the Earth, Moon and Sun stay analytic
+    for (const id of ['body-sun', 'body-earth', 'body-moon']) expect(hub.graph.get(id)!.provider).toEqual({ type: 'body', bodyId: id.slice(5).toUpperCase() });
+    expect(hub.healthOf('horizons-bodies').note).toMatch(/59 of 59 bodies streamed/);
+    scheduler.stop();
+  });
+
+  it('streams a named asteroid and its moon: kind asteroid / moon, parent and frame unchanged, samples in the parent frame', async () => {
+    const { hub, scheduler } = setup();
+    await scheduler.start();
+    const before = Object.fromEntries(hub.graph.all().map((e) => [e.id, e]));
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(hub.graph.get('body-vesta')).toMatchObject({ kind: 'asteroid', bodyId: 'SUN', parentId: 'body-sun', provider: { type: 'body', bodyId: 'VESTA', ephemeris: { frame: 'SUN:inertial' } } });
+    expect(hub.graph.get('body-dimorphos')).toMatchObject({ kind: 'moon', bodyId: 'DIDYMOS', parentId: 'body-didymos', provider: { type: 'body', bodyId: 'DIMORPHOS', ephemeris: { frame: 'DIDYMOS:inertial' } } });
+    expect((hub.graph.get('body-vesta')!.provider as { ephemeris: { samples: unknown[] } }).ephemeris.samples).toHaveLength(4);
+    for (const id of ['body-vesta', 'body-dimorphos']) {
+      const e = hub.graph.get(id)!;
+      expect({ id: e.id, kind: e.kind, parentId: e.parentId, aliases: e.aliases }).toEqual({ id, kind: before[id].kind, parentId: before[id].parentId, aliases: before[id].aliases });
+      expect(entityRank(e)).toBe(entityRank(before[id]));
+    }
+    expect(hub.graph.stateOf('body-dimorphos', T0)!.frame).toBe('EARTH:inertial');
+    scheduler.stop();
+  });
+
+  it('after the Dimorphos record ends nothing is requested for it, health is not degraded, and Dimorphos keeps its analytic fallback orbit', async () => {
+    vi.setSystemTime(Date.parse('2027-09-01T00:00:00Z'));
+    const { hub, scheduler, urls } = setup();
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(urls).toHaveLength(58);
+    expect(urls.some((u) => new URL(u).searchParams.get('COMMAND') === "'120065803'")).toBe(false);
+    expect(hub.graph.get('body-dimorphos')!.provider).toEqual({ type: 'body', bodyId: 'DIMORPHOS' });
+    expect(hub.healthOf('horizons-bodies').note).toBe('58 of 58 bodies streamed');
+    expect(hub.healthOf('horizons-bodies').status).toBe('ok');
+    const s = hub.graph.stateOf('body-dimorphos', Date.now())!;
+    expect(s.r.every(Number.isFinite)).toBe(true);
+    scheduler.stop();
+  });
+
+  it('keeps bodyOf, isBodyEntity, isOrbitable and the rank working on a streamed record', async () => {
+    const { hub, scheduler } = setup();
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    const io = hub.graph.get('body-io')!;
+    expect(bodyOf(io)).toBe('IO');
+    expect(isBodyEntity(io)).toBe(true);
+    expect(isOrbitable(io)).toBe(true);
+    expect(entityRank(io)).toBe(entityRank(bodyEntityRecords().find((r) => r.id === 'body-io')!));
+    // the live graph's provider is the registry-backed BodyProvider and answers in EARTH:inertial
+    const s = hub.graph.stateOf('body-io', T0)!;
+    expect(s.frame).toBe('EARTH:inertial');
+    expect(Number.isFinite(s.r[0])).toBe(true);
+    scheduler.stop();
+  });
+
+  it('the orbit-line source is the registry orbit, not the (shorter) sample window', async () => {
+    const { hub, scheduler } = setup();
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    const pluto = hub.graph.get('body-pluto')!;
+    const samples = (pluto.provider as { ephemeris: { samples: number[][] } }).ephemeris.samples;
+    const windowSec = (samples[samples.length - 1][0] - samples[0][0]) / 1000;
+    const period = bodyPeriodSec(defaultBodies.get('PLUTO'))!;
+    expect(windowSec).toBeLessThan(period / 10); // 6 y of 248 y
+    // the web samples a body's orbit line over one period via stateIn from the Kepler period: every point has a state
+    for (let k = 0; k < 40; k++) expect(hub.graph.stateIn('body-pluto', T0 + (k / 40) * period * 1000, 'SUN:inertial')).not.toBeNull();
+    // the period used for the line does not change with the stream
+    expect(bodyPeriodSec(defaultBodies.get('PLUTO'))).toBe(period);
+    scheduler.stop();
+  });
+
+  it('a block error ends the run: the remaining targets are not requested, the streamed ones stay', async () => {
+    const { hub, scheduler, urls } = setup({ fail: { "'599'": 429 } });
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    // order: planets first; Mercury, Venus, Mars succeed, Jupiter answers 429, nothing after it is requested
+    expect(urls).toHaveLength(4);
+    expect(hub.graph.get('body-mars')!.provider).toMatchObject({ ephemeris: { frame: 'SUN:inertial' } });
+    expect(hub.graph.get('body-jupiter')!.provider).toEqual({ type: 'body', bodyId: 'JUPITER' });
+    expect(hub.graph.get('body-io')!.provider).toEqual({ type: 'body', bodyId: 'IO' });
+    expect(hub.healthOf('horizons-bodies').note).toMatch(/3 of 59 bodies streamed/);
+    scheduler.stop();
+  });
+
+  it('a transient per-target failure is soft: the others carry on', async () => {
+    const { hub, scheduler, urls } = setup({ fail: { "'599'": 500 } });
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(urls).toHaveLength(59);
+    expect(hub.graph.get('body-jupiter')!.provider).toEqual({ type: 'body', bodyId: 'JUPITER' });
+    expect(hub.graph.get('body-io')!.provider).toMatchObject({ ephemeris: expect.anything() });
+    expect(hub.healthOf('horizons-bodies').note).toMatch(/58 of 59 bodies streamed; 1 on the analytic fallback/);
+    scheduler.stop();
+  });
+
+  it('offline makes no request and the bodies keep the analytic fallback', async () => {
+    const { hub, scheduler, fetchMock } = setup({ offline: true });
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(hub.graph.get('body-jupiter')!.provider).toEqual({ type: 'body', bodyId: 'JUPITER' });
+    expect(hub.healthOf('horizons-bodies').status).toBe('ok');
+    scheduler.stop();
+  });
+
+  it('goes through the relay by default (Horizons sends no CORS headers) and the request stays the same Horizons query', async () => {
+    setUpstreams(defaultUpstreams());
+    const { scheduler, urls } = setup();
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    expect(urls).toHaveLength(59);
+    expect(urls[0].startsWith('/relay?url=https%3A%2F%2Fssd.jpl.nasa.gov%2Fapi%2Fhorizons.api%3F')).toBe(true);
+    expect(resolveUpstream('horizons')).toEqual({ kind: 'relay', base: '/relay' });
+    const first = BODY_TARGETS[0];
+    expect(applyUpstream(resolveUpstream('horizons'), bodyUrl(first, T0))).toBe(urls[0]);
+    scheduler.stop();
+  });
+
+  it('the streamed record survives a JSON round trip (the provider is rebuilt from the spec)', async () => {
+    const { hub, scheduler } = setup();
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(59 * 1500 + 60_000);
+    const rec = JSON.parse(JSON.stringify(hub.graph.get('body-io')));
+    expect(rec).toMatchObject({ kind: 'moon', parentId: 'body-jupiter', bodyId: 'JUPITER', provider: { type: 'body', bodyId: 'IO', ephemeris: { frame: 'JUPITER:inertial' } } });
+    expect(rec.provider.ephemeris.samples.length).toBe(37);
+    const p = providerFromSpec(rec.provider);
+    expect(p).toBeInstanceOf(BodyProvider);
+    expect(p.stateAt(T0)).toBeTruthy();
+    scheduler.stop();
+  });
+});
