@@ -1,5 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import type { Plugin } from 'vite';
+import { nodeListener } from '../relay/src/adapter';
+import { createRelay } from '../relay/src/handler';
 
 // the server the dev proxy forwards /api and /stream to (EIO_SERVER=localhost:8799 for a second instance)
 const server = process.env.EIO_SERVER ?? 'localhost:8787';
@@ -11,8 +14,24 @@ const server = process.env.EIO_SERVER ?? 'localhost:8787';
 // (credentials, telemetry). EIO_WEB_HOST=0.0.0.0 (or ::) opts in to that.
 const host = process.env.EIO_WEB_HOST || '127.0.0.1';
 
+// The stateless upstream relay (apps/relay) mounted on the dev server at /relay, so dev needs no separate process.
+// Same origin as the page, so no CORS is needed; the dev origins are allowed for a page served from another port.
+function relayPlugin(): Plugin {
+  return {
+    name: 'eio-relay',
+    configureServer(s) {
+      const port = s.config.server.port ?? 5173;
+      const relay = createRelay({
+        fetch: (u, i) => fetch(u, i),
+        allowedOrigins: [`http://localhost:${port}`, `http://127.0.0.1:${port}`],
+      });
+      s.middlewares.use('/relay', nodeListener(relay));
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), relayPlugin()],
   server: {
     port: 5173,
     host,

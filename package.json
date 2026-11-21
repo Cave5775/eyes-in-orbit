@@ -10,8 +10,9 @@
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,magenta \"npm run dev -w @eio/server\" \"npm run dev -w @eio/web\"",
     "build": "npm run build -w @eio/web",
+    "serve": "npm run build && tsx apps/relay/src/node.ts",
     "test": "vitest run",
-    "typecheck": "tsc -p packages/core --noEmit && tsc -p apps/server --noEmit && tsc -p apps/web --noEmit",
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p apps/server --noEmit && tsc -p apps/web --noEmit && tsc -p apps/relay --noEmit",
     "assets": "node scripts/fetch-assets.mjs",
     "celestrak:probe": "tsx apps/server/src/celestrak-probe.ts"
   },
