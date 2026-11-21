@@ -1,6 +1,6 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { describe, expect, it, vi } from 'vitest';
-import { IdbKv, MemoryKv, withQuotaRetry, type KvStore } from '../../src/engine/store';
+import { IdbKv, MemoryKv, openKv, withQuotaRetry, type KvStore } from '../../src/engine/store';
 import { isFresh, isQuotaError, lruVictims } from '../../src/engine/store/types';
 
 const DAY = 86_400_000;
@@ -132,7 +132,7 @@ describe.each(impls)('%s', (_name, make) => {
 });
 
 describe('IdbKv', () => {
-  it('keeps its data across a reopen of the same database and creates both stores at version 1', async () => {
+  it('keeps its data across a reopen of the same database and creates the stores and indexes at version 2', async () => {
     const factory = new IDBFactory();
     const a = await IdbKv.open({ factory, keyRange: IDBKeyRange });
     await a.put('k', 1, 10, now);
@@ -142,10 +142,78 @@ describe('IdbKv', () => {
     expect((await b.get('k'))?.value).toBe(1);
     expect((await b.blobInfo('b'))?.bytes).toBe(1);
     const db = await new Promise<IDBDatabase>((res) => { const r = factory.open('eio'); r.onsuccess = () => res(r.result); });
-    expect(db.version).toBe(1);
-    expect([...db.objectStoreNames].sort()).toEqual(['blob', 'kv']);
-    expect(db.transaction('blob').objectStore('blob').indexNames.contains('usedAt')).toBe(true);
+    expect(db.version).toBe(2);
+    expect([...db.objectStoreNames].sort()).toEqual(['blob', 'blobmeta', 'kv']);
+    expect(db.transaction('blobmeta').objectStore('blobmeta').indexNames.contains('usedAt')).toBe(true);
+    expect(db.transaction('kv').objectStore('kv').indexNames.contains('expiresAt')).toBe(true);
     db.close();
+  });
+});
+
+describe('IdbKv upgrade, reopen and fallback', () => {
+  const idb = { keyRange: IDBKeyRange };
+
+  it('upgrades a version 1 database: rows get their expiry index and the blob accounting is split off the bytes', async () => {
+    const factory = new IDBFactory();
+    await new Promise<void>((resolve, reject) => {
+      const r = factory.open('eio', 1);
+      r.onupgradeneeded = () => {
+        const kv = r.result.createObjectStore('kv', { keyPath: 'key' });
+        const blob = r.result.createObjectStore('blob', { keyPath: 'key' });
+        blob.createIndex('usedAt', 'usedAt');
+        kv.put({ key: 'old:a', value: 1, fetchedAt: now - 400 * DAY, ttlMs: 1000 });
+        kv.put({ key: 'celestrak:a', value: 2, fetchedAt: now - 400 * DAY, ttlMs: 1000 });
+        blob.put({ key: 'tile:1', data: Uint8Array.of(1, 2, 3), bytes: 3, fetchedAt: now, ttlMs: 9, usedAt: now });
+      };
+      r.onsuccess = () => { r.result.close(); resolve(); };
+      r.onerror = () => reject(r.error);
+    });
+    const s = await IdbKv.open({ factory, ...idb });
+    expect(await s.blobInfo('tile:1')).toEqual({ fetchedAt: now, ttlMs: 9, bytes: 3 });
+    expect(Array.from((await s.getBlob('tile:1', now))!.data)).toEqual([1, 2, 3]);
+    expect(await s.prune(30 * DAY, now, ['celestrak:'])).toBe(1);
+    expect(await keys(s, '')).toEqual(['celestrak:a']);
+  });
+
+  it('reopens lazily after the database was deleted or upgraded elsewhere and this connection closed itself', async () => {
+    const factory = new IDBFactory();
+    const s = await IdbKv.open({ factory, ...idb });
+    await s.put('k', 1, 10, now);
+    // deleting the database (site data cleared in another tab) fires versionchange on this connection, which closes it
+    await new Promise<void>((resolve, reject) => { const r = factory.deleteDatabase('eio'); r.onsuccess = () => resolve(); r.onerror = () => reject(r.error); });
+    expect(await s.get('k')).toBeUndefined();
+    await s.put('k2', 2, 10, now);
+    expect((await s.get('k2'))?.value).toBe(2);
+  });
+
+  it('putBlob stores exactly the viewed bytes of a partial view', async () => {
+    const s = await IdbKv.open({ factory: new IDBFactory(), ...idb });
+    const big = Uint8Array.of(9, 9, 1, 2, 3, 9);
+    await s.putBlob('t', big.subarray(2, 5), 1, now);
+    expect(await s.blobInfo('t')).toMatchObject({ bytes: 3 });
+    expect(Array.from((await s.getBlob('t', now))!.data)).toEqual([1, 2, 3]);
+    const m = new MemoryKv();
+    await m.putBlob('t', big.subarray(2, 5), 1, now);
+    expect((await m.blobInfo('t'))!.bytes).toBe(3);
+  });
+
+  it('a failing usedAt update never fails a blob read', async () => {
+    const s = await IdbKv.open({ factory: new IDBFactory(), ...idb });
+    await s.putBlob('t', Uint8Array.of(5), 1, now - 10 * 60_000);
+    const real = (s as unknown as { tx: (...a: unknown[]) => Promise<unknown> }).tx.bind(s);
+    (s as unknown as { tx: unknown }).tx = (stores: string[], mode: string, fn: unknown) =>
+      mode === 'readwrite' ? Promise.reject(new DOMException('full', 'QuotaExceededError')) : real(stores, mode, fn);
+    expect(Array.from((await s.getBlob('t', now))!.data)).toEqual([5]);
+  });
+
+  it('openKv falls back to memory, with the reason, when IndexedDB cannot be opened', async () => {
+    const broken = { open: () => { throw new DOMException('denied', 'SecurityError'); } } as unknown as IDBFactory;
+    const r = await openKv({ factory: broken, ...idb });
+    expect(r.persistent).toBe(false);
+    expect(r.error).toMatch(/denied/);
+    await r.kv.put('k', 1, 1, now);
+    expect((await r.kv.get('k'))?.value).toBe(1);
+    expect((await openKv({ factory: new IDBFactory(), ...idb })).persistent).toBe(true);
   });
 });
 

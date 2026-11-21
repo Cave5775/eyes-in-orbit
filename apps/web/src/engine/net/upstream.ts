@@ -28,11 +28,32 @@ export function setUpstreams(next: UpstreamTable): UpstreamTable {
   return prev;
 }
 
-/** The URL to request for `url` under `upstream`. */
-export function applyUpstream(upstream: Upstream, url: string): string {
+let appBase: string | undefined;
+
+/**
+ * The absolute URL of the app root (`self.location.origin + import.meta.env.BASE_URL`), which relative relay bases and static
+ * paths resolve against. A worker's own location is its script under `/assets/`, and a sub-path deploy is not the origin root, so
+ * the data worker must set this at startup. Returns the previous value.
+ */
+export function setAppBase(base: string | undefined): string | undefined {
+  const prev = appBase;
+  appBase = base;
+  return prev;
+}
+
+const resolveAgainst = (path: string, base: string | undefined): string => (base ? new URL(path, base).toString() : path);
+
+/**
+ * The URL to request for `url` under `upstream`. A relative relay base (`/relay`) or static path is resolved against `base`
+ * (default the one set by `setAppBase`; with none it stays relative).
+ */
+export function applyUpstream(upstream: Upstream, url: string, base: string | undefined = appBase): string {
   switch (upstream.kind) {
     case 'direct': return url;
-    case 'relay': return `${upstream.base}${upstream.base.includes('?') ? '&' : '?'}url=${encodeURIComponent(url)}`;
-    case 'static': return upstream.path;
+    case 'relay': {
+      const b = resolveAgainst(upstream.base, base);
+      return `${b}${b.includes('?') ? '&' : '?'}url=${encodeURIComponent(url)}`;
+    }
+    case 'static': return resolveAgainst(upstream.path, base);
   }
 }

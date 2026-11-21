@@ -1,5 +1,9 @@
 import { recordBackoff } from './backoff-log';
+import { inProcessLock, type WithLock } from './net/lock';
 import type { KvStore } from './store';
+
+/** The lock `recordFailure` and `clearBackoff` use when none is passed (this realm only; the engine passes Web Locks). */
+const defaultLock = inProcessLock();
 
 /**
  * Persistent per-source retry gate. CelesTrak answers HTTP 403 to clients that re-download unchanged data, so a
@@ -62,8 +66,15 @@ export async function readBackoff(store: KvStore, source: string): Promise<Backo
 /** True while the gate is closed. */
 export const isBackedOff = (b: Backoff | undefined, now = Date.now()): b is Backoff => !!b && b.notBefore > now;
 
-/** Count another failure and close the gate for `backoffMs`; returns the new state. */
-export async function recordFailure(store: KvStore, source: string, err: unknown, now = Date.now()): Promise<Backoff> {
+/**
+ * Count another failure and close the gate for `backoffMs`; returns the new state. The read-modify-write runs under
+ * `withLock('eio:backoff:<source>')` so two tabs failing together count two failures, not one.
+ */
+export function recordFailure(store: KvStore, source: string, err: unknown, now = Date.now(), withLock: WithLock = defaultLock): Promise<Backoff> {
+  return withLock(`eio:backoff:${source}`, () => countFailure(store, source, err, now));
+}
+
+async function countFailure(store: KvStore, source: string, err: unknown, now: number): Promise<Backoff> {
   const message = err instanceof Error ? err.message : String(err);
   const before = await readBackoff(store, source);
   const failures = (before?.failures ?? 0) + 1;
@@ -82,6 +93,6 @@ export async function recordFailure(store: KvStore, source: string, err: unknown
   return next;
 }
 
-export async function clearBackoff(store: KvStore, source: string): Promise<void> {
-  await store.delete(backoffKey(source));
+export async function clearBackoff(store: KvStore, source: string, withLock: WithLock = defaultLock): Promise<void> {
+  await withLock(`eio:backoff:${source}`, () => store.delete(backoffKey(source)));
 }

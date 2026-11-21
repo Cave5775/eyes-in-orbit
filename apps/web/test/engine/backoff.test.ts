@@ -91,3 +91,20 @@ describe('backoff state', () => {
     expect(isBackedOff(undefined)).toBe(false);
   });
 });
+
+describe('recordFailure under a lock', () => {
+  it('two failures recorded at once count as two (the read-modify-write cannot interleave)', async () => {
+    const { inProcessLock } = await import('../../src/engine/net/lock');
+    class SlowKv extends MemoryKv {
+      override async get<T = unknown>(key: string) {
+        const row = await super.get<T>(key);
+        await new Promise((r) => setTimeout(r, 1));
+        return row;
+      }
+    }
+    const store = new SlowKv();
+    const lock = inProcessLock();
+    await Promise.all([recordFailure(store, 'x', 'HTTP 500', 1000, lock), recordFailure(store, 'x', 'HTTP 500', 1000, lock)]);
+    expect((await readBackoff(store, 'x'))?.failures).toBe(2);
+  });
+});
