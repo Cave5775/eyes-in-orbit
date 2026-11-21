@@ -45,10 +45,19 @@ export const CLEAR_BLOCK_EVERY_MS = 3600_000;
 
 export class CredentialError extends Error {}
 
+export interface UpdateResult {
+  changed: CredentialKey[];
+  connectors: string[];
+  /** best-effort follow-ups that failed (a block that could not be lifted); the values themselves were all written */
+  errors: string[];
+}
+
 export interface CredentialsDeps {
   store: KvStore;
-  /** lifts the failure blocks of the sources a changed credential feeds (without it only the backoff gates are cleared) */
-  limiter?: Limiter;
+  /** lifts the failure blocks of the sources a changed credential feeds */
+  limiter: Limiter;
+  /** called after a save that changed something (wiring calls `describe.syncHealth()` and refreshes the connectors here) */
+  onChange?: (result: UpdateResult) => void;
 }
 
 /**
@@ -75,11 +84,11 @@ export class Credentials implements CredentialSource {
     }));
   }
 
-  set(key: CredentialKey, value: string): Promise<{ changed: CredentialKey[]; connectors: string[] }> {
+  set(key: CredentialKey, value: string): Promise<UpdateResult> {
     return this.update({ [key]: value });
   }
 
-  clear(key: CredentialKey): Promise<{ changed: CredentialKey[]; connectors: string[] }> {
+  clear(key: CredentialKey): Promise<UpdateResult> {
     return this.update({ [key]: null });
   }
 
@@ -87,7 +96,7 @@ export class Credentials implements CredentialSource {
    * Apply `patch`: a string sets the value, `null` or an empty string removes it. Validates everything first so a bad entry
    * changes nothing. Returns what actually changed.
    */
-  async update(patch: unknown): Promise<{ changed: CredentialKey[]; connectors: string[] }> {
+  async update(patch: unknown): Promise<UpdateResult> {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new CredentialError('expected an object of key: value');
     const next: [CredentialField, string | null][] = [];
     for (const [key, raw] of Object.entries(patch as Record<string, unknown>)) {
@@ -102,6 +111,8 @@ export class Credentials implements CredentialSource {
     const { store, limiter } = this.deps;
     const changed: CredentialKey[] = [];
     const connectors = new Set<string>();
+    const errors: string[] = [];
+    // 1. write every value first: a failing follow-up below must never leave a later key unwritten
     for (const [field, value] of next) {
       const before = await this.get(field.key);
       if (value) await store.put(credentialKey(field.key), value, TTL_MS);
@@ -109,9 +120,18 @@ export class Credentials implements CredentialSource {
       if ((value ?? undefined) === before) continue;
       changed.push(field.key);
       connectors.add(field.connector);
-      for (const s of field.reset?.backoff ?? []) await clearBackoff(store, s);
-      if (limiter) for (const s of field.reset?.limiter ?? []) await limiter.clearBlock(s, CLEAR_BLOCK_EVERY_MS);
     }
-    return { changed, connectors: [...connectors] };
+    // 2. then lift the gates and failure blocks of what changed, best effort
+    for (const field of next.map(([f]) => f).filter((f) => changed.includes(f.key))) {
+      for (const s of field.reset?.backoff ?? []) {
+        try { await clearBackoff(store, s); } catch (e) { errors.push(`backoff ${s}: ${(e as Error).message}`); }
+      }
+      for (const s of field.reset?.limiter ?? []) {
+        try { await limiter.clearBlock(s, CLEAR_BLOCK_EVERY_MS); } catch (e) { errors.push(`limiter ${s}: ${(e as Error).message}`); }
+      }
+    }
+    const result: UpdateResult = { changed, connectors: [...connectors], errors };
+    if (changed.length) this.deps.onChange?.(result);
+    return result;
   }
 }

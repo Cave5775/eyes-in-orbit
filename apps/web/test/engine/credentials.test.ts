@@ -7,7 +7,7 @@ import { MemoryKv } from '../../src/engine/store';
 
 const make = () => {
   const store = new MemoryKv();
-  return { store, creds: new Credentials({ store }) };
+  return { store, creds: new Credentials({ store, limiter: new Limiter(store, { limits: {} }) }) };
 };
 
 describe('Credentials', () => {
@@ -33,9 +33,9 @@ describe('Credentials', () => {
 
   it('stores plain text under credential:<key> and removes the row when cleared', async () => {
     const { creds, store } = make();
-    expect(await creds.set('ll2Token', '  from-ui  ')).toEqual({ changed: ['ll2Token'], connectors: ['launchlibrary'] });
+    expect(await creds.set('ll2Token', '  from-ui  ')).toEqual({ changed: ['ll2Token'], connectors: ['launchlibrary'], errors: [] });
     expect((await store.get('credential:ll2Token'))?.value).toBe('from-ui');
-    expect(await creds.clear('ll2Token')).toEqual({ changed: ['ll2Token'], connectors: ['launchlibrary'] });
+    expect(await creds.clear('ll2Token')).toEqual({ changed: ['ll2Token'], connectors: ['launchlibrary'], errors: [] });
     expect(await store.get('credential:ll2Token')).toBeUndefined();
     expect(await creds.get('ll2Token')).toBeUndefined();
     expect((await creds.update({ ll2Token: '' })).changed).toEqual([]);
@@ -43,20 +43,20 @@ describe('Credentials', () => {
 
   it('keeps the ESA DISCOS token as a secret read by the discos feed', async () => {
     const { creds } = make();
-    expect(await creds.set('discosToken', 'ui-tok')).toEqual({ changed: ['discosToken'], connectors: ['discos'] });
+    expect(await creds.set('discosToken', 'ui-tok')).toEqual({ changed: ['discosToken'], connectors: ['discos'], errors: [] });
     expect((await creds.status()).find((c) => c.key === 'discosToken')).toMatchObject({ connector: 'discos', secret: true, set: true, source: 'ui' });
   });
 
   it('reports nothing changed when the value is the same', async () => {
     const { creds } = make();
     await creds.update({ ll2Token: 'abc' });
-    expect(await creds.update({ ll2Token: 'abc' })).toEqual({ changed: [], connectors: [] });
+    expect(await creds.update({ ll2Token: 'abc' })).toEqual({ changed: [], connectors: [], errors: [] });
   });
 
   it('survives a restart: a new instance on the same store reads the saved values', async () => {
     const { creds, store } = make();
     await creds.update({ spacetrackUser: 'u', spacetrackPassword: 'p' });
-    const again = new Credentials({ store });
+    const again = new Credentials({ store, limiter: new Limiter(store, { limits: {} }) });
     expect(await again.get('spacetrackUser')).toBe('u');
     expect(await again.get('spacetrackPassword')).toBe('p');
   });
@@ -70,6 +70,23 @@ describe('Credentials', () => {
     await expect(creds.update({ ll2Token: 'x'.repeat(257) })).rejects.toThrow(/longer than/);
     await expect(creds.update([])).rejects.toThrow(/object/);
     expect(await creds.get('ll2Token')).toBeUndefined();
+  });
+
+  it('writes every key even when lifting a block fails, reports the failure, and calls onChange once', async () => {
+    const store = new MemoryKv();
+    const limiter = new Limiter(store, { limits: LIMITS });
+    limiter.clearBlock = async () => { throw new Error('lock lost'); };
+    const seen: string[][] = [];
+    const creds = new Credentials({ store, limiter, onChange: (r) => seen.push(r.changed) });
+    const r = await creds.update({ spacetrackUser: 'u', spacetrackPassword: 'p', ll2Token: 't' });
+    expect(r.changed).toEqual(['spacetrackUser', 'spacetrackPassword', 'll2Token']);
+    expect(r.errors).toHaveLength(4);
+    expect(r.errors[0]).toMatch(/limiter spacetrack:login: lock lost/);
+    expect(await creds.get('ll2Token')).toBe('t');
+    expect(await creds.get('spacetrackPassword')).toBe('p');
+    expect(seen).toEqual([['spacetrackUser', 'spacetrackPassword', 'll2Token']]);
+    await creds.update({ ll2Token: 't' });
+    expect(seen).toHaveLength(1); // nothing changed: no callback
   });
 
   it('lifts only the Space-Track failure block when its login changes: the cache, the 2 h spacing and the counters stay', async () => {

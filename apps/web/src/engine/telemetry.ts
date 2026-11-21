@@ -276,7 +276,11 @@ export class TelemetryService {
     return launch ? buildSeries(launch, matchTrajectory(hub.trajectories, launch), hub.liveTelemetry.get(launch.id)) : undefined;
   }
 
-  /** Validate `body`, merge it into the launch's live rows, persist and announce the change. Nothing is stored on a rejection. */
+  /**
+   * Validate `body`, merge it into the launch's live rows, persist and announce the change. Nothing is stored on a rejection.
+   * Trusted callers only: call `ingest` and `clear` from the data worker's own UI code paths, never from an unfiltered
+   * `postMessage` handler or any page-reachable input, since they overwrite what the app draws for a launch.
+   */
   async ingest(launchId: string, body: unknown): Promise<IngestResult> {
     const { hub, store } = this.deps;
     const launch = this.findLaunch(launchId);

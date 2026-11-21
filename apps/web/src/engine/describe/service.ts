@@ -58,17 +58,19 @@ export class DescribeService {
   private lastToken: string | undefined;
   /** when the DISCOS token last changed; cached DISCOS errors older than this are asked again */
   private tokenChangedAt = 0;
+  /** the session found Wikimedia refusing the Api-User-Agent preflight: later requests leave the header out */
+  private omitUserAgent = false;
   private now: () => number;
 
   constructor(private deps: { store: KvStore; http: Http; config: Pick<EngineConfig, 'offline'>; hub: Hub; credentials: CredentialSource }, opts: DescribeOptions = {}) {
     this.now = opts.now ?? Date.now;
     Object.assign(deps.hub.healthOf(WIKI_FEED), { note: NOTE_WIKI, ...(deps.config.offline ? { offline: true } : {}) });
-    void this.syncHealth();
+    this.syncHealth().catch(() => { /* a credential read that fails leaves the health record as it was; the next lookup tries again */ });
   }
 
   /** Make the DISCOS feed show `stub` (needs credentials) or `idle` according to whether a token is set; call after credential changes. */
-  async syncHealth(): Promise<void> {
-    const token = await this.deps.credentials.get('discosToken');
+  async syncHealth(known?: { token: string | undefined }): Promise<void> {
+    const token = known ? known.token : await this.deps.credentials.get('discosToken');
     if (token !== this.lastToken) {
       if (this.lastToken !== undefined || token) this.tokenChangedAt = this.now();
       this.lastToken = token;
@@ -95,24 +97,26 @@ export class DescribeService {
   private async load(rec: EntityRecord): Promise<Description> {
     const { store, config } = this.deps;
     const key = this.cacheKey(rec.id);
-    await this.syncHealth();
+    const token = await this.deps.credentials.get('discosToken'); // read once per lookup
+    await this.syncHealth({ token });
     const row = await store.get<Description>(key);
     if (row) {
       const s = row.value.sources.discos;
       // a token that is set now but was missing (off) or rejected (error) when this was cached: ask DISCOS again
-      const tokenRetry = !!this.lastToken && noradOf(rec) !== undefined && (s === 'off' || (s === 'error' && row.fetchedAt < this.tokenChangedAt));
+      const tokenRetry = !!token && noradOf(rec) !== undefined && (s === 'off' || (s === 'error' && row.fetchedAt < this.tokenChangedAt));
       if ((isFresh(row, this.now()) && !tokenRetry) || config.offline) return { ...row.value, fromCache: true };
     }
-    const d = await this.lookup(rec);
+    const d = await this.lookup(rec, token);
     // an OFFLINE answer is only the fallback line: caching it would hide the real description once the network is back
     if (config.offline || d.limitedUntil !== undefined) return d;
     const found = !!(d.summary || d.discos);
-    const failed = Object.values(d.sources).includes('error');
+    // a DISCOS error alone does not shorten the cache of a description that has its summary: the `describe:discos` gate paces its retries
+    const failed = d.sources.wikidata === 'error' || d.sources.wikipedia === 'error' || (d.sources.discos === 'error' && !found);
     await store.put(key, d, failed ? ERROR_TTL_MS : found ? HIT_TTL_MS : MISS_TTL_MS, this.now());
     return d;
   }
 
-  private async lookup(rec: EntityRecord): Promise<Description> {
+  private async lookup(rec: EntityRecord, token: string | undefined): Promise<Description> {
     const norad = noradOf(rec);
     const cospar = rec.aliases?.cospar;
     const d: Description = {
@@ -151,7 +155,6 @@ export class DescribeService {
       if (wp.value) d.summary = wp.value;
     }
 
-    const token = await this.deps.credentials.get('discosToken');
     if (norad !== undefined && token) {
       const ds = await this.source(DISCOS_FEED, async () => {
         const text = await this.get(DISCOS_FEED, discosUrl(norad), false, discosHeaders(token));
@@ -198,10 +201,20 @@ export class DescribeService {
    * One `demand` request through the limiter (source `wikimedia` or `discos`). It never queues: a follow-up of the same lookup
    * may wait up to `FOLLOW_UP_WAIT_MS` for the spacing gap, anything else the limiter refuses throws `LimitedError`.
    */
-  private get(feed: string, url: string, followUp: boolean, headers?: Record<string, string>): Promise<string> {
-    return this.deps.http.text(url, headers ?? (feed === WIKI_FEED ? wikimediaHeaders() : undefined), {
-      source: feed === DISCOS_FEED ? 'discos' : 'wikimedia', mode: 'demand', waitMs: followUp ? FOLLOW_UP_WAIT_MS : 0,
-    });
+  private async get(feed: string, url: string, followUp: boolean, headers?: Record<string, string>): Promise<string> {
+    const ro = { source: feed === DISCOS_FEED ? 'discos' : 'wikimedia', mode: 'demand' as const, waitMs: followUp ? FOLLOW_UP_WAIT_MS : 0 };
+    if (feed !== WIKI_FEED || headers) return this.deps.http.text(url, headers, ro);
+    if (this.omitUserAgent) return this.deps.http.text(url, undefined, ro);
+    try {
+      return await this.deps.http.text(url, wikimediaHeaders(), ro);
+    } catch (err) {
+      // an opaque network failure while the (preflighted) Api-User-Agent header was sent may be the preflight being refused: retry
+      // once without it and leave it out for the rest of the session. (The first attempt was already reported to the limiter.)
+      if (!(err instanceof Error) || err.name !== 'TypeError' || err instanceof LimitedError) throw err;
+      const text = await this.deps.http.text(url, undefined, { ...ro, waitMs: FOLLOW_UP_WAIT_MS });
+      this.omitUserAgent = true;
+      return text;
+    }
   }
 
   /**

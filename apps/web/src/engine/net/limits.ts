@@ -105,7 +105,7 @@ export const LIMITS: Record<string, SourceLimit> = {
     minSpacingMs: 200, perHour: 1000, maxWaitMs: 1000,
     blockOn: { 429: 15 * MIN, 503: 15 * MIN },
   },
-  // MAST archive queries for the Sky view's image card (engine/archive-images.ts): on demand only, cached 6 h per body
+  // MAST archive queries for the Sky view's image card (engine/archive.ts): on demand only, cached 6 h per body
   mast: {
     label: 'MAST archive (STScI)', policy: 'unpublished',
     minSpacingMs: 1500, perHour: 60, demandPerHour: 40,

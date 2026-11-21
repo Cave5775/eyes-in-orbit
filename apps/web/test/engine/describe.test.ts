@@ -153,7 +153,7 @@ describe('DescribeService', () => {
   beforeEach(() => {
     now = 1_800_000_000_000;
     store = new MemoryKv();
-    creds = new Credentials({ store });
+    creds = new Credentials({ store, limiter: new Limiter(store, { limits: {} }) });
     hub = new Hub(0);
     routes = {
       'list=search': reply(SEARCH),
@@ -388,6 +388,53 @@ describe('DescribeService', () => {
     const d = await svc.describe(iss);
     expect(d.sources.discos).toBe('ok');
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('discosweb'))).toBe(true);
+  });
+
+  it('a DISCOS error does not shorten the cache of a description that has its summary', async () => {
+    routes['discosweb.esoc.esa.int'] = reply('denied', 401);
+    await creds.set('discosToken', 'bad');
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.sources).toMatchObject({ wikipedia: 'ok', discos: 'error' });
+    expect((await store.get(`describe:v1:${iss.id}`))?.ttlMs).toBe(HIT_TTL_MS);
+    // a failing Wikipedia answer still gets the short error cache
+    routes['list=search'] = reply('slow down', 429);
+    const other: EntityRecord = { ...iss, id: 'sat-5', aliases: { norad: '5' } };
+    await svc.describe(other);
+    expect((await store.get(`describe:v1:sat-5`))?.ttlMs).toBe(ERROR_TTL_MS);
+  });
+
+  it('reads the DISCOS token once per lookup and survives a failing credential read', async () => {
+    const get = vi.fn(async () => { throw new Error('idb closed'); });
+    const svc = new DescribeService({ store, http: new Http(store, { fetch: fetchMock, limiter: new Limiter(store, { limits: {} }) }), config: { offline: false }, hub, credentials: { get } }, { now: () => now });
+    await new Promise((r) => setTimeout(r, 0)); // the constructor's sync rejected: no unhandled rejection
+    expect(get).toHaveBeenCalledTimes(1);
+    get.mockImplementation(async () => 'tok' as never);
+    get.mockClear();
+    await svc.describe(iss);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a Wikimedia call without Api-User-Agent after an opaque failure, and then leaves the header out', async () => {
+    const withUa = (init?: RequestInit) => !!(init?.headers as Record<string, string>)['api-user-agent'];
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => { if (withUa(init)) throw new TypeError('Failed to fetch'); return base(input, init); });
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.sources).toMatchObject({ wikidata: 'ok', wikipedia: 'ok' });
+    const calls = fetchMock.mock.calls.map((c) => withUa(c[1]));
+    expect(calls.slice(0, 2)).toEqual([true, false]);
+    expect(calls.slice(2).every((x) => !x)).toBe(true); // remembered: no more header this session
+    expect(hub.healthOf('wikipedia').failures ?? 0).toBe(0);
+  });
+
+  it('counts a failure of the header-less retry as the lookup\x27s error', async () => {
+    fetchMock.mockImplementation(async () => { throw new TypeError('Failed to fetch'); });
+    const { svc } = make();
+    const d = await svc.describe(iss);
+    expect(d.sources.wikidata).toBe('error');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(hub.healthOf('wikipedia')).toMatchObject({ status: 'error', failures: 1 });
   });
 
   it('under OFFLINE serves the fallback with no request', async () => {
