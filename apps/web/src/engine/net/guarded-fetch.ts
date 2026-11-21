@@ -77,7 +77,8 @@ const hostOf = (url: string): string | undefined => {
   try { return new URL(url).host; } catch { return undefined; }
 };
 
-export type GuardedSocket = { ok: true; ws: WebSocket } | Limited;
+/** `cancel()` closes the socket on the caller's own decision (nobody wants the data any more): before it opened that is not a network failure. */
+export type GuardedSocket = { ok: true; ws: WebSocket; cancel(): void } | Limited;
 
 /**
  * Open a WebSocket through the limiter (one attempt counts like one request). A browser socket never shows an upgrade
@@ -89,8 +90,8 @@ export async function guardedWebSocket(
   const gate = await limiter.acquire(source, mode);
   if ('limited' in gate) return gate;
   const ws = new WebSocket(url, protocol);
-  let opened = false;
+  let opened = false, cancelled = false;
   ws.addEventListener('open', () => { opened = true; });
-  ws.addEventListener('close', () => { if (!opened) void reportSafely(limiter, source, { networkError: true, host: hostOf(url) }); }, { once: true });
-  return { ok: true, ws };
+  ws.addEventListener('close', () => { if (!opened && !cancelled) void reportSafely(limiter, source, { networkError: true, host: hostOf(url) }); }, { once: true });
+  return { ok: true, ws, cancel: () => { cancelled = true; try { ws.close(); } catch { /* already closed */ } } };
 }
