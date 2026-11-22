@@ -7,7 +7,7 @@ import { LIVE_KEY, TelemetryService, buildSeries, mergeLive, planAscent, validat
 import { matchTrajectory, parseTrajectory } from '../../src/engine/trajectory';
 
 // the real LL2 launch is the server's fixture (kept in one place)
-const raw = () => JSON.parse(readFileSync(new URL('../../../server/test/fixtures/ll2-launch.json', import.meta.url), 'utf8'));
+const raw = () => JSON.parse(readFileSync(new URL('../fixtures/ll2-launch.json', import.meta.url), 'utf8'));
 const NET = Date.parse('2026-10-22T22:51:18Z');
 const ID = 'f6af629d-39b5-4f86-bc0c-f8776444a858';
 

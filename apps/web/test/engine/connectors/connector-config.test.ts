@@ -39,7 +39,7 @@ describe('dsn with an empty URL list in the config', () => {
   it('polls the default URL instead of throwing on every run', async () => {
     const hub = new Hub(0), store = new MemoryKv();
     const calls: string[] = [];
-    const fetchMock = vi.fn<typeof fetch>(async (u) => (calls.push(String(u)), new Response(readFileSync(new URL('../../../../server/test/fixtures/dsn.xml', import.meta.url), 'utf8'))));
+    const fetchMock = vi.fn<typeof fetch>(async (u) => (calls.push(String(u)), new Response(readFileSync(new URL('../../fixtures/dsn.xml', import.meta.url), 'utf8'))));
     const config = engineConfig({ dsnUrls: [] });
     const http = new Http(store, { fetch: fetchMock, limiter: new Limiter(store, { limits: LIMITS }) });
     const scheduler = new Scheduler({ hub, config, store, http }, [dsn], 0);

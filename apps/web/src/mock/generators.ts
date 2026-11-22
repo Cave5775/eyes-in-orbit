@@ -314,7 +314,7 @@ export function mockLaunches(nowMs: number): { launches: Launch[]; entities: Ent
   return { launches, entities };
 }
 
-/** Offline stand-in for `GET /api/telemetry/:launchId`: the modeled series, nothing measured. */
+/** Offline stand-in for `api.telemetry`: the modeled series, nothing measured. */
 export function mockAscentSeries(launch: Launch): AscentSeries | null {
   const modeled = modeledAscentForLaunch(launch);
   if (!modeled) return null;

@@ -1,7 +1,7 @@
 import type { EntityRecord } from '@eio/core';
 import { searchHitOf, type SearchHit } from './filters';
 
-/** The server's answer to `GET /api/match`: what the store needs of it. */
+/** The data worker's answer to `api.match`: what the store needs of it. */
 export interface MatchAnswer {
   ids: string[];
   total: number;

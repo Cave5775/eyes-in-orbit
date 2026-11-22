@@ -5,7 +5,7 @@ import { parseHorizonsVectors } from '../../../src/engine/connectors/horizons';
 
 // Real Horizons vectors (ICRF, km, km/s; trimmed, fetched 2026-11-17): Juno (-61) geocentric, Sun-centred and Jupiter-centred,
 // 2026-11-10 .. 11-20 daily, and LRO (-85) Moon-centred, 2026-11-16 00:00..04:00 every 10 min.
-const fx = (n: string): Sample[] => parseHorizonsVectors(readFileSync(new URL(`../../../../server/test/fixtures/${n}`, import.meta.url), 'utf8'));
+const fx = (n: string): Sample[] => parseHorizonsVectors(readFileSync(new URL(`../../fixtures/${n}`, import.meta.url), 'utf8'));
 const dist = (a: ArrayLike<number>, b: ArrayLike<number>) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 const geo = fx('horizons-juno-geocentric.json');
@@ -13,7 +13,7 @@ const hel = fx('horizons-juno-heliocentric.json');
 const jupCentred = fx('horizons-juno-jupiter-centred.json');
 const t = geo[6][0]; // 2026-11-16
 const reg = new BodyRegistry();
-setBodyStream('JUPITER', { frame: 'SUN:inertial', samples: parseHorizonsVectors(readFileSync(new URL('../../../../server/test/fixtures/horizons-body-jupiter.json', import.meta.url), 'utf8')) }, reg);
+setBodyStream('JUPITER', { frame: 'SUN:inertial', samples: parseHorizonsVectors(readFileSync(new URL('../../fixtures/horizons-body-jupiter.json', import.meta.url), 'utf8')) }, reg);
 const jupiter = bodyStateEci('JUPITER', t, reg).r;
 const truth = Math.hypot(...(jupCentred[6].slice(1, 4) as Vec3)); // Juno to Jupiter from Horizons itself
 

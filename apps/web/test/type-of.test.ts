@@ -6,7 +6,7 @@ import { textHitsOf } from '../src/lib/text-match';
 import { NO_FOCUS, classify, isDrawn, termFromWord, type Query } from '../src/lib/query';
 import { typeOf, viewClass } from '../src/lib/view-class';
 import { mockGroundAndProbes } from '../src/mock/generators';
-import { activeTargets, probeEntity } from '../../server/src/connectors/dsn-targets';
+import { activeTargets, probeEntity } from '../src/engine/connectors/dsn-targets';
 
 const T = Date.UTC(2026, 9, 22);
 const sampled = (frame: string, r: number): EntityRecord['provider'] => ({

@@ -19,7 +19,7 @@ import { applyUpstream, defaultUpstreams, resolveUpstream, setUpstreams } from '
 import { MemoryKv } from '../../../src/engine/store';
 
 // trimmed real Horizons responses, shared with the server's tests by path
-const fixture = (name: string) => readFileSync(join(__dirname, '../../../../server/test/fixtures', name), 'utf8');
+const fixture = (name: string) => readFileSync(join(__dirname, '../../fixtures', name), 'utf8');
 const NOW = Date.parse('2026-10-29T11:30:00Z');
 const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 

@@ -1,6 +1,6 @@
 /**
  * What each data stream provides, for the Data streams popup. Keyed by connector id: the server's ids plus the ids the
- * mock health list uses (see mock/generators.ts mockHealth). Static text; the live state comes from `/api/health`.
+ * mock health list uses (see mock/generators.ts mockHealth). Static text; the live state comes from the data worker's health.
  */
 export interface FeedInfo {
   name: string;
@@ -160,7 +160,7 @@ export function feedInfo(id: string): FeedInfo {
 export const DSN_FEEDS: ReadonlySet<string> = new Set(['dsn', 'dsn-now', 'dsn-xml']);
 
 /**
- * The server connector whose credentials (`GET /api/credentials`, `CredentialInfo.connector`) a feed's popup section edits,
+ * The engine connector whose credentials (`api.credentials()`, `CredentialInfo.connector`) a feed's popup section edits,
  * or null when the feed needs none. Covers the mock id of Launch Library 2.
  */
 const CREDENTIAL_CONNECTOR: Record<string, string> = {

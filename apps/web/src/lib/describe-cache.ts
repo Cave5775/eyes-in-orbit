@@ -10,7 +10,7 @@ export interface DescribeCache {
 }
 
 /**
- * Per-entity reuse of `GET /api/describe/:id` in the browser: concurrent opens share one request and a settled real answer
+ * Per-entity reuse of `api.describe(id)` in the browser: concurrent opens share one request and a settled real answer
  * is kept for 60 s. A failed request and a "rate limited" answer (`limitedUntil`) are forgotten at once, so the next open
  * asks again and the server's limiter decides (it answers from its cache or says limited again, without a request).
  * The server has its own cache and request limits; this only keeps rapid re-selection from reaching it.

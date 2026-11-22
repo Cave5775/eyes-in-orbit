@@ -7,7 +7,7 @@ import { boosterEntity, launchEntity, normalizeLaunch, normalizeStreams, payload
 import { Hub } from '../../../src/engine/hub';
 import { parseTrajectory, type Trajectory } from '../../../src/engine/trajectory';
 
-const raw = () => JSON.parse(readFileSync(new URL('../../../../server/test/fixtures/ll2-launch.json', import.meta.url), 'utf8'));
+const raw = () => JSON.parse(readFileSync(new URL('../../fixtures/ll2-launch.json', import.meta.url), 'utf8'));
 const NET = Date.parse('2026-10-22T22:51:18Z');
 
 describe('launchlibrary normalize', () => {
@@ -30,7 +30,7 @@ describe('launchlibrary normalize', () => {
   });
 
   it('maps a real LL2 2.3.0 detailed launch (vid_urls, landing_location, pad.country)', () => {
-    const j = JSON.parse(readFileSync(new URL('../../../../server/test/fixtures/ll2-2.3.0-launch.json', import.meta.url), 'utf8'));
+    const j = JSON.parse(readFileSync(new URL('../../fixtures/ll2-2.3.0-launch.json', import.meta.url), 'utf8'));
     const l = normalizeLaunch(j.results[0], Date.parse('2026-11-12T05:00:00Z'));
     expect(l).toMatchObject({
       name: 'Falcon 9 Block 5 | USSF-627', status: { abbrev: 'Success' }, provider: 'SpaceX', vehicle: 'Falcon 9 Block 5',

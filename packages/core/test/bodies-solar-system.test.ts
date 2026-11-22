@@ -380,7 +380,7 @@ describe('the named asteroids (constants read 2026-11-17)', () => {
     expect(o('DIMORPHOS').epochMs).toBe(Date.UTC(2026, 10, 17));
   });
 
-  it('every asteroid is approximate, flagged `asteroid` (the source block in bodies.ts is checked by apps/server/test/horizons-bodies.test.ts)', () => {
+  it('every asteroid is approximate, flagged `asteroid` (the source block in bodies.ts is checked by apps/web/test/engine/connectors/horizons-bodies.test.ts)', () => {
     for (const id of ASTEROIDS) { expect(b(id).approx, id).toBe(true); expect(b(id).asteroid, id).toBe(true); expect(b(id).dwarf, id).toBeUndefined(); }
     expect(b('DIMORPHOS').asteroid).toBeUndefined();
   });

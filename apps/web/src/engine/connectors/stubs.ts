@@ -1,6 +1,6 @@
 import type { Connector } from '../scheduler';
 
-/** Documented placeholders: they appear in /api/health with status `stub` and never run. */
+/** Documented placeholders: they appear in the feed list with status `stub` and never run. */
 
 export const satnogs: Connector = {
   id: 'satnogs',

@@ -77,7 +77,7 @@ const int = (v: unknown, fallback?: number): number | undefined => {
 };
 
 /**
- * The browser data engine behind one message port: builds what `apps/server/src/main.ts` built (store, limiter with Web Locks, Http,
+ * The browser data engine behind one message port: builds what the former Fastify server built (store, limiter with Web Locks, Http,
  * Hub, Scheduler with every connector, credentials, describe, archive images, telemetry, search) and serves the page the way the
  * server's REST routes and `/stream` did. The worker entry (`data.worker.ts`) is `createDataService` plus `onmessage`.
  *

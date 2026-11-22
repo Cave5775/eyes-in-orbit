@@ -3,7 +3,7 @@ import type { Hub } from './hub';
 
 /**
  * Entity paging, ranked search, match and counts over the Hub's in-memory entity graph. The server answered `match` from an
- * SQLite FTS5 trigram index; here the pure ranking (`@eio/core` `rankMatches`) runs over the catalogue directly. Measured at
+ * an FTS5 trigram index (the former server); here the pure ranking (`@eio/core` `rankMatches`) runs over the catalogue directly. Measured at
  * 100 000 entities in `test/engine/search.test.ts` (timing printed there): fast enough without an index, so none is kept.
  */
 

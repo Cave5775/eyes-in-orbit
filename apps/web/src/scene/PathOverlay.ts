@@ -217,7 +217,7 @@ export class PathOverlay {
 }
 
 /**
- * The traverse of the selected rover (`GET /api/traverse/:id`, lib/traverse.ts): every localization of its history as one
+ * The traverse of the selected rover (`api.traverse`, lib/traverse.ts): every localization of its history as one
  * polyline on the body's surface, ending at the rover. It is the rover's own path overlay, not a time window round "now": the
  * points are fixed on the body, so they are kept body-fixed (float64, once per data change) and placed every frame from the
  * body's frame at that moment (four conversions, `bodyAxes`), then made camera-relative like every other position, so the line

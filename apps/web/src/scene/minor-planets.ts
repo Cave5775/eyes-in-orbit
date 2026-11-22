@@ -8,7 +8,7 @@ import type { MpFromWorker, MpToWorker } from '../workers/minor-planets.protocol
 import { CELL_TEX_W, createCellTexture, createMinorPlanetMaterial } from './materials';
 
 /**
- * The minor planet point cloud (MPC MPCORB, ~1.4 million orbits, server route `GET /api/minor-planets`): chunks by H are fetched brightest
+ * The minor planet point cloud (MPC MPCORB, ~1.4 million orbits, the engine's minor-planet connector): chunks by H are fetched brightest
  * first and handed to a worker that propagates them in float64 and bins them into cells (lib/minor-planets.ts, docs/frames.md "Minor planet
  * cloud"). ONE `THREE.Points` draws everything: each vertex holds its float32 offset from its cell's anchor and the cell's number; once per
  * frame the CPU writes one texel per cell into a small float texture (anchor + Sun - camera in float64, and the end slot of the cell's drawn

@@ -4,7 +4,7 @@ import { fitDistanceClamped, MIN_TARGET_DIST_KM, type V3 } from './camera';
 /**
  * A rover's traverse on its body, and the Close-up view of a surface object (pure, no three.js).
  *
- * The traverse (`GET /api/traverse/:id`, core `RoverTraverse`) is a list of `[latDeg, lonDeg, sol]` on the body's sphere
+ * The traverse (`api.traverse(id)`, core `RoverTraverse`) is a list of `[latDeg, lonDeg, sol]` on the body's sphere
  * (`surfaceShape`, the shape the sites are placed on). It is turned into body-fixed points once per data change
  * (`traverseFixed`, a few metres above the drawn surface so the line is not buried in the mesh) and into world points every
  * frame (`traverseWorld`) from the body's frame at that moment: the Mars-fixed to Earth-inertial transform is affine, so four

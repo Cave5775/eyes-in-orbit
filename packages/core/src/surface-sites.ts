@@ -151,9 +151,9 @@ export const hasSurfaceSites = (bodyId: string): boolean => SURFACE_SITES.some((
 export const surfaceSiteOf = (id: string): SurfaceSite | undefined => SURFACE_SITES.find((s) => s.id === id);
 
 /**
- * The whole traverse of a rover (`GET /api/traverse/:entityId`): every localization of its NASA MMGIS waypoint layer in the order
+ * The whole traverse of a rover (`api.traverse`): every localization of its NASA MMGIS waypoint layer in the order
  * of the file (drive order), consecutive repeats removed. A point is `[latDeg, lonDeg, sol]` (planetocentric, east, 6 decimals).
- * The server keeps it in its SQLite cache (the one stored form); the scene draws it on the body, height 0.
+ * The engine keeps it in its store (the one stored form); the scene draws it on the body, height 0.
  */
 export interface RoverTraverse {
   entityId: string;

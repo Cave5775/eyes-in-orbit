@@ -1,8 +1,8 @@
 import { HUBBLE_NORAD } from './observatory';
 
 /**
- * Images of a solar-system body taken BY one observatory, streamed from its public archive (`GET /api/archive-images`).
- * The shapes are shared by the server connector (apps/server/src/archive-images.ts) and the web card of the Sky view.
+ * Images of a solar-system body taken BY one observatory, streamed from its public archive (`api.archiveImages`).
+ * The shapes are shared by the engine (apps/web/src/engine/archive.ts) and the web card of the Sky view.
  */
 
 export interface ArchiveImage {

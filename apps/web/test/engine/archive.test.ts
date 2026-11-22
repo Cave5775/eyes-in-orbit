@@ -11,13 +11,13 @@ import { sourceForUrl } from '../../src/engine/net/limits';
 import { setUpstreams, type UpstreamTable } from '../../src/engine/net/upstream';
 import { MemoryKv } from '../../src/engine/store';
 
-// the real captured answers are the server's fixtures (kept in one place)
+// the real captured answers are fixtures (shared fixtures in apps/web/test/fixtures)
 // these tests read the MAST URL the service builds, so they run against the direct route (the relay default is tested in net.test.ts)
 let previousUpstreams: UpstreamTable;
 beforeAll(() => { previousUpstreams = setUpstreams({}); });
 afterAll(() => { setUpstreams(previousUpstreams); });
 
-const fx = (name: string): string => readFileSync(new URL(`../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+const fx = (name: string): string => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8');
 // real Mast.Caom.Filtered answers captured 2026-11-16 with the shipped query (mastUrl: JUPITER, t_min >= MJD 59899, i.e. now minus 4 years), whole records deleted to ~60
 const HST = fx('mast-caom-hst-jupiter.json');
 const JWST = fx('mast-caom-jwst-jupiter.json');

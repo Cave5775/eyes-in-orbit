@@ -535,7 +535,7 @@ export function ascentEntityEvents(events: AscentEvent[], liftoffMs: number, tag
 /** Where the entity's trajectory comes from. */
 export type TrajectorySource = 'modeled' | 'file' | 'live';
 
-/** Measured rows posted to `POST /api/telemetry/:launchId`, kept with their reconstructed downrange. */
+/** Measured rows posted to the (removed) telemetry ingest, kept with their reconstructed downrange. */
 export interface LiveAscent {
   rows: AscentRow[];
   /** events reported with the rows (e.g. a MECO read from the webcast); they override modeled ones */
@@ -545,7 +545,7 @@ export interface LiveAscent {
   azimuthDeg?: number;
 }
 
-/** Response of `GET /api/telemetry/:launchId`: the plan (modeled or file) next to anything measured. */
+/** Response of `api.telemetry`: the plan (modeled or file) next to anything measured. */
 export interface AscentSeries {
   launchId: string;
   entityId: string;

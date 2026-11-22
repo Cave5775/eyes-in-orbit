@@ -3,7 +3,7 @@ import hstJupiter from './fixtures/mast-caom-hst-jupiter.json?raw';
 import jwstJupiter from './fixtures/mast-caom-jwst-jupiter.json?raw';
 
 /**
- * Offline stand-in for `GET /api/archive-images`. The routing (which archive, which target name, unsupported) is the server's own
+ * Offline stand-in for `api.archiveImages`. The routing (which archive, which target name, unsupported) is the engine's own
  * (core `planArchiveAsk`); the images are trimmed real MAST answers for Jupiter (HST and JWST, the same files as the server tests),
  * run through the server's own parsing and selection. Any other body gets an honest "none": the mock holds no other responses.
  */

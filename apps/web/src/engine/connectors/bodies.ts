@@ -11,7 +11,7 @@ function sync(ctx: ConnectorContext): number {
 /**
  * The body registry (50 bodies: Sun, planets, dwarf planets, moons) as entities with a `body` provider, so bodies are searchable, selectable and
  * have trajectories like any other object. Offline, no polling: registered once at startup (before the first request is
- * served) and a single `run` marks the connector healthy. `/api/bodies` still serves the raw registry.
+ * served) and a single `run` marks the connector healthy.
  */
 export const bodies: Connector = {
   id: 'bodies',

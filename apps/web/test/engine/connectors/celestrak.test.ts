@@ -9,7 +9,7 @@ import { defaultUpstreams, setUpstreams, type UpstreamTable } from '../../../src
 import { MemoryKv } from '../../../src/engine/store';
 
 // trimmed real CelesTrak responses, shared with the server's tests by path
-const fixture = (name: string) => readFileSync(new URL(`../../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+const fixture = (name: string) => readFileSync(new URL(`../../fixtures/${name}`, import.meta.url), 'utf8');
 const groups = () => ({
   stations: parseOmmJson(fixture('celestrak-stations.json')),
   starlink: parseOmmJson(fixture('celestrak-starlink.json')),

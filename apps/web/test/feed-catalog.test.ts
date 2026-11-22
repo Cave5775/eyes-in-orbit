@@ -4,25 +4,25 @@ import { describe, expect, it } from 'vitest';
 import { DSN_FEEDS, FEED_CATALOG, SKY_IMAGERY, SKY_IMAGERY_ID, credentialConnector, feedInfo } from '../src/lib/feed-catalog';
 import { mockHealth } from '../src/mock/generators';
 
-const dir = join(__dirname, '../../server/src/connectors');
-const serverIds = readdirSync(dir)
+const dir = join(__dirname, '../src/engine/connectors');
+const engineIds = readdirSync(dir)
   .filter((f) => f.endsWith('.ts'))
   .flatMap((f) => [...readFileSync(join(dir, f), 'utf8').matchAll(/(?:Connector = |return )\{\s+id: '([a-z][a-z0-9-]*)'/g)].map((m) => m[1]));
 
 describe('feed catalog', () => {
-  it('describes the client-side sky imagery entry, which is not a server connector', () => {
+  it('describes the client-side sky imagery entry, which is not an engine connector', () => {
     expect(FEED_CATALOG[SKY_IMAGERY_ID]).toBeUndefined();
     expect(SKY_IMAGERY.provides).toMatch(/jsdelivr/i);
     expect(SKY_IMAGERY.provides).toMatch(/not by the server/);
     expect(SKY_IMAGERY.link).toMatch(/^https:\/\//);
   });
 
-  it('finds the server connector ids', () => {
-    expect(serverIds).toEqual(expect.arrayContaining(['celestrak', 'dsn', 'launchlibrary', 'snapi', 'horizons', 'bodies', 'satnogs']));
+  it('finds the engine connector ids', () => {
+    expect(engineIds).toEqual(expect.arrayContaining(['celestrak', 'dsn', 'launchlibrary', 'snapi', 'horizons', 'bodies', 'satnogs']));
   });
 
-  it('has an entry for every server connector id', () => {
-    for (const id of serverIds) expect(FEED_CATALOG[id], id).toBeDefined();
+  it('has an entry for every engine connector id', () => {
+    for (const id of engineIds) expect(FEED_CATALOG[id], id).toBeDefined();
   });
 
   it('has an entry for every mock connector id', () => {

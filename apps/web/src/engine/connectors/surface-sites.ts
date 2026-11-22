@@ -13,9 +13,9 @@ import { LimitedError } from '../net/limiter';
  * Each feature is one localization: `site`, `drive`, `sol`, `lat`, `lon` (planetocentric degrees, east, on the Mars 2000 sphere:
  * `radius` = 3396190 m + `elev_radii`), `elev_geoid` (metres above the geoid), tilt, `dist_total_km`. The files grow by a few
  * waypoints per drive, i.e. every few days. The static sites need no network; the rovers are polled every 6 h and keep their
- * landing site until the first answer. The SQLite cache (6 h) holds the TRAVERSE, the one stored form: every localization of the file
+ * landing site until the first answer. The engine store (6 h) holds the TRAVERSE, the one stored form: every localization of the file
  * as `[lat, lon, sol]` (about a tenth of the 600 kB, the images and attitude columns dropped) plus the latest waypoint; the rover's
- * position is the latest waypoint and `GET /api/traverse/:entityId` serves the points (`readTraverse`).
+ * position is the latest waypoint and `readTraverse` returns the points.
  */
 export const MMGIS_BASE = 'https://mars.nasa.gov/mmgis-maps';
 export const MMGIS_URL: Record<NonNullable<SurfaceSite['live']>, string> = {
@@ -24,7 +24,7 @@ export const MMGIS_URL: Record<NonNullable<SurfaceSite['live']>, string> = {
 };
 const REFRESH_MS = 6 * 3600_000;
 const TTL_MS = 6 * 3600_000;
-/** `Cache-Control: max-age` of `GET /api/traverse/:id`, seconds: the poll interval */
+/** `Cache-Control: max-age` the traverse carried when a server served it, seconds: the poll interval */
 export const TRAVERSE_MAX_AGE_S = REFRESH_MS / 1000;
 /** Part of the cache key: bump on any change of what is read from the file. */
 const CACHE_VERSION = 'v2';

@@ -9,7 +9,7 @@ const cache = createArchiveCache((obs, body) => api.archiveImages(obs, body));
 
 /**
  * Images of the selected body taken by the observatory the Sky view stands at, from that observatory's public archive
- * (server `GET /api/archive-images`; MAST for Hubble and JWST). A compact, collapsible card on the right of the sky view, opened by
+ * (`api.archiveImages`; MAST for Hubble and JWST). A compact, collapsible card on the right of the sky view, opened by
  * selecting a planet, dwarf planet, the Moon or the Sun (a single click on its marker already selects it). Thumbnails are loaded
  * lazily straight from the archive (an `<img>` needs no CORS); a click on one opens it in a lightbox over the scene area. Esc
  * closes the lightbox first (a capture listener, so the app's own Esc, which leaves the sky view, does not also run).

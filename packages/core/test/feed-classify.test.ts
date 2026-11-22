@@ -1,10 +1,6 @@
-import Fastify from 'fastify';
-import { classifyCause, classifyFeed, retryTimeOf, type ConnectorHealth, type FeedReason } from '@eio/core';
+// ported from the server's feed-state test: the pure feed classification (the /api/health route no longer exists)
+import { classifyCause, classifyFeed, retryTimeOf, type ConnectorHealth, type FeedReason } from '../src';
 import { describe, expect, it } from 'vitest';
-import { registerApi } from '../src/api';
-import { Http } from '../src/http';
-import { Hub } from '../src/hub';
-import { Store } from '../src/store';
 
 const base: ConnectorHealth = { id: 'c', status: 'ok', runs: 3, lastOkAt: 1000 };
 const h = (over: Partial<ConnectorHealth>): ConnectorHealth => ({ ...base, ...over });
@@ -139,27 +135,5 @@ describe('classifyFeed', () => {
     });
     expect(classifyFeed(h({ note: '4 bodies' }))).toEqual({ level: 'ok', reason: 'ok', hasData: true, note: '4 bodies' });
     expect(classifyFeed(h({ status: 'stub', lastOkAt: undefined, note: 'x' })).hasData).toBe(false);
-  });
-});
-
-describe('/api/health payload', () => {
-  it('carries feed { level, reason, note } on every connector next to the old fields', async () => {
-    const hub = new Hub(0);
-    const store = new Store(':memory:');
-    const server = Fastify();
-    registerApi(server, hub, new Http(store, { offline: false }));
-    Object.assign(hub.healthOf('a'), { status: 'ok', lastOkAt: 5, runs: 2, note: '9 things' });
-    Object.assign(hub.healthOf('b'), { status: 'error', lastError: 'fetch failed (UND_ERR_CONNECT_TIMEOUT)', failures: 1 });
-    Object.assign(hub.healthOf('c'), { status: 'disabled', note: 'DISABLED_CONNECTORS' });
-
-    const body = (await server.inject({ url: '/api/health' })).json();
-    expect(body.connectors).toHaveLength(3);
-    const by = Object.fromEntries(body.connectors.map((c: any) => [c.id, c]));
-    expect(by.a).toMatchObject({ status: 'ok', runs: 2, note: '9 things', feed: { level: 'ok', reason: 'ok', note: '9 things' } });
-    expect(by.b).toMatchObject({ status: 'error', lastError: 'fetch failed (UND_ERR_CONNECT_TIMEOUT)', feed: { level: 'red', reason: 'unreachable' } });
-    expect(by.c).toMatchObject({ status: 'disabled', feed: { level: 'off', reason: 'disabled' } });
-    // the stored records stay plain (the WebSocket push uses the same hub.healthList())
-    expect(hub.health.get('a')).not.toHaveProperty('feed');
-    store.close();
   });
 });

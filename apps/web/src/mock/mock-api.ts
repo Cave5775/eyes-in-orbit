@@ -15,7 +15,7 @@ import {
   mockAscentSeries, mockBodies, mockDsn, mockGroundAndProbes, mockHealth, mockIssFix, mockIssTelemetry, mockLaunches, mockNews, mockObservatories, mockSatellites,
 } from './generators';
 
-/** The mock rover traverses: the trimmed real MMGIS localizations (fixtures/mmgis-traverse.json), the same shape as `GET /api/traverse/:id`. */
+/** The mock rover traverses: the trimmed real MMGIS localizations (fixtures/mmgis-traverse.json), the same shape as `api.traverse`. */
 function mockTraverse(id: string, nowMs: number): RoverTraverse | null {
   const points = (mmgis as unknown as Record<string, [number, number, number][] | undefined>)[id];
   const site = surfaceSiteOf(id);

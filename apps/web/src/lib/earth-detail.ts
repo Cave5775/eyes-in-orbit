@@ -1,6 +1,6 @@
 /**
  * Close-up Earth detail: pure planning for the streamed imagery layer (see scene/earth-detail.ts and the server's
- * /api/imagery tiles). The base map is one 8192 px texture (4.9 km per texel); closer than about 5,000 km the camera
+ * the imagery tile URLs). The base map is one 8192 px texture (4.9 km per texel); closer than about 5,000 km the camera
  * magnifies it, so a window of finer tiles is laid over it. Tiles are squares of 180 / 2^z degrees (2^(z+1) across,
  * 2^z down, row 0 at the north pole), 512 px each, at levels 4 to 6 (2.4 to 0.6 km per pixel).
  */

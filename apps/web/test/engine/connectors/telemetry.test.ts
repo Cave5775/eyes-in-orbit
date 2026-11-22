@@ -8,7 +8,7 @@ import { matchTrajectory, parseTrajectory } from '../../../src/engine/trajectory
 
 // ported from the server's telemetry test: the validation and merge rules and what a live ascent does to the launch entity.
 // The server's POST/GET/DELETE route tests, the local-request check and the persistence belong to the transport and arrive with it.
-const raw = () => JSON.parse(readFileSync(new URL('../../../../server/test/fixtures/ll2-launch.json', import.meta.url), 'utf8'));
+const raw = () => JSON.parse(readFileSync(new URL('../../fixtures/ll2-launch.json', import.meta.url), 'utf8'));
 const NET = Date.parse('2026-10-22T22:51:18Z');
 const ID = 'f6af629d-39b5-4f86-bc0c-f8776444a858';
 

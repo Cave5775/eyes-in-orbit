@@ -7,7 +7,7 @@ import {
   sunInBody, sunInBodyFromState, sunTrackingAngles, wrap360,
 } from '../src/lib/arrays';
 import type { V3 } from '../src/lib/camera';
-import recordedJson from '../../server/test/fixtures/iss-live-recorded.json';
+import recordedJson from './fixtures/iss-live-recorded.json';
 
 const DEG = Math.PI / 180;
 const unit = (a: V3): V3 => {

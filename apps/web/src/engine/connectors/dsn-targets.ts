@@ -113,7 +113,7 @@ export const DSN_SURFACE_CODES: readonly string[] = SURFACE_SITES.flatMap((s) =>
 
 /**
  * The entities of the DSN surface rovers, from the surface-site table (one source of truth): the DSN connector registers them at startup when no
- * one else has, so `DISABLED_CONNECTORS=surface-sites` still leaves Curiosity and Perseverance at their landing sites.
+ * one else has, so disabling the `surface-sites` connector still leaves Curiosity and Perseverance at their landing sites.
  */
 export const surfaceRoverEntities = (): NewEntity[] => SURFACE_SITES.filter((s) => s.dsn).map((s) => surfaceSiteRecord(s));
 

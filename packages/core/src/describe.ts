@@ -10,7 +10,7 @@ export interface DescribeFact {
 }
 
 /**
- * What `GET /api/describe/:entityId` returns: a text description of one object assembled on demand from Wikipedia
+ * What `api.describe` returns: a text description of one object assembled on demand from Wikipedia
  * (found through Wikidata), ESA DISCOS facts (needs a token) and, always, a line built from the catalogue fields the
  * entity already carries.
  */

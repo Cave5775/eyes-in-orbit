@@ -1,8 +1,8 @@
 import { composeFallback, type Description, type EntityRecord } from '@eio/core';
 
 /**
- * Offline stand-in for `GET /api/describe/:entityId`. The ISS text is the English Wikipedia summary exactly as the real lookup
- * returned it (apps/server/test/fixtures/wikipedia-summary-iss.json). ESA DISCOS is 'off' (needs a token) and every other object
+ * Offline stand-in for `api.describe`. The ISS text is the English Wikipedia summary exactly as the real lookup
+ * returned it (apps/web/test/fixtures/wikipedia-summary-iss.json). ESA DISCOS is 'off' (needs a token) and every other object
  * gets only the fallback line, so the mock shows no invented facts.
  */
 const ISS_TEXT =

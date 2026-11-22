@@ -77,7 +77,7 @@ export type IssChannel = '1A' | '1B' | '2A' | '2B' | '3A' | '3B' | '4A' | '4B';
 export const ISS_CHANNELS: readonly IssChannel[] = ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'];
 
 /**
- * Structured ISS array telemetry from the ISSLIVE Lightstreamer feed (`iss.arrays` message, `GET /api/iss`).
+ * Structured ISS array telemetry from the ISSLIVE Lightstreamer feed (`iss.arrays` message, `api.iss`).
  * Angles are the raw public values in degrees, 0 to 360, in the feed's own sign conventions (see `apps/web/src/lib/arrays.ts`
  * for how the client turns them into joint rotations).
  */
@@ -93,23 +93,23 @@ export interface IssArrays {
   verified: { sarj: boolean; bga: boolean; attitude: boolean };
 }
 
-/** Credentials the UI can set (`GET/PUT /api/credentials`); each one is read by a server connector. */
+/** Credentials the UI can set (`api.credentials` / `api.saveCredentials`); each one is read by an engine connector. */
 export type CredentialKey = 'spacetrackUser' | 'spacetrackPassword' | 'll2Token' | 'discosToken';
 
-/** What the server tells the UI about one credential. Secret values are never sent, only whether one is set. */
+/** What the data worker tells the UI about one credential. Secret values are never sent, only whether one is set. */
 export interface CredentialInfo {
   key: CredentialKey;
   label: string;
   connector: string;
   secret: boolean;
   set: boolean;
-  /** where the active value comes from: typed into the UI, or an environment variable / `.env` */
+  /** where the active value comes from: typed into the UI, or a build or host setting */
   source: 'ui' | 'env' | null;
   /** the value itself, for non-secret fields (e.g. the Space-Track username) */
   value?: string;
 }
 
-/** Request budget of one feed as the server's limiter sees it (`apps/server/src/net/limiter.ts`). */
+/** Request budget of one feed as the engine's limiter sees it (`apps/web/src/engine/net/limiter.ts`). */
 export interface FeedLimit {
   /** requests counted in the busiest window (per attempt, including refused-by-source ones) */
   used: number;

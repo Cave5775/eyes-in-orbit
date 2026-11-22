@@ -4,7 +4,7 @@ import {
   type BlobInfo, type BlobRow, type CacheRow, type KvStore,
 } from './types';
 
-/** One IndexedDB database, object stores mirroring the former SQLite tables. */
+/** One IndexedDB database, object stores `kv` and `blob`/`blobmeta`. */
 export const DB_NAME = 'eio';
 /**
  * Bump when a store or index changes and add a step to `upgrade`; per-key `v1`/`v2` suffixes stay for value formats.

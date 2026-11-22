@@ -13,8 +13,8 @@ import { Limiter } from '../../src/engine/net/limiter';
 import { LIMITS } from '../../src/engine/net/limits';
 import { MemoryKv } from '../../src/engine/store';
 
-// the real Wikidata / Wikipedia / DISCOS-shaped fixtures are the server's (kept in one place)
-const fx = (name: string): string => readFileSync(new URL(`../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+// the real Wikidata / Wikipedia / DISCOS-shaped fixtures are (shared fixtures in apps/web/test/fixtures)
+const fx = (name: string): string => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8');
 const SEARCH = fx('wikidata-search-p377-25544.json');
 const MISS = fx('wikidata-search-miss.json');
 const ENTITIES = fx('wikidata-entities-iss.json');

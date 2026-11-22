@@ -1,7 +1,7 @@
 import type { EntityRecord } from '@eio/core';
 
 /**
- * Paged loading of the entity catalogue (`GET /api/entities?limit=&offset=`, docs/CONTRACT.md). One unpaged answer for a
+ * Paged loading of the entity catalogue (`api.entities({ limit, offset })`, docs/CONTRACT.md). One unpaged answer for a
  * million objects is a document of about a gigabyte that must be built, sent and parsed whole; pages are a few MB each, the
  * first is on screen while the rest arrive, and a failure in the middle keeps what was already loaded.
  *

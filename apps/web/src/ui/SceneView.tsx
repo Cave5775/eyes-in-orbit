@@ -90,7 +90,7 @@ export function SceneView() {
   // the popup describes where objects were under the cursor: any selection change (a list click, the browser, a hotkey) retires it
   useEffect(() => setPick(null), [selectedId]);
 
-  // a rover's whole traverse (GET /api/traverse/:id) is fetched when it is selected; the scene draws it on the planet while it stays selected
+  // a rover's whole traverse (`api.traverse`) is fetched when it is selected; the scene draws it on the planet while it stays selected
   useEffect(() => {
     if (!selectedId || !hasTraverse(selectedId)) return;
     let live = true;

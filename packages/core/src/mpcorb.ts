@@ -365,7 +365,7 @@ function writeContainer(n: number, meta: PackedMeta): Uint8Array {
 /** Typed views over a container (no copy when `bytes` is 4-byte aligned, else one copy). Throws on a foreign or truncated buffer. */
 export function readContainer(bytes: Uint8Array): UnpackedOrbits {
   if (bytes.length < 16) throw new Error('minor planet data: truncated header');
-  // a view that does not start on a 4-byte boundary (a Node Buffer out of SQLite) is copied into a fresh ArrayBuffer: `Uint8Array.slice` copies,
+  // a view that does not start on a 4-byte boundary (a Node Buffer, or a stored blob) is copied into a fresh ArrayBuffer: `Uint8Array.slice` copies,
   // but `Buffer.slice` is a view, so the copy is explicit
   let aligned = bytes;
   if (bytes.byteOffset % 4 !== 0) {

@@ -1,8 +1,8 @@
 import type { EntityRecord } from './types';
 
 /**
- * Text search ranking of the entity catalogue (pure), shared by the browser (local search, the offline mock) and the server
- * (`/api/match`, which finds the candidates in an FTS5 index and ranks them with this), so both order results the same way.
+ * Text search ranking of the entity catalogue (pure), shared by the browser (local search, the offline mock) and the engine
+ * (`api.match`, which scans the catalogue and ranks it with this), so both order results the same way.
  */
 
 /** What the ranking reads of a record. */
@@ -11,7 +11,7 @@ export type Matchable = Pick<EntityRecord, 'id' | 'name' | 'aliases'>;
 /**
  * Relevance of `rec` for query `q`: exact id/alias > name prefix > word prefix > substring. 0 = no match. Every positive
  * score means `q` (lower-cased) is a substring of the lower-cased id, name or one alias, which is what an index of those
- * strings can find (`apps/server/src/search-index.ts`).
+ * strings can find (`apps/web/src/engine/search.ts`).
  */
 export function matchScore(rec: Matchable, q: string): number {
   const query = q.trim().toLowerCase();

@@ -14,7 +14,7 @@ import { Scheduler, type Connector } from '../../../src/engine/scheduler';
 import { MemoryKv, type KvStore } from '../../../src/engine/store';
 
 // ported from the server's connector-limits test (the CelesTrak and Horizons cases arrive with those connectors)
-const fx = (name: string): string => readFileSync(new URL(`../../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+const fx = (name: string): string => readFileSync(new URL(`../../fixtures/${name}`, import.meta.url), 'utf8');
 const H = 3600_000;
 
 /** a scheduler on fake timers with the REAL limit table, so each connector's source key and cadence are checked end to end */

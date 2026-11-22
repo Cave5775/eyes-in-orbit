@@ -10,7 +10,7 @@ import { MemoryKv } from '../src/engine/store';
 import { RPC_METHODS, type FromWorker, type RpcMethod, type ToWorker, type WorkerEvent } from '../src/workers/data.protocol';
 import { createDataService, type DataService, type DataServiceOptions } from '../src/workers/data.service';
 
-const ll2 = () => JSON.parse(readFileSync(new URL('../../server/test/fixtures/ll2-launch.json', import.meta.url), 'utf8'));
+const ll2 = () => JSON.parse(readFileSync(new URL('./fixtures/ll2-launch.json', import.meta.url), 'utf8'));
 const LAUNCH_ID = 'f6af629d-39b5-4f86-bc0c-f8776444a858';
 const DAY = 86_400_000;
 

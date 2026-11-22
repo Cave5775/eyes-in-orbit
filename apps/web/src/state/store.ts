@@ -225,7 +225,7 @@ const textOfChannel = (ch: Channel, s: State): string => (ch === 'text' ? textOf
 const EMPTY_TEXT: TextState = { textHits: [], textIds: new Set() };
 
 /**
- * The server's text search (`GET /api/match`, an FTS5 index), set by the data layer when a server is there; null (the offline
+ * The engine's text search (`api.match`), set by the data layer when the data worker is there; null (the offline
  * mock) means every search is local. A catalogue of `SERVER_SEARCH_MIN` records or more asks it instead of ranking in the browser
  * (docs/perf.md: 83 ms a query at 100 k, 1 s at 1 M, on the main thread).
  */

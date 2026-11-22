@@ -52,7 +52,7 @@ export class Hub extends Emitter<HubEvents> {
   limitOf?: (feedId: string) => Promise<FeedLimit | undefined> | FeedLimit | undefined;
   /** ascent trajectories bundled with the app */
   trajectories: Trajectory[] = [];
-  /** measured ascent rows posted to POST /api/telemetry/:launchId, by LL2 launch id */
+  /** measured ascent rows held per LL2 launch id (the ingest route is gone; the field stays for the ascent model) */
   readonly liveTelemetry = new Map<string, LiveAscent>();
   readonly health = new Map<string, ConnectorHealth>();
 

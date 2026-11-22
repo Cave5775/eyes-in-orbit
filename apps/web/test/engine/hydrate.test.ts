@@ -9,7 +9,7 @@ import { Limiter } from '../../src/engine/net/limiter';
 import { Scheduler } from '../../src/engine/scheduler';
 import { MemoryKv, readOnlyKv } from '../../src/engine/store';
 
-const fixture = (name: string) => readFileSync(new URL(`../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+const fixture = (name: string) => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8');
 
 /** a scheduler whose startup pass reads the cache only, over a store that already holds what an earlier visit left */
 async function started(withCache = true) {

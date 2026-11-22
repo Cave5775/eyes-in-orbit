@@ -8,16 +8,14 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c cyan,magenta \"npm run dev -w @eio/server\" \"npm run dev -w @eio/web\"",
+    "dev": "npm run dev -w @eio/web",
     "build": "npm run build -w @eio/web",
     "serve": "npm run build && tsx apps/relay/src/node.ts",
     "test": "vitest run",
-    "typecheck": "tsc -p packages/core --noEmit && tsc -p apps/server --noEmit && tsc -p apps/web --noEmit && tsc -p apps/relay --noEmit",
-    "assets": "node scripts/fetch-assets.mjs",
-    "celestrak:probe": "tsx apps/server/src/celestrak-probe.ts"
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p apps/web --noEmit && tsc -p apps/relay --noEmit",
+    "assets": "node scripts/fetch-assets.mjs"
   },
   "devDependencies": {
-    "concurrently": "^9.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vite": "8.3.3",

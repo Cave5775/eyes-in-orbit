@@ -13,7 +13,7 @@ import { LIMITS, sourceForUrl } from '../../../src/engine/net/limits';
 import { Scheduler, type Connector } from '../../../src/engine/scheduler';
 import { MemoryKv } from '../../../src/engine/store';
 
-const fx = (name: string): string => readFileSync(new URL(`../../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+const fx = (name: string): string => readFileSync(new URL(`../../fixtures/${name}`, import.meta.url), 'utf8');
 const H = 3600_000;
 
 describe('MMGIS waypoint parser (trimmed real files, read 2026-11-17)', () => {

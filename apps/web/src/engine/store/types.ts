@@ -1,5 +1,5 @@
 /**
- * The engine's storage interface: two row kinds that mirror the former SQLite tables.
+ * The engine's storage interface: two row kinds (small keyed values and binary blobs with metadata).
  *  - kv rows: `{ key, value, fetchedAt, ttlMs }`, the value any structured-cloneable JSON-like value (key names such as
  *    `celestrak:<group>`, `limit:<source>`, `backoff:<source>` are unchanged)
  *  - blob rows: `{ key, data, bytes, fetchedAt, ttlMs, usedAt }`, bytes as fetched, with the last use for the LRU size cap

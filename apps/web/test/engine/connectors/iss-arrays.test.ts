@@ -9,7 +9,7 @@ interface Snap {
   isoTime: string;
   items: Record<string, { hours: number; value: number }>;
 }
-const recorded = JSON.parse(readFileSync(new URL('../../../../server/test/fixtures/iss-live-recorded.json', import.meta.url), 'utf8')) as { snapshots: Snap[] };
+const recorded = JSON.parse(readFileSync(new URL('../../fixtures/iss-live-recorded.json', import.meta.url), 'utf8')) as { snapshots: Snap[] };
 
 function samples(s: Snap): Map<string, IssSample> {
   const now = Date.parse(s.isoTime);

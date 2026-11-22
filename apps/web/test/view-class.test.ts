@@ -4,7 +4,7 @@ import { categoryOf, matchesType } from '../src/lib/browser-ui';
 import { settleView } from '../src/lib/camera';
 import { NEAR_ORBIT_KM, primaryOf, viewClass } from '../src/lib/view-class';
 import { mockBodies, mockGroundAndProbes, mockLaunches, mockSatellites } from '../src/mock/generators';
-import { DSN_TARGETS, activeTargets, probeEntity } from '../../server/src/connectors/dsn-targets';
+import { DSN_TARGETS, activeTargets, probeEntity } from '../src/engine/connectors/dsn-targets';
 
 const rec = (kind: string, bodyId: string, provider?: EntityRecord['provider']): EntityRecord => ({ id: 'x', name: 'x', kind, bodyId, aliases: {}, provider, updatedAt: 0 });
 

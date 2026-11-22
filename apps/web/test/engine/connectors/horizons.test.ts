@@ -12,7 +12,7 @@ import { Scheduler } from '../../../src/engine/scheduler';
 import { MemoryKv } from '../../../src/engine/store';
 
 // a trimmed real Horizons response, shared with the server's tests by path
-const fx = (name: string): string => readFileSync(new URL(`../../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+const fx = (name: string): string => readFileSync(new URL(`../../fixtures/${name}`, import.meta.url), 'utf8');
 const MIN = 60_000;
 const T0 = Date.parse('2026-11-01T10:00:00Z');
 

@@ -7,7 +7,7 @@ import { normalizeIssFix } from '../../../src/engine/connectors/iss-rest';
 import { newsUrl, normalizeArticle, parseArticles } from '../../../src/engine/connectors/snapi';
 
 // ported from the server's feeds test (the Horizons cases arrive with that connector)
-const fixture = (name: string) => readFileSync(new URL(`../../../../server/test/fixtures/${name}`, import.meta.url), 'utf8');
+const fixture = (name: string) => readFileSync(new URL(`../../fixtures/${name}`, import.meta.url), 'utf8');
 
 describe('snapi normalize', () => {
   it('maps a v4 page', () => {
