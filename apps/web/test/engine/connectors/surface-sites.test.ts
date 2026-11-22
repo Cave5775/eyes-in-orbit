@@ -8,6 +8,7 @@ import { MMGIS_URL, parseMmgisTraverse, parseMmgisWaypoints, readTraverse, rover
 import { Http } from '../../../src/engine/http';
 import { Hub } from '../../../src/engine/hub';
 import { Limiter } from '../../../src/engine/net/limiter';
+import { defaultUpstreams, setUpstreams } from '../../../src/engine/net/upstream';
 import { LIMITS, sourceForUrl } from '../../../src/engine/net/limits';
 import { Scheduler, type Connector } from '../../../src/engine/scheduler';
 import { MemoryKv } from '../../../src/engine/store';
@@ -89,10 +90,12 @@ describe('surface-sites connector', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-17T10:00:00Z'));
+    setUpstreams({}); // these tests read the request URLs: the source itself, not the relay
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
   afterEach(() => {
+    setUpstreams(defaultUpstreams());
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

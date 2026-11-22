@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { MINOR_PLANETS_KEY, createViewStore } from '../src/state/view';
 import { watchMinorPlanets } from '../src/lib/minor-planet-watch';
 import { describeMinorPlanets } from '../src/state/minor-planet-status';
 
@@ -53,6 +54,16 @@ describe('minor planets are downloaded only on request', () => {
     off();
     v.set(false);
     expect(a.minorPlanetsCancel).not.toHaveBeenCalled();
+  });
+});
+
+describe('the layer switch itself is off until chosen', () => {
+  const storage = (v: string | null) => ({ getItem: () => v, setItem: () => undefined });
+  it('defaults to off, and only a stored "on" turns it on', () => {
+    expect(createViewStore(storage(null)).getState().minorPlanets).toBe(false);
+    expect(createViewStore(storage('off')).getState().minorPlanets).toBe(false);
+    expect(createViewStore(storage('on')).getState().minorPlanets).toBe(true);
+    expect(MINOR_PLANETS_KEY).toBe('eio.minorPlanets');
   });
 });
 

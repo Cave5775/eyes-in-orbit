@@ -61,6 +61,9 @@ export const ALLOW_LIST: readonly AllowEntry[] = [
   { origin: 'https://discosweb.esoc.esa.int', pathPrefix: '/api/', methods: ['GET', 'HEAD'], auth: true },
   { origin: 'https://mast.stsci.edu', pathPrefix: '/api/v0/invoke', methods: ['GET', 'HEAD', 'POST'] },
   { origin: 'https://celestrak.org', pathPrefix: '/NORAD/elements/gp.php', methods: ['GET', 'HEAD'] },
+  // the Mars rover waypoint layers (surface-sites connector). curl sees `Access-Control-Allow-Origin: *`, but Edge on the dev machine reported no such header
+  // for the same URL, so they go through the relay; the map tiles are images and load directly
+  { origin: 'https://mars.nasa.gov', pathPrefix: '/mmgis-maps/', methods: ['GET', 'HEAD'] },
 ];
 
 const SPACETRACK_ORIGIN = 'https://www.space-track.org';

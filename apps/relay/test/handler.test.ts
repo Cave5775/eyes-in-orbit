@@ -33,6 +33,9 @@ describe('relay allow-list', () => {
     expect(matchAllowed('https://discosweb.esoc.esa.int/api/objects?filter=x', 'GET')).not.toBeNull();
     expect(matchAllowed('https://mast.stsci.edu/api/v0/invoke', 'POST')).not.toBeNull();
     expect(matchAllowed('https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=json', 'GET')).not.toBeNull();
+    expect(matchAllowed('https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json', 'GET')).not.toBeNull();
+    expect(matchAllowed('https://mars.nasa.gov/other/', 'GET')).toBeNull();
+    expect(matchAllowed('https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json', 'POST')).toBeNull();
   });
 
   it('rejects other hosts, schemes, ports, credentials, paths and methods', () => {

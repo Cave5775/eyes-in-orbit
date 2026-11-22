@@ -61,8 +61,8 @@ describe('View > Minor planets', () => {
     const data = { ...init };
     return { data, getItem: (k: string) => data[k] ?? null, setItem: (k: string, v: string) => { data[k] = v; } };
   };
-  it('is on by default, remembered, off when stored off', () => {
-    expect(createViewStore(mem()).getState().minorPlanets).toBe(true);
+  it('is off by default (the download is opt-in), remembered, off when stored off', () => {
+    expect(createViewStore(mem()).getState().minorPlanets).toBe(false);
     const storage = mem({ [MINOR_PLANETS_KEY]: 'off' });
     const store = createViewStore(storage);
     expect(store.getState().minorPlanets).toBe(false);

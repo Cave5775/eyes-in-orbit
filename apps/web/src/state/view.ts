@@ -79,6 +79,15 @@ export function loadFlag(key: string, storage: StorageLike | null | undefined = 
   }
 }
 
+/** A remembered flag that defaults to off: only the stored text 'on' turns it on (the minor-planet layer, whose download is opt-in). */
+export function loadOptIn(key: string, storage: StorageLike | null | undefined = defaultStorage()): boolean {
+  try {
+    return storage?.getItem(key) === 'on';
+  } catch {
+    return false;
+  }
+}
+
 export function saveFlag(key: string, on: boolean, storage: StorageLike | null | undefined = defaultStorage()): void {
   try {
     storage?.setItem(key, on ? 'on' : 'off');
@@ -99,7 +108,7 @@ export function createViewStore(storage: StorageLike | null | undefined = defaul
     labels: loadFlag(LABELS_KEY, storage),
     detail: loadFlag(DETAIL_KEY, storage),
     sunShading: loadFlag(SUN_SHADING_KEY, storage),
-    minorPlanets: loadFlag(MINOR_PLANETS_KEY, storage),
+    minorPlanets: loadOptIn(MINOR_PLANETS_KEY, storage),
     scopeAll: false,
     surface: false,
     surfaceAuto: loadFlag(SURFACE_PREF_KEY, storage),

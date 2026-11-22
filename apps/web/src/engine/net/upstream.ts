@@ -17,7 +17,7 @@ const DIRECT: Upstream = { kind: 'direct' };
 export type UpstreamTable = Readonly<Record<string, Upstream>>;
 
 /**
- * The deployment's default table. Horizons, Space-Track, DISCOS and MAST send no CORS headers (Space-Track also logs in with a cross-site
+ * The deployment's default table. Horizons, Space-Track, DISCOS, MAST send no CORS headers (and the MMGIS rover waypoint layers were blocked in Edge although curl sees them) (Space-Track also logs in with a cross-site
  * cookie), so they go through the stateless relay at `relayBase` (default `/relay`, same origin): generic calls as `<relayBase>?url=<encoded>`,
  * Space-Track as `POST <relayBase>/spacetrack` (`connectors/spacetrack.ts`). CelesTrak is called directly (its CORS headers are unverified);
  * `celestrakViaRelay` flips it to the relay. Every other source (MPC, Launch Library, DSN, ...) answers CORS and stays direct.
@@ -25,7 +25,7 @@ export type UpstreamTable = Readonly<Record<string, Upstream>>;
 export function defaultUpstreams(opts: { relayBase?: string; celestrakViaRelay?: boolean } = {}): UpstreamTable {
   const relay: Upstream = { kind: 'relay', base: opts.relayBase ?? '/relay' };
   return {
-    horizons: relay, 'spacetrack:query': relay, 'spacetrack:login': relay, 'spacetrack:logout': relay, discos: relay, mast: relay,
+    horizons: relay, mmgis: relay, 'spacetrack:query': relay, 'spacetrack:login': relay, 'spacetrack:logout': relay, discos: relay, mast: relay,
     ...(opts.celestrakViaRelay ? { celestrak: relay } : {}),
   };
 }

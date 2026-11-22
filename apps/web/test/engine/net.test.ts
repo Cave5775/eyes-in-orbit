@@ -162,8 +162,8 @@ describe('the lock around the limiter state', () => {
 describe('upstream resolver', () => {
   it('defaults the no-CORS sources to the relay and every other source (CelesTrak included) to direct', () => {
     const relay = { kind: 'relay', base: '/relay' };
-    for (const s of ['horizons', 'spacetrack:query', 'spacetrack:login', 'spacetrack:logout', 'discos', 'mast']) expect(resolveUpstream(s)).toEqual(relay);
-    for (const s of Object.keys(LIMITS).filter((k) => !['horizons', 'discos', 'mast'].includes(k) && !k.startsWith('spacetrack:'))) expect(resolveUpstream(s)).toEqual({ kind: 'direct' });
+    for (const s of ['horizons', 'spacetrack:query', 'spacetrack:login', 'spacetrack:logout', 'discos', 'mast', 'mmgis']) expect(resolveUpstream(s)).toEqual(relay);
+    for (const s of Object.keys(LIMITS).filter((k) => !['horizons', 'discos', 'mast', 'mmgis'].includes(k) && !k.startsWith('spacetrack:'))) expect(resolveUpstream(s)).toEqual({ kind: 'direct' });
     expect(resolveUpstream('anything')).toEqual({ kind: 'direct' });
   });
 

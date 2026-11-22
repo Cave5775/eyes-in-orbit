@@ -1,5 +1,7 @@
 # EyesInOrbit — build contract (server <-> web)
 
+> Note: the browser data engine (apps/web/src/engine, behind the data worker) replaced the HTTP API and the `/stream` WebSocket described below; see the "Data worker and Api" section of reference.md. This file is rewritten when the server is deleted.
+
 Reference feeds: `spaceflight_live_data_streams_reference.md`.
 `packages/core` (`@eio/core`) is the shared spine: read `packages/core/src/{types,feeds,frames,bodies,entity-graph,mission-fsm,ascent}.ts` before coding. Units: km, km/s, ms since epoch. Frames: `EARTH:inertial` (TEME) / `EARTH:fixed`. Keep changes to `packages/core` additive.
 
