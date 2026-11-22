@@ -36,6 +36,35 @@ export interface DetailWindow {
 }
 
 /** Degrees of tile size at level z. */
+/**
+ * A tile's address at NASA GIBS: "Blue Marble: shaded relief and bathymetry" (500 m per pixel at best) through the WMS of
+ * the plain equirectangular grid (EPSG:4326, `best`). Level z has tiles 180 / 2^z degrees square (2^(z+1) across, 2^z down,
+ * row 0 at the north pole), 512 px JPEG. GIBS sends `Access-Control-Allow-Origin: *`, so the browser loads it directly.
+ */
+export const GIBS_WMS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi';
+export const GIBS_LAYER = 'BlueMarble_ShadedRelief_Bathymetry';
+export const GIBS_MIN_Z = 3;
+/** the finest level worth asking for (0.61 km per pixel; deeper would only be upscaled) */
+export const GIBS_MAX_Z = 6;
+
+/** [west, south, east, north] in degrees. */
+export function gibsBbox({ z, x, y }: { z: number; x: number; y: number }): [number, number, number, number] {
+  const s = 180 / 2 ** z;
+  return [-180 + x * s, 90 - (y + 1) * s, -180 + (x + 1) * s, 90 - y * s];
+}
+
+/** Is it a tile of the grid at a level GIBS is asked for? */
+export const isGibsTile = (z: number, x: number, y: number): boolean =>
+  [z, x, y].every(Number.isInteger) && z >= GIBS_MIN_Z && z <= GIBS_MAX_Z && x >= 0 && x < 2 ** (z + 1) && y >= 0 && y < 2 ** z;
+
+export function gibsTileUrl(id: { z: number; x: number; y: number }): string {
+  const q = new URLSearchParams({
+    SERVICE: 'WMS', REQUEST: 'GetMap', VERSION: '1.1.1', LAYERS: GIBS_LAYER, STYLES: '', FORMAT: 'image/jpeg',
+    SRS: 'EPSG:4326', WIDTH: String(TILE_PX), HEIGHT: String(TILE_PX), BBOX: gibsBbox(id).join(','),
+  });
+  return `${GIBS_WMS}?${q.toString()}`;
+}
+
 export const tileDeg = (z: number): number => 180 / 2 ** z;
 
 /** Ground size of one screen pixel at the looked-at point, km. */

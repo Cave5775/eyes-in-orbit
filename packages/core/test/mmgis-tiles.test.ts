@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MMGIS_LAYERS, defaultBodies, layerCoversTile, layerHasTile, localTilePath, lonLatOfTms, missionBbox, mmgisLayer, mmgisMapUrl, mmgisTileUrl,
+  MMGIS_LAYERS, defaultBodies, layerCoversTile, layerHasTile, mmgisTileUrlFor,lonLatOfTms, missionBbox, mmgisLayer, mmgisMapUrl, mmgisTileUrl,
   tileBounds, tmsOf,
 } from '../src';
 import m20 from './fixtures/mmgis-config-m20.json';
@@ -116,7 +116,12 @@ describe('TMS tile math (web mercator, row 0 at the south)', () => {
   it('builds the NASA and local addresses, the mission box and the public map link', () => {
     const l = mmgisLayer('MSL', 'gale')!;
     expect(mmgisTileUrl(l, 12, 3611, 1993)).toBe('https://mars.nasa.gov/mmgis-maps/MSL/Layers/MSL_CTX_ortho_mosaic_6m/12/3611/1993.png');
-    expect(localTilePath(l, 12, 3611, 1993)).toBe('/api/tiles/mmgis/MSL/gale/12/3611/1993.png');
+    expect(mmgisTileUrlFor(l, 12, 3611, 1993)).toBe(mmgisTileUrl(l, 12, 3611, 1993));
+    expect(mmgisTileUrlFor({ mission: 'MSL', id: 'nope' }, 12, 3611, 1993)).toBeNull();
+    expect(mmgisTileUrlFor(l, 2, 0, 0)).toBeNull(); // a level the layer does not publish
+    expect(mmgisTileUrlFor(l, 12, 0, 0)).toBeNull(); // outside the box
+    expect(mmgisTileUrlFor(l, 12, 3611.5, 1993)).toBeNull();
+    expect(mmgisTileUrlFor(l, 12, -1, 1993)).toBeNull();
     expect(missionBbox('M20')![0]).toBeCloseTo(67.49927, 4);
     expect(missionBbox('XYZ')).toBeUndefined();
     expect(mmgisMapUrl('dsn-M20')).toBe('https://mars.nasa.gov/maps/?mission=M20');

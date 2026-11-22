@@ -38,7 +38,7 @@ export interface Api {
   ascent(launchId: string): Promise<AscentSeries | null>;
   /** The whole traverse of a Mars rover (`GET /api/traverse/:entityId`); null when unknown or not cached yet. */
   traverse(entityId: string): Promise<RoverTraverse | null>;
-  /** Address of a Mars map tile (`GET /api/tiles/mmgis/...`, core `MMGIS_LAYERS`), or null when there is none (the mock has a few). */
+  /** Address of a Mars map tile (NASA's own address, loaded by the browser: core `mmgisTileUrlFor`), or null when there is none (the mock has a few). */
   mapTile(layer: Pick<MmgisLayer, 'mission' | 'id'>, z: number, x: number, y: number): string | null;
   /** `GET /api/minor-planets`: the index of the stored MPCORB orbits (chunks by H), or null when the server has none yet (or does not know the route). */
   minorPlanetIndex(): Promise<MinorPlanetIndex | null>;

@@ -3,7 +3,7 @@ import { isIss } from '../lib/entity';
 import { clampMockCount } from '../mock/generators';
 import { createMockApi } from '../mock/mock-api';
 import { setTextMatcher, useStore } from '../state/store';
-import { bodyEntityRecords, localTilePath } from '@eio/core';
+import { bodyEntityRecords, mmgisTileUrlFor } from '@eio/core';
 import { PAGE_SIZE, loadPaged } from '../lib/paging';
 import type { Api, MinorPlanetIndex } from './types';
 import { StreamClient } from './stream';
@@ -33,7 +33,7 @@ const restApi: Api = {
   iss: () => getJson('/api/iss'),
   health: () => getJson('/api/health', 4_000),
   traverse: (entityId) => getJson<RoverTraverse>(`/api/traverse/${encodeURIComponent(entityId)}`, 15_000).catch(() => null),
-  mapTile: (layer, z, x, y) => localTilePath(layer, z, x, y),
+  mapTile: (layer, z, x, y) => mmgisTileUrlFor(layer, z, x, y),
   minorPlanetIndex: () => getJson<MinorPlanetIndex>('/api/minor-planets', 15_000).catch(() => null),
   minorPlanetChunk: async (k) => {
     const res = await fetch(`/api/minor-planets?chunk=${k}`, { signal: AbortSignal.timeout(120_000) });

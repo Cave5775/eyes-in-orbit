@@ -21,7 +21,7 @@ export type MmgisMission = 'M20' | 'MSL';
 
 export interface MmgisLayer {
   mission: MmgisMission;
-  /** short id used in the tile route (`/api/tiles/mmgis/:mission/:layer/...`) */
+  /** short id of the layer (with the mission it names the layer in `mmgisTileUrlFor`) */
   id: string;
   /** the layer's name in the MMGIS configuration */
   name: string;
@@ -125,9 +125,16 @@ export const layerCoversTile = (layer: MmgisLayer, z: number, x: number, y: numb
 export const mmgisTileUrl = (layer: MmgisLayer, z: number, x: number, y: number): string =>
   `${MMGIS_TILE_BASE}/${layer.mission}/Layers/${layer.dir}/${z}/${x}/${y}.png`;
 
-/** The tile's address at the local server (the route of `apps/server/src/mmgis-tiles.ts`). */
-export const localTilePath = (layer: Pick<MmgisLayer, 'mission' | 'id'>, z: number, x: number, y: number): string =>
-  `/api/tiles/mmgis/${layer.mission}/${layer.id}/${z}/${x}/${y}.png`;
+/**
+ * The address at NASA of a tile named by mission and layer id, or null when the browser should not ask for it: an unknown
+ * layer (only the cited table is ever requested), a level the layer does not publish, a tile outside its box, or
+ * non-integer / negative indices (`layerHasTile`). NASA sends `Access-Control-Allow-Origin: *`, so the browser loads it directly.
+ */
+export function mmgisTileUrlFor(layer: Pick<MmgisLayer, 'mission' | 'id'>, z: number, x: number, y: number): string | null {
+  if (![z, x, y].every(Number.isInteger)) return null;
+  const l = mmgisLayer(layer.mission, layer.id);
+  return l && layerHasTile(l, z, x, y) ? mmgisTileUrl(l, z, x, y) : null;
+}
 
 /** The mission's public MMGIS map (no deep-link parameters: the ones MMGIS reads could not be confirmed), or undefined. */
 export function mmgisMapUrl(entityId: string): string | undefined {
