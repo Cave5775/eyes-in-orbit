@@ -9,6 +9,7 @@ import { useStore } from '../state/store';
 import { CredentialsSection } from './CredentialsSection';
 import { useDismiss, useWallNow } from './hooks';
 import { DsnSection } from './DsnSection';
+import { MinorPlanetsControl } from './MinorPlanetsControl';
 import { StreamUrlInput } from './StreamUrlInput';
 
 const hhmmZ = (ms: number): string => new Date(ms).toISOString().slice(11, 16) + 'Z';
@@ -168,6 +169,7 @@ function FeedDetail({ id, now }: { id: string; now: number }) {
         </dd>
       </dl>
       {DSN_FEEDS.has(id) && <DsnSection />}
+      {id === 'minor-planets' && <MinorPlanetsControl />}
       {credentialConnector(id) && <CredentialsSection connector={credentialConnector(id)!} />}
     </>
   );

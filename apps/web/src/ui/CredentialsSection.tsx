@@ -6,9 +6,9 @@ import { useWallNow } from './hooks';
 import { clearDescribeCache } from './detail/AboutTab';
 
 /**
- * Login and key fields of one connector, inside that feed's pane of the Data streams popup. Values go to the local
- * server only, which keeps them in its SQLite cache and uses them from its next run on. Secrets are write-only: the
- * field shows whether one is saved, never its value.
+ * Login and key fields of one connector, inside that feed's pane of the Data streams popup. Values go to the data engine in
+ * this page's worker, which keeps them unencrypted in this browser profile (IndexedDB) and uses them from its next run on.
+ * Secrets are write-only: the field shows whether one is saved, never its value.
  */
 export function CredentialsSection({ connector }: { connector: string }) {
   const [creds, setCreds] = useState<CredentialInfo[] | null>(null);
@@ -46,15 +46,31 @@ export function CredentialsSection({ connector }: { connector: string }) {
     }
   };
 
+  const clearAll = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setCreds(await api.clearCredentials());
+      clearDescribeCache();
+      setDraft({});
+      setSavedAt(Date.now());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const mine = (creds ?? []).filter((c) => c.connector === connector);
   const edited = Object.entries(draft).filter(([k, v]) => v !== undefined && mine.some((c) => c.key === k)) as [CredentialKey, string][];
 
   return (
     <div className="keys-group">
       <div className="ds-sub">API keys and logins</div>
-      <p className="dim keys-note">
-        Optional. Saved on this machine only (the local server&rsquo;s cache) and used for its own requests; secrets are write-only
-        and never shown again. They override the same values from <code>.env</code>.
+      <p className="dim keys-note" data-testid="keys-warning">
+        Optional. Saved unencrypted in this browser profile, so extensions and scripts running on this site can read them. They are
+        sent to the provider that needs them, or through this site&rsquo;s relay when the provider cannot be called from a browser.
+        Secrets are write-only: never shown again.
       </p>
       {!creds && !error && <div className="dim">Loading&hellip;</div>}
       {mine.map((c) => {
@@ -65,13 +81,13 @@ export function CredentialsSection({ connector }: { connector: string }) {
             <input
               type={c.secret ? 'password' : 'text'}
               autoComplete="off" spellCheck={false} value={value}
-              placeholder={c.set && c.secret ? `saved (${c.source === 'ui' ? 'this app' : '.env'})` : 'not set'}
+              placeholder={c.set && c.secret ? 'saved in this browser' : 'not set'}
               onChange={(e) => setDraft((d) => ({ ...d, [c.key]: e.target.value }))}
               onKeyDown={(e) => e.key === 'Enter' && edited.length && void save(Object.fromEntries(edited))}
             />
             {c.source === 'ui' && (
               <button className="chip clear" disabled={busy} onClick={() => void save({ [c.key]: null })}
-                title={'Remove the value saved here' + (c.secret ? '' : ' (falls back to .env)')}>
+                title="Remove the value saved here">
                 clear
               </button>
             )}
@@ -83,6 +99,11 @@ export function CredentialsSection({ connector }: { connector: string }) {
         <button className="btn active" disabled={busy || edited.length === 0} onClick={() => void save(Object.fromEntries(edited))}>
           {busy ? 'Saving…' : 'Save'}
         </button>
+        {(creds ?? []).some((c) => c.set) && (
+          <button className="btn" disabled={busy} onClick={() => void clearAll()} title="Remove every saved key and login of all feeds from this browser">
+            Clear all
+          </button>
+        )}
         {savedAt && <span className="dim keys-saved">saved {fmtAgo(savedAt, now)}; the connector retries now</span>}
       </div>
     </div>

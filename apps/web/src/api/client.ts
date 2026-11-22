@@ -1,62 +1,28 @@
-import type { ArchiveImagesResult, Article, AscentSeries, CredentialInfo, Description, EntityRecord, Launch, RoverTraverse, ServerMessage } from '@eio/core';
+import type { EntityRecord } from '@eio/core';
 import { isIss } from '../lib/entity';
 import { clampMockCount } from '../mock/generators';
 import { createMockApi } from '../mock/mock-api';
 import { setTextMatcher, useStore } from '../state/store';
-import { bodyEntityRecords, localTilePath } from '@eio/core';
+import { useMinorPlanetStatus } from '../state/minor-planet-status';
+import { useView } from '../state/view';
+import { bodyEntityRecords } from '@eio/core';
+import { watchMinorPlanets } from '../lib/minor-planet-watch';
 import { PAGE_SIZE, loadPaged } from '../lib/paging';
-import type { Api, MinorPlanetIndex } from './types';
-import { StreamClient } from './stream';
+import type { WorkerEvent } from '../workers/data.protocol';
+import type { Api } from './types';
+import { DataLink } from './data-link';
+import { createWorkerApi } from './worker-api';
+import { WorkerStream } from './worker-stream';
 
-async function getJson<T>(path: string, timeoutMs = 20_000): Promise<T> {
-  const res = await fetch(path, { signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-  return (await res.json()) as T;
-}
+/** Active data source: the browser data engine (the data worker), or the offline mock (`?mock=1`, or when the worker cannot start). */
+export let api: Api = new Proxy({} as Api, {
+  // until `startData` has chosen: nothing is asked (the first calls only follow it), and a tile has no address
+  get: (_t, name) => (name === 'mapTile' ? () => null : () => Promise.reject(new Error('the data layer has not started'))),
+});
+let link: DataLink | undefined;
 
-const qs = (params: Record<string, string | number | undefined>): string => {
-  const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') p.set(k, String(v));
-  const s = p.toString();
-  return s ? `?${s}` : '';
-};
-
-const restApi: Api = {
-  entities: (since, page) => getJson(`/api/entities${qs({ since, limit: page?.limit, offset: page?.offset })}`, 60_000),
-  search: (q, limit = 20) => getJson(`/api/search${qs({ q, limit })}`, 8_000),
-  match: (q) => getJson(`/api/match${qs({ q })}`, 15_000),
-  launches: async () => (await getJson<{ launches: Launch[] }>('/api/launches')).launches,
-  news: async (o = {}) => (await getJson<{ articles: Article[] }>(`/api/news${qs({ entity: o.entity, q: o.q, limit: o.limit })}`)).articles,
-  dsn: () => getJson('/api/dsn'),
-  describe: (entityId) => getJson<Description>(`/api/describe/${encodeURIComponent(entityId)}`, 30_000),
-  archiveImages: (observatoryId, bodyId) => getJson<ArchiveImagesResult>(`/api/archive-images${qs({ observatory: observatoryId, body: bodyId })}`, 30_000),
-  iss: () => getJson('/api/iss'),
-  health: () => getJson('/api/health', 4_000),
-  traverse: (entityId) => getJson<RoverTraverse>(`/api/traverse/${encodeURIComponent(entityId)}`, 15_000).catch(() => null),
-  mapTile: (layer, z, x, y) => localTilePath(layer, z, x, y),
-  minorPlanetIndex: () => getJson<MinorPlanetIndex>('/api/minor-planets', 15_000).catch(() => null),
-  minorPlanetChunk: async (k) => {
-    const res = await fetch(`/api/minor-planets?chunk=${k}`, { signal: AbortSignal.timeout(120_000) });
-    if (!res.ok) throw new Error(`minor planet chunk ${k}: HTTP ${res.status}`);
-    return new Uint8Array(await res.arrayBuffer());
-  },
-  ascent: (launchId) => getJson<AscentSeries>(`/api/telemetry/${encodeURIComponent(launchId)}`, 8_000).catch(() => null),
-  credentials: async () => (await getJson<{ credentials: CredentialInfo[] }>('/api/credentials', 8_000)).credentials,
-  saveCredentials: async (values) => {
-    const res = await fetch('/api/credentials', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ values }),
-      signal: AbortSignal.timeout(8_000),
-    });
-    const body = (await res.json().catch(() => ({}))) as { credentials?: CredentialInfo[]; error?: string };
-    if (!res.ok || !body.credentials) throw new Error(body.error ?? `HTTP ${res.status}`);
-    return body.credentials;
-  },
-};
-
-/** Active data source: the REST client, or the offline mock when the API is unreachable (or `?mock=1`). */
-export let api: Api = restApi;
+/** How long the engine may take to start (it opens IndexedDB and reads every connector's cache before it answers). */
+const START_TIMEOUT_MS = 30_000;
 
 const store = useStore.getState;
 let lastEntitiesAt = 0;
@@ -131,7 +97,7 @@ function startReal(): void {
     pending = setTimeout(() => void loadEntities(false).catch((err) => console.warn('[eio] entity refresh failed:', err)), 250);
   };
 
-  const onMessage = (m: ServerMessage, reconnected: boolean) => {
+  const onMessage = (m: WorkerEvent, reconnected: boolean) => {
     const s = store();
     switch (m.type) {
       case 'hello':
@@ -146,13 +112,19 @@ function startReal(): void {
       case 'iss.fix': s.setIss({ fix: m.fix }); break;
       case 'iss.telemetry': s.setIss({ telemetry: m.points }); break;
       case 'iss.arrays': s.setIss({ arrays: m.arrays }); break;
+      case 'minorPlanets': useMinorPlanetStatus.getState().set(m.status); break;
     }
   };
 
-  const stream = new StreamClient(onMessage, (c) => store().setConn(c));
+  const stream = new WorkerStream(link!, onMessage, (c) => store().setConn(c));
   watchIssSelection((t) => stream.setTopics(t));
-  setTextMatcher((text) => api.match(text)); // large catalogues are searched by the server's index (state/store.ts)
+  watchMinorPlanetDownload();
+  setTextMatcher((text) => api.match(text)); // large catalogues are matched by the engine over its catalogue (state/store.ts)
   void loadAll(true).then(() => stream.start());
+}
+
+function watchMinorPlanetDownload(): void {
+  watchMinorPlanets(() => api, useView, useMinorPlanetStatus.getState().set);
 }
 
 function startMock(): void {
@@ -161,6 +133,7 @@ function startMock(): void {
   api = createMockApi(Date.now(), n);
   store().setConn('mock');
   void loadAll(true);
+  watchMinorPlanetDownload();
   // stand-in for pushes: ISS fix at 1 Hz while selected, DSN/health refresh every few seconds
   let issTimer: ReturnType<typeof setInterval> | undefined;
   watchIssSelection((topics) => {
@@ -173,14 +146,25 @@ function startMock(): void {
   }, 5000);
 }
 
+const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${what} did not answer within ${ms / 1000} s`)), ms);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+
 export async function startData(): Promise<void> {
   const forced = new URLSearchParams(location.search).get('mock') === '1';
   if (!forced) {
     try {
-      await restApi.health();
+      link = new DataLink(new Worker(new URL('../workers/data.worker.ts', import.meta.url), { type: 'module', name: 'eio-data' }) as never);
+      const real = createWorkerApi(link);
+      await withTimeout(real.health(), START_TIMEOUT_MS, 'the data worker'); // answers once the engine is built and its cache is read
+      api = real;
       return startReal();
-    } catch {
-      console.warn('[eio] API unreachable on /api, falling back to mock data');
+    } catch (err) {
+      link?.close();
+      link = undefined;
+      console.warn('[eio] the data worker could not start, falling back to mock data:', err);
     }
   }
   startMock();

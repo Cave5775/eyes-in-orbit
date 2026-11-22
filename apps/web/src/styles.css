@@ -890,3 +890,7 @@ video.stream-frame { background: #000; object-fit: contain; }
 .sky-lightbox-prev { left: 10px; }
 .sky-lightbox-next { right: 10px; }
 .float-head { position: relative; z-index: 5; }
+
+/* ---- minor-planet download state (ui/MinorPlanetsControl.tsx) ---- */
+.mp-control { display: flex; align-items: center; gap: 8px; padding: 2px 0 6px 38px; font-size: 11px; line-height: 1.35; }
+.mp-control[data-state="failed"] .mp-text { color: var(--bad); }

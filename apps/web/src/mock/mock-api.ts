@@ -45,6 +45,14 @@ export function createMockApi(nowMs = Date.now(), satCount = 2000): Api {
   return {
     minorPlanetIndex: async () => mockMinorPlanetIndex(nowMs),
     minorPlanetChunk: async (k) => mockMinorPlanetChunk(k),
+    // the mock's sample is always "stored": nothing to download
+    minorPlanetsStatus: async () => ({ state: 'ready', count: (await mockMinorPlanetIndex(nowMs)).count, fetchedAt: nowMs }),
+    minorPlanetsDownload: async () => ({ state: 'ready', count: (await mockMinorPlanetIndex(nowMs)).count, fetchedAt: nowMs }),
+    minorPlanetsCancel: async () => undefined,
+    clearCredentials: async () => {
+      for (const c of creds) Object.assign(c, { set: false, source: null, value: undefined });
+      return creds.map((c) => ({ ...c }));
+    },
     credentials: async () => creds.map((c) => ({ ...c })),
     saveCredentials: async (values) => {
       for (const c of creds) {
