@@ -1833,6 +1833,11 @@ export class SceneController {
     if (on && getApi) this.minor.load(getApi);
   }
 
+  /** The engine's minor-planet download state: a finished download makes the layer read the index now. */
+  setMinorPlanetState(state: 'none' | 'downloading' | 'ready' | 'failed'): void {
+    this.minor.notify(state);
+  }
+
   /** What hover lands on: the nearest visible object, or the body whose disc the hidden objects are over. */
   private pick(px: number, py: number): string | null {
     return this.pickAll(px, py, 1, false, true).ids[0] ?? null;

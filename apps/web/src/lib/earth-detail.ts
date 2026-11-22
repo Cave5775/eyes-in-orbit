@@ -35,7 +35,6 @@ export interface DetailWindow {
   ty: number;
 }
 
-/** Degrees of tile size at level z. */
 /**
  * A tile's address at NASA GIBS: "Blue Marble: shaded relief and bathymetry" (500 m per pixel at best) through the WMS of
  * the plain equirectangular grid (EPSG:4326, `best`). Level z has tiles 180 / 2^z degrees square (2^(z+1) across, 2^z down,

@@ -15,16 +15,16 @@ const LAUNCH_ID = 'f6af629d-39b5-4f86-bc0c-f8776444a858';
 const DAY = 86_400_000;
 
 /** a service on a memory store with a fake network, and a way to call it like the page does */
-function harness(over: Partial<DataServiceOptions> = {}) {
+function harness(over: Partial<DataServiceOptions> & { postHook?: (msg: FromWorker) => void } = {}) {
   const posted: { msg: FromWorker; transfer?: Transferable[] }[] = [];
   const kv = over.kv ?? new MemoryKv();
   const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ results: [ll2()] }), { status: 200 }));
   const service: DataService = createDataService({
-    post: (msg, transfer) => posted.push({ msg, transfer }),
     kv, fetch: over.fetch ?? fetchMock, withLock: inProcessLock(), jitterMs: 0,
     storage: { persist: async () => true, estimate: async () => ({ usage: 1234, quota: 5_000_000 }) },
     connectors: ({ credentials }) => [bodies, createLaunchlibrary(credentials)],
     ...over,
+    post: (msg, transfer) => { over.postHook?.(msg); posted.push({ msg, transfer }); },
   });
   let n = 0;
   const rpc = async (method: RpcMethod, ...args: unknown[]): Promise<any> => {
@@ -214,6 +214,94 @@ describe('minor planets are opt-in', () => {
     await h.rpc('minorPlanetsCancel');
     expect(await download).toEqual({ state: 'none' }); // aborted, not failed
     expect(signal!.aborted).toBe(true);
+    await h.service.stop();
+  });
+});
+
+describe('data worker robustness', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-22T20:00:00Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('marks what the cache pass showed as cached, until a real run replaces it', async () => {
+    const kv = new MemoryKv();
+    await kv.put('ll2:upcoming', [ll2()], 5 * 60_000, Date.now() - DAY);
+    await kv.put('ll2:previous', [], 5 * 60_000, Date.now() - DAY);
+    const h = harness({ kv });
+    await h.service.ready;
+    const before = (await h.rpc('health')).connectors.find((c: { id: string }) => c.id === 'launchlibrary');
+    expect(before).toMatchObject({ fromCache: true, note: expect.stringMatching(/last cached/), runs: 0 });
+    await vi.advanceTimersByTimeAsync(4000);
+    const after = (await h.rpc('health')).connectors.find((c: { id: string }) => c.id === 'launchlibrary');
+    expect(after).toMatchObject({ status: 'ok', fromCache: false });
+    expect(after.note).toBeUndefined();
+    await h.service.stop();
+  });
+
+  it('a payload that cannot be cloned does not escape into the hub listener', async () => {
+    let throwing = false;
+    const h = harness({
+      postHook: (msg) => {
+        if (throwing && msg.kind === 'event' && msg.msg.type === 'launches') throw new DOMException('could not be cloned', 'DataCloneError');
+      },
+    });
+    await h.service.ready;
+    h.service.handle({ kind: 'start' });
+    await vi.advanceTimersByTimeAsync(0);
+    throwing = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await vi.advanceTimersByTimeAsync(4000); // the run sets the launches: the listener's post throws
+    expect((await h.rpc('health')).connectors.find((c: { id: string }) => c.id === 'launchlibrary')).toMatchObject({ status: 'ok' });
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/could not send launches/));
+    warn.mockRestore();
+    await h.service.stop();
+  });
+
+  it('tells the other tabs which connectors a saved credential concerns, never its value, and acts on their messages', async () => {
+    const kv = new MemoryKv();
+    const sent: unknown[] = [];
+    const channels: { onmessage: ((ev: { data: unknown }) => void) | null }[] = [];
+    const channel = (name: string) => {
+      expect(name).toBe('eio:credentials');
+      const c = { onmessage: null as ((ev: { data: unknown }) => void) | null, postMessage: (m: unknown) => void sent.push(m), close: () => undefined };
+      channels.push(c);
+      return c;
+    };
+    const a = harness({ kv, channel, connectors: () => [] });
+    const b = harness({ kv, channel, connectors: () => [] });
+    await a.service.ready; await b.service.ready;
+    const discos = async (h: typeof a) => (await h.rpc('health')).connectors.find((c: { id: string }) => c.id === 'discos').status;
+    expect(await discos(b)).toBe('stub');
+    await a.rpc('saveCredentials', { discosToken: 'tok-very-secret' });
+    expect(sent).toEqual([{ connectors: ['discos'] }]);
+    expect(JSON.stringify(sent)).not.toContain('tok-very-secret');
+    channels[1].onmessage!({ data: sent[0] }); // what the browser delivers to the other tab's channel
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await discos(b)).toBe('idle'); // its DISCOS feed noticed the token without a reload
+    channels[1].onmessage!({ data: { connectors: 'nonsense' } }); // garbage is ignored
+    await a.service.stop(); await b.service.stop();
+  });
+});
+
+describe('minor-planet toggle off and on again', () => {
+  const GZ = gzipSync(Buffer.from(MPCORB_SAMPLE, 'latin1'));
+
+  it('a download requested while the previous one is still aborting starts fresh instead of joining it', async () => {
+    vi.useRealTimers();
+    let gets = 0;
+    const f = vi.fn<typeof fetch>(async (_u, init) => {
+      if (init?.method === 'HEAD') return new Response(null);
+      if (gets++ === 0) return new Response(new ReadableStream({ start(c) { init?.signal?.addEventListener('abort', () => c.error(init.signal!.reason)); } }));
+      return new Response(GZ, { headers: { 'last-modified': 'Tue, 17 Nov 2026 13:09:02 GMT' } });
+    });
+    const h = harness({ fetch: f, minOrbits: 10, limits: {}, connectors: () => [] });
+    await h.service.ready;
+    const first = h.rpc('minorPlanetsDownload');
+    for (let i = 0; i < 50 && gets === 0; i++) await new Promise((r) => setTimeout(r, 5));
+    await h.rpc('minorPlanetsCancel');
+    const second = await h.rpc('minorPlanetsDownload'); // asked at once, before the abort has finished
+    expect(await first).toEqual({ state: 'none' });
+    expect(second).toMatchObject({ state: 'ready', count: 20 });
+    expect(gets).toBe(2);
     await h.service.stop();
   });
 });

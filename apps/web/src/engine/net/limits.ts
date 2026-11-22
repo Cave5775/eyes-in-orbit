@@ -121,16 +121,7 @@ export const LIMITS: Record<string, SourceLimit> = {
     blockOn: { 403: 6 * HOUR, 429: 3 * HOUR },
     backoff: { baseMs: 30 * MIN, maxMs: 12 * HOUR },
   },
-  // NASA MMGIS map tiles for the Mars surface patch (engine/mmgis-tiles.ts): on demand, kept in IndexedDB for 90 days, so a
-  // tile is asked for once. Static files on S3 behind CloudFront: 4 per second at most (2 at a time), 1200 per hour; 429/503 block,
-  // server errors and network failures back off from 1 min to 1 h. A 403/404 is a tile S3 does not have (clipped or sparse mosaic
-  // edges): it counts for nothing here and only goes to the per-tile negative cache in mmgis-tiles.ts
-  'mmgis-tiles': {
-    label: 'NASA MMGIS map tiles', policy: 'unpublished (NASA public data, https://github.com/NASA-AMMOS/MMGIS)',
-    minSpacingMs: 250, perHour: 1200, maxWaitMs: 2000,
-    blockOn: { 429: 15 * MIN, 503: 15 * MIN },
-    backoff: { baseMs: MIN, maxMs: HOUR, statuses: [500, 502, 503, 504] },
-  },
+  // (the MMGIS map tiles are images the browser loads itself: no request of the engine, so no limit here)
   // Minor Planet Center MPCORB (engine/connectors/minor-planets.ts): one ~70 MB gz download a month (cache TTL 30 days, a HEAD
   // on Last-Modified decides whether it is needed), so 2 attempts an hour is far more than needed; 403/429/503 block for hours, failures back off from 1 h to 12 h
   mpcorb: {

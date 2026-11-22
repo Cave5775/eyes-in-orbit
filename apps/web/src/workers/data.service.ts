@@ -35,6 +35,13 @@ import {
   HEALTH_THROTTLE_MS, MAX_TOPICS, RPC_METHODS, type FromWorker, type RpcError, type RpcMethod, type ToWorker, type WorkerEvent,
 } from './data.protocol';
 
+/** The part of a BroadcastChannel the service uses. */
+export interface ChannelLike {
+  postMessage(msg: unknown): void;
+  close(): void;
+  onmessage: ((ev: { data: unknown }) => void) | null;
+}
+
 export interface DataServiceOptions {
   /** deliver a message to the page (with the buffers to hand over) */
   post(msg: FromWorker, transfer?: Transferable[]): void;
@@ -50,6 +57,10 @@ export interface DataServiceOptions {
   connectors?: (deps: { credentials: Credentials; withLock: WithLock }) => Connector[];
   /** `navigator.storage` (tests pass a stub) */
   storage?: Pick<StorageManager, 'persist' | 'estimate'>;
+  /** BroadcastChannel factory for credential changes between tabs (default the browser's; tests pass a fake, `null` turns it off) */
+  channel?: ((name: string) => ChannelLike) | null;
+  /** replaces the request-limit table (tests; default the real one) */
+  limits?: ConstructorParameters<typeof Limiter>[1] extends infer O ? (O extends { limits?: infer L } ? L : never) : never;
   /** random start jitter of the connectors (default 1 s) */
   jitterMs?: number;
   /** the smallest MPCORB download that counts as the real file (tests use a 20-line sample) */
@@ -105,7 +116,14 @@ export function createDataService(opts: DataServiceOptions): DataService {
   // ---- push (the old /stream)
   let started = false;
   const topics = new Set<string>();
-  const emit = (msg: WorkerEvent) => opts.post({ kind: 'event', msg });
+  const emit = (msg: WorkerEvent) => {
+    // a payload that cannot be cloned must not escape into the hub listener that called us (and stop its other listeners)
+    try {
+      opts.post({ kind: 'event', msg });
+    } catch (err) {
+      console.warn(`[data] could not send ${msg.type}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   const emitIf = (msg: WorkerEvent, topic?: string) => { if (started && (!topic || topics.has(topic))) emit(msg); };
   let healthTimer: ReturnType<typeof setTimeout> | undefined;
   const pushHealth = async () => emit({ type: 'health', connectors: await hub.healthList() });
@@ -128,8 +146,12 @@ export function createDataService(opts: DataServiceOptions): DataService {
     return s ? { state: 'ready', count: s.meta.count, fetchedAt: s.fetchedAt } : { state: 'none' };
   };
 
-  const minorPlanetsDownload = (o?: { force?: boolean }): Promise<MinorPlanetStatus> => {
-    if (mpRun) return mpRun;
+  const minorPlanetsDownload = async (o?: { force?: boolean }): Promise<MinorPlanetStatus> => {
+    // a download that is being aborted (the layer was just turned off) is waited for: a switch back on starts a fresh one
+    while (mpRun) {
+      if (!mpCtl?.signal.aborted) return mpRun;
+      await mpRun.catch(() => undefined);
+    }
     const ctl = (mpCtl = new AbortController());
     const run = (async (): Promise<MinorPlanetStatus> => {
       const before = await mpStored();
@@ -243,6 +265,15 @@ export function createDataService(opts: DataServiceOptions): DataService {
     }
   };
 
+  // ---- credentials changed in this tab or another
+  const applyCredentialChange = (connectors: string[]): void => {
+    // the DISCOS feed shows stub or idle by whether a token is set; the connectors whose settings moved run again at once
+    describe.syncHealth().catch(() => undefined);
+    connectors.forEach((id) => void scheduler.refresh(id));
+  };
+  let channel: ChannelLike | undefined;
+  const makeChannel = opts.channel === undefined ? (typeof BroadcastChannel === 'undefined' ? null : (n: string) => new BroadcastChannel(n) as unknown as ChannelLike) : opts.channel;
+
   // ---- startup
   const init = async (): Promise<void> => {
     if (opts.kv) kv = opts.kv;
@@ -265,14 +296,23 @@ export function createDataService(opts: DataServiceOptions): DataService {
       console.warn(`[data] startup prune failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    limiter = new Limiter(kv, { withLock });
+    if (makeChannel) {
+      const ch = (channel = makeChannel('eio:credentials'));
+      ch.onmessage = (ev) => {
+        const list = (ev.data as { connectors?: unknown } | null)?.connectors;
+        if (Array.isArray(list)) applyCredentialChange(list.filter((c): c is string => typeof c === 'string' && c.length < 64));
+      };
+    }
+    limiter = new Limiter(kv, { withLock, ...(opts.limits ? { limits: opts.limits } : {}) });
     http = new Http(kv, { offline: config.offline, fetch: opts.fetch, limiter });
     credentials = new Credentials({
       store: kv, limiter,
       onChange: (r) => {
-        // the DISCOS feed shows stub or idle by whether a token is set; the connectors whose settings moved run again at once
-        describe.syncHealth().catch(() => undefined);
-        r.connectors.forEach((id) => void scheduler.refresh(id));
+        applyCredentialChange(r.connectors);
+        // the other tabs run their own engine over the same store: tell them which connectors moved (never a value)
+        try {
+          channel?.postMessage({ connectors: r.connectors });
+        } catch { /* a closed channel: the other tabs pick the change up at their next run */ }
       },
     });
     describe = new DescribeService({ store: kv, http, config, hub, credentials });
@@ -364,7 +404,12 @@ export function createDataService(opts: DataServiceOptions): DataService {
         }
         try {
           const r = await call(msg.method, Array.isArray(msg.args) ? msg.args : []);
-          opts.post({ kind: 'result', id: msg.id, ok: true, value: r.value }, r.transfer);
+          try {
+            opts.post({ kind: 'result', id: msg.id, ok: true, value: r.value }, r.transfer);
+          } catch (err) {
+            // the answer could not be cloned: say so instead of leaving the call waiting
+            opts.post({ kind: 'result', id: msg.id, ok: false, error: rpcError(err) });
+          }
         } catch (err) {
           opts.post({ kind: 'result', id: msg.id, ok: false, error: rpcError(err) });
         }
@@ -388,6 +433,7 @@ export function createDataService(opts: DataServiceOptions): DataService {
       scheduler?.stop();
       for (const [e, fn] of listeners) hub.off(e, fn as never);
       releaseTopics();
+      channel?.close();
       closeKv?.();
       setUpstreams(prevUpstreams);
       if (opts.appBase !== undefined) setAppBase(prevBase);

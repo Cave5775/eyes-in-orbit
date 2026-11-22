@@ -64,6 +64,31 @@ describe('scheduler hydration from the cache', () => {
   });
 });
 
+describe('a hydration run that times out', () => {
+  it('cannot write to the hub when it finishes late, and the pass goes on without it', async () => {
+    vi.useFakeTimers();
+    try {
+      const kv = new MemoryKv();
+      const ro = readOnlyKv(kv);
+      const http = new Http(kv, { limiter: new Limiter(kv, { limits: {} }) });
+      const hydrate = { http: new Http(ro, { limiter: new Limiter(ro, { limits: {} }), cacheOnly: true }), store: ro };
+      const hub = new Hub(0);
+      const finishers: (() => void)[] = [];
+      const slow = { id: 'slow', run: (ctx: { hub: Hub }) => new Promise<void>((r) => { finishers.push(() => { ctx.hub.upsert({ id: 'late', name: 'Late', kind: 'probe', bodyId: 'EARTH', provider: { type: 'geodetic', bodyId: 'EARTH', latDeg: 0, lonDeg: 0, altKm: 0 } } as never); r(); }); }) };
+      const scheduler = new Scheduler({ hub, config: engineConfig(), store: kv, http, hydrate }, [slow as never], 0, 50);
+      const started = scheduler.start();
+      await vi.advanceTimersByTimeAsync(60);
+      await started; // the timeout ended the pass
+      finishers[0](); // the stuck cache-pass run completes afterwards (the real run, a second entry, is left pending)
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hub.graph.get('late')).toBeUndefined();
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('readOnlyKv', () => {
   it('reads through and swallows writes', async () => {
     const kv = new MemoryKv();
