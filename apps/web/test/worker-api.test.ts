@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DataLink, RpcFailure, type PortLike } from '../src/api/data-link';
 import { createWorkerApi } from '../src/api/worker-api';
 import { WorkerStream } from '../src/api/worker-stream';
@@ -96,5 +96,81 @@ describe('worker stream', () => {
     reply({ kind: 'event', msg: { type: 'hello', serverTime: 3, entityCount: 4 } });
     expect(got).toHaveLength(2); // nothing after stop
     expect(sent.at(-1)).toEqual({ kind: 'stop' });
+  });
+});
+
+describe('a worker that dies or misbehaves after start', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('a fatal message after start fails what is in flight, tells onDead once, and later calls fail', async () => {
+    const { port, reply } = fakePort();
+    const link = new DataLink(port);
+    const dead = vi.fn();
+    link.onDead(dead);
+    reply({ kind: 'ready' });
+    const p = link.call('launches');
+    reply({ kind: 'fatal', error: 'storage failed' });
+    await expect(p).rejects.toThrow('storage failed');
+    await expect(link.call('dsn')).rejects.toThrow('storage failed');
+    expect(dead).toHaveBeenCalledTimes(1);
+    expect(dead).toHaveBeenCalledWith('storage failed');
+    const late = vi.fn();
+    link.onDead(late); // a listener added afterwards hears it at once
+    expect(late).toHaveBeenCalledWith('storage failed');
+  });
+
+  it('a non-fatal error event after start is logged and the link keeps working', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { port, reply } = fakePort();
+    const link = new DataLink(port);
+    reply({ kind: 'ready' });
+    port.onerror!({ message: 'handler threw' });
+    expect(warn).toHaveBeenCalled();
+    const p = link.call('launches');
+    reply({ kind: 'result', id: 1, ok: true, value: [] });
+    await expect(p).resolves.toEqual([]);
+  });
+
+  it('a result that cannot be read fails the calls in flight but not the link', async () => {
+    const { port, reply } = fakePort();
+    const link = new DataLink(port);
+    reply({ kind: 'ready' });
+    const p = link.call('entities');
+    port.onmessageerror!({});
+    await expect(p).rejects.toThrow(/could not be read/);
+    const q = link.call('launches');
+    reply({ kind: 'result', id: 2, ok: true, value: [1] });
+    await expect(q).resolves.toEqual([1]);
+  });
+
+  it('times a call out by its method, and never the download (it reports through the status)', async () => {
+    vi.useFakeTimers();
+    const { port, reply } = fakePort();
+    const link = new DataLink(port);
+    reply({ kind: 'ready' });
+    const search = link.call('search', 'x');
+    const download = link.call('minorPlanetsDownload');
+    let settled = false;
+    download.then(() => (settled = true), () => (settled = true));
+    const assertion = expect(search).rejects.toThrow(/search did not answer within 8 s/);
+    await vi.advanceTimersByTimeAsync(8_001);
+    await assertion;
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(settled).toBe(false);
+    reply({ kind: 'result', id: 2, ok: true, value: { state: 'ready' } });
+    await expect(download).resolves.toEqual({ state: 'ready' });
+    reply({ kind: 'result', id: 1, ok: true, value: [] }); // the late answer of the timed-out call is ignored
+  });
+
+  it('arguments that cannot be cloned fail that call only and leave nothing pending', async () => {
+    const { port, reply } = fakePort();
+    let n = 0;
+    port.postMessage = (m) => { if (n++ === 1) throw new DOMException('could not be cloned', 'DataCloneError'); void m; };
+    const link = new DataLink(port);
+    reply({ kind: 'ready' });
+    const ok = link.call('launches');
+    await expect(link.call('news', { q: () => 1 } as never)).rejects.toThrow(/cloned/);
+    reply({ kind: 'result', id: 1, ok: true, value: [] });
+    await expect(ok).resolves.toEqual([]);
   });
 });

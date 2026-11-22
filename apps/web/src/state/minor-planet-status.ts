@@ -2,9 +2,12 @@ import { create } from 'zustand';
 import type { MinorPlanetStatus } from '../api/types';
 
 /** What the engine says about the opt-in minor-planet download (pushed as `minorPlanets` messages; see `Api.minorPlanetsStatus`). */
-export const useMinorPlanetStatus = create<{ status: MinorPlanetStatus; set(s: MinorPlanetStatus): void }>((set) => ({
+export const useMinorPlanetStatus = create<{ status: MinorPlanetStatus; set(s: MinorPlanetStatus): void; available: boolean; setAvailable(a: boolean): void }>((set) => ({
   status: { state: 'none' },
   set: (status) => set({ status }),
+  /** false until `startData` has chosen the engine or the mock: the button waits instead of failing */
+  available: false,
+  setAvailable: (available) => set({ available }),
 }));
 
 /** The line shown next to the layer switch and the Download button's label. */

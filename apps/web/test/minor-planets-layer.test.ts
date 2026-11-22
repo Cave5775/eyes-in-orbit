@@ -204,7 +204,7 @@ describe('load robustness', () => {
     layer.dispose();
     await flush(40);
     expect(asked).toBe(before);
-    expect(layer.stats.loading).toBe(true); // the pending sleep never resolved here; a real sleep resolves on abort (next test)
+    expect(layer.stats.loading).toBe(false); // dispose also wakes the wait, whatever the sleep does
   });
 
   it('a real sleep resolves when the layer is disposed, and the loop returns without asking again', async () => {
@@ -289,5 +289,41 @@ describe('the picked entities stay few', () => {
     const recs = new Map<string, never>([['body-sun', sun], [rec.id, rec as never]]);
     expect(orbitLines(recs, 'body-sun').map((l) => l.id)).not.toContain(rec.id);
     expect(orbitLines(recs, rec.id)[0]).toEqual({ id: rec.id, role: 'selected' });
+  });
+});
+
+describe('the index load follows the download state', () => {
+  it('does not poll while the engine downloads and loads the chunks when it says ready', async () => {
+    let asked = 0;
+    let stored = false;
+    const sleeps: number[] = [];
+    // a timer that only fires when the test says so: a real wait would be 5 s or more
+    const { layer, worker, api } = setup({
+      index: async () => { asked++; return stored ? idx(1) : null; },
+      sleep: (ms, signal) => new Promise((resolve) => { sleeps.push(ms); signal.addEventListener('abort', () => resolve(), { once: true }); }),
+    });
+    layer.notify('downloading');
+    layer.load(() => api);
+    await flush();
+    expect(asked).toBe(0); // nothing is asked while the engine downloads, and no timer runs
+    expect(sleeps).toEqual([]);
+    stored = true;
+    layer.notify('ready');
+    await flush(40);
+    expect(asked).toBe(1);
+    expect(worker.sent.some((m) => m.type === 'chunk')).toBe(true);
+  });
+
+  it('a failed or stopped download does not leave the layer waiting for ever', async () => {
+    let asked = 0;
+    const { layer, api } = setup({ index: async () => (++asked, null), sleep: (ms, s) => new Promise((r) => s.addEventListener('abort', () => r(), { once: true })) });
+    layer.load(() => api);
+    await flush();
+    layer.notify('downloading');
+    await flush();
+    layer.notify('failed');
+    await flush();
+    expect(asked).toBeGreaterThanOrEqual(2);
+    layer.dispose();
   });
 });

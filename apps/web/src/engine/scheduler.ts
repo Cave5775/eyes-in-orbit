@@ -89,6 +89,7 @@ export class Scheduler {
     private deps: { hub: Hub; config: Config; store: KvStore; http: Http; clock?: Clock; hydrate?: Hydration },
     connectors: Connector[],
     private jitterMs = 1000,
+    private hydrateTimeoutMs = HYDRATE_TIMEOUT_MS,
   ) {
     this.clock = deps.clock ?? systemClock;
     for (const connector of connectors) {
@@ -155,9 +156,19 @@ export class Scheduler {
   private async hydrate(slots: Slot[]): Promise<void> {
     const { hub, config } = this.deps;
     const { http, store } = this.deps.hydrate!;
+    // a run that is still going when the pass ends (it timed out) must not write to the hub later, over newer data
+    const gate = { open: true };
+    const WRITERS = new Set<PropertyKey>(['upsert', 'setLaunches', 'setArticles', 'setDsn', 'setIssFix', 'setArrays', 'setTelemetry']);
+    const guarded = new Proxy(hub, {
+      get(target, prop) {
+        const v = Reflect.get(target, prop, target);
+        if (typeof v !== 'function') return v;
+        return WRITERS.has(prop) ? (...args: unknown[]) => (gate.open ? v.apply(target, args) : 0) : v.bind(target);
+      },
+    });
     await Promise.all(slots.filter((s) => s.connector.network !== false && !s.connector.topic).map(async (slot) => {
       const ctx: ConnectorContext = {
-        hub, config, store, http, clock: this.clock, health: { id: slot.connector.id, status: 'idle', runs: 0 },
+        hub: guarded, config, store, http, clock: this.clock, health: { id: slot.connector.id, status: 'idle', runs: 0 },
         log: () => undefined, softFail: () => undefined,
         cachedFetch: (key, url, ttl, parse, headers, ro) => http.cachedFetch(key, url, ttl, parse, headers, { ...ro, cacheOnly: true }),
       };
@@ -165,14 +176,17 @@ export class Scheduler {
       try {
         await Promise.race([
           slot.connector.run!(ctx),
-          new Promise<never>((_, reject) => { timer = this.clock.setTimeout(() => reject(new Error('hydration timed out')), HYDRATE_TIMEOUT_MS); }),
+          new Promise<never>((_, reject) => { timer = this.clock.setTimeout(() => reject(new Error('hydration timed out')), this.hydrateTimeoutMs); }),
         ]);
+        // what the page shows now is the last cached copy, not a fresh answer: the first real run replaces this
+        Object.assign(slot.ctx.health, { fromCache: true, note: slot.ctx.health.note ?? 'showing the last cached data' });
       } catch {
         /* nothing cached for this connector, or it needs the network: the first real run decides */
       } finally {
         this.clock.clearTimeout(timer);
       }
     }));
+    gate.open = false;
   }
 
   stop(): void {

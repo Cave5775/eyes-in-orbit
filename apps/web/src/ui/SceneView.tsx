@@ -24,6 +24,7 @@ import { leaveSkyView } from '../state/sky-flow';
 import { useSkin } from '../state/skin';
 import { useStore } from '../state/store';
 import { useView } from '../state/view';
+import { useMinorPlanetStatus } from '../state/minor-planet-status';
 import { FrameBar } from './FrameBar';
 import { PickPopup, type PickItem } from './PickPopup';
 import { SkyMarkers } from './SkyMarkers';
@@ -229,6 +230,8 @@ export function SceneView() {
       if (v.surfaceAuto !== p.surfaceAuto) ctl.setSurfaceAuto(v.surfaceAuto);
       if (v.smoothCamera !== p.smoothCamera) ctl.setSmoothCamera(v.smoothCamera);
     });
+    ctl.setMinorPlanetState(useMinorPlanetStatus.getState().status.state);
+    const unsubMp = useMinorPlanetStatus.subscribe((s, p) => { if (s.status.state !== p.status.state) ctl.setMinorPlanetState(s.status.state); });
     const unsubSkin = useSkin.subscribe((s, p) => { if (s.skin !== p.skin) ctl.refreshPalette(); });
     ctl.setEntities(s0.entities);
     ctl.setLaunches(s0.launches);
@@ -269,6 +272,7 @@ export function SceneView() {
       clearInterval(timer);
       unsub();
       unsubView();
+      unsubMp();
       unsubSkin();
       if (runtime.onFitRequest) runtime.onFitRequest = undefined;
       if (runtime.camera === camera) runtime.camera = undefined; // StrictMode remounts: only clear our own

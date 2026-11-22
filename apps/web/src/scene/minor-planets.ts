@@ -76,6 +76,9 @@ export class MinorPlanetLayer {
   private on = true;
   private hidden = false;
   private loadStarted = false;
+  /** the engine is downloading the orbits: the index is not polled meanwhile, the end of the download asks at once */
+  private downloading = false;
+  private wake: (() => void) | null = null;
   private readonly abort = new AbortController();
   /** orbits handed to the worker so far */
   private loaded = 0;
@@ -112,6 +115,26 @@ export class MinorPlanetLayer {
     return this.on;
   }
 
+  /** The engine's download state (pushed `minorPlanets` messages): `ready` asks for the index at once, `downloading` pauses the polling. */
+  notify(state: 'none' | 'downloading' | 'ready' | 'failed'): void {
+    const was = this.downloading;
+    this.downloading = state === 'downloading';
+    if (state !== 'downloading' || !was) this.wake?.();
+  }
+
+  /** Wait `ms` before the next index request, but not while a download runs, and no longer than the next state change. */
+  private async waitForIndex(sleep: NonNullable<MinorLayerOptions['sleep']>, ms: number, signal: AbortSignal): Promise<void> {
+    for (;;) {
+      const woke = new Promise<void>((resolve) => { this.wake = resolve; });
+      const timer = new AbortController();
+      const elapsed = this.downloading ? new Promise<void>(() => undefined) : sleep(ms, timer.signal);
+      await Promise.race([woke, elapsed]);
+      timer.abort();
+      this.wake = null;
+      if (signal.aborted || !this.downloading) return;
+    }
+  }
+
   /** The query or the scope hides the cloud (`classify()` of a representative minor planet record): not drawn, not picked, no passes. */
   setHidden(hidden: boolean): void {
     this.hidden = hidden;
@@ -137,12 +160,13 @@ export class MinorPlanetLayer {
     this.worker.onerror = (ev) => this.onWorkerError(ev.message || 'worker error');
     this.worker.onmessageerror = () => this.onWorkerError('worker message could not be read');
     this.stats.loading = true;
+    signal.addEventListener('abort', () => this.wake?.(), { once: true });
     void (async () => {
       try {
         let idx: MinorPlanetIndex | null = null;
         for (let n = 0; !signal.aborted; n++) {
           const wait = n < INDEX_WAITS.length ? INDEX_WAITS[n] : INDEX_POLL_MS;
-          if (wait) await sleep(wait, signal);
+          if (wait || this.downloading) await this.waitForIndex(sleep, wait, signal);
           if (signal.aborted) return;
           try {
             idx = await getApi().minorPlanetIndex();

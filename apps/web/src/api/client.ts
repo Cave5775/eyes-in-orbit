@@ -8,6 +8,7 @@ import { useView } from '../state/view';
 import { bodyEntityRecords } from '@eio/core';
 import { watchMinorPlanets } from '../lib/minor-planet-watch';
 import { PAGE_SIZE, loadPaged } from '../lib/paging';
+import { beginStream } from '../lib/stream-start';
 import type { WorkerEvent } from '../workers/data.protocol';
 import type { Api } from './types';
 import { DataLink } from './data-link';
@@ -120,7 +121,12 @@ function startReal(): void {
   watchIssSelection((t) => stream.setTopics(t));
   watchMinorPlanetDownload();
   setTextMatcher((text) => api.match(text)); // large catalogues are matched by the engine over its catalogue (state/store.ts)
-  void loadAll(true).then(() => stream.start());
+  void beginStream(loadAll(true), () => stream.start(), () => loadEntities(false));
+  link!.onDead((reason) => {
+    // the engine is gone: nothing more arrives. The scene keeps what it has, and the header says so.
+    console.warn('[eio] the data worker stopped:', reason);
+    store().setConn('offline');
+  });
 }
 
 function watchMinorPlanetDownload(): void {
@@ -131,6 +137,7 @@ function startMock(): void {
   // ?n=12000 stress-tests the catalog size (capped at MOCK_MAX_SATS)
   const n = clampMockCount(Number(new URLSearchParams(location.search).get('n')));
   api = createMockApi(Date.now(), n);
+  useMinorPlanetStatus.getState().setAvailable(true);
   store().setConn('mock');
   void loadAll(true);
   watchMinorPlanetDownload();
@@ -160,6 +167,7 @@ export async function startData(): Promise<void> {
       const real = createWorkerApi(link);
       await withTimeout(real.health(), START_TIMEOUT_MS, 'the data worker'); // answers once the engine is built and its cache is read
       api = real;
+      useMinorPlanetStatus.getState().setAvailable(true);
       return startReal();
     } catch (err) {
       link?.close();
