@@ -57,6 +57,11 @@ export class Http {
     return !!this.opts.offline;
   }
 
+  /** this instance never touches the network (the startup pass that fills the hub from the cache) */
+  get cacheOnly(): boolean {
+    return !!this.opts.cacheOnly;
+  }
+
   /**
    * GET text with a timeout; throws `HttpError` on non-2xx (with `retry-after`/`server`/`cf-ray`/`via` and
    * a body excerpt) and an error whose message carries undici's cause code on network failures (browsers give no cause code).

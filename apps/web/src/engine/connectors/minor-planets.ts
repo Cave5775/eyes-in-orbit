@@ -212,7 +212,11 @@ export interface MinorPlanetsDeps {
   idleMs?: number;
   /** the lock around the whole download and write (default: this realm only; the worker passes Web Locks) */
   withLock?: WithLock;
+  /** what the download is doing now, for a progress display: `checking` (HEAD), `downloading` (the file is read, unzipped and packed as it arrives), `storing` (chunk rows written) */
+  onPhase?: (phase: MinorPlanetsPhase) => void;
 }
+
+export type MinorPlanetsPhase = 'checking' | 'downloading' | 'storing';
 
 export type MinorPlanetsOutcome = 'cached' | 'unchanged' | 'downloaded' | 'offline';
 
@@ -318,6 +322,7 @@ async function download(deps: MinorPlanetsDeps, opts: { force?: boolean }): Prom
       // a limit on the HEAD source) only costs the check: the download below has its own limiter source
       try {
         arm(HEAD_TIMEOUT_MS);
+        deps.onPhase?.('checking');
         const head = await send(MPCORB_HEAD_SOURCE, { method: 'HEAD' });
         const modified = head.ok ? head.headers.get('last-modified') : null;
         if (modified && modified === have.meta.lastModified) return { outcome: 'unchanged', meta: await renew(store, have, now()) };
@@ -326,6 +331,7 @@ async function download(deps: MinorPlanetsDeps, opts: { force?: boolean }): Prom
       }
     }
     arm();
+    deps.onPhase?.('downloading');
     const res = await send(MPCORB_SOURCE, { headers: { accept: 'application/gzip, */*' } });
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status} for ${url}`);
     const { bytes, stats } = await packMpcorbStream(watched(res.body, arm), { source: url, lastModified: res.headers.get('last-modified'), builtAt: now() });
@@ -333,6 +339,7 @@ async function download(deps: MinorPlanetsDeps, opts: { force?: boolean }): Prom
     if (stats.parsed < minOrbits || stats.skipped > (stats.parsed + stats.skipped) * MAX_SKIPPED_SHARE) {
       throw new Error(`unexpected MPCORB response: ${stats.parsed} orbits read, ${stats.skipped} lines not understood${stats.samples[0] ? ` (first: "${stats.samples[0]}")` : ''}`);
     }
+    deps.onPhase?.('storing');
     return { outcome: 'downloaded', meta: await storePacked(store, bytes, now()), skipped: stats.skipped };
   } finally {
     clearTimeout(timer);

@@ -115,9 +115,9 @@ export function createSpacetrack(deps: SpaceTrackOptions): Connector {
         }
         throw new Error(NEEDS_CREDENTIALS);
       }
-      if (!row && ctx.http.offline) throw new Error('offline and nothing cached');
+      if (!row && (ctx.http.offline || ctx.http.cacheOnly)) throw new Error('offline and nothing cached');
       let omms: Omm[];
-      if (row && (isFresh(row, now()) || ctx.http.offline)) {
+      if (row && (isFresh(row, now()) || ctx.http.offline || ctx.http.cacheOnly)) {
         omms = row.value;
         ctx.health.fromCache = true;
       } else {

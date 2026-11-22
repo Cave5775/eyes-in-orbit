@@ -27,6 +27,16 @@ export interface CachedFetchOptions extends RequestOptions {
   staleRetryMs?: number;
 }
 
+/**
+ * What the first pass at startup reads: the cache, never the network. `http` must be cache-only (`cacheOnly: true`) and `store` a
+ * read-only view of the kv store (`readOnlyKv`), so a connector that notices a stale or missing row cannot record a failure, a
+ * backoff gate or a limiter block over it.
+ */
+export interface Hydration {
+  http: Http;
+  store: KvStore;
+}
+
 export interface Connector {
   readonly id: string;
   /** ms between runs (measured from the end of the previous run); omit to run once */
@@ -48,6 +58,7 @@ export interface Connector {
 
 const MAX_BACKOFF_MS = 15 * 60_000;
 const STALE_RETRY_MS = 5 * 60_000;
+const HYDRATE_TIMEOUT_MS = 10_000;
 
 interface Slot {
   connector: Connector;
@@ -75,7 +86,7 @@ export class Scheduler {
   private clock: Clock;
 
   constructor(
-    private deps: { hub: Hub; config: Config; store: KvStore; http: Http; clock?: Clock },
+    private deps: { hub: Hub; config: Config; store: KvStore; http: Http; clock?: Clock; hydrate?: Hydration },
     connectors: Connector[],
     private jitterMs = 1000,
   ) {
@@ -115,6 +126,7 @@ export class Scheduler {
   }
 
   async start(): Promise<void> {
+    const runnable: Slot[] = [];
     for (const slot of this.slots.values()) {
       const { connector, ctx } = slot;
       const stubNote = connector.stub?.(this.deps.config);
@@ -127,9 +139,40 @@ export class Scheduler {
       } catch (err) {
         this.fail(slot, err);
       }
-      if (connector.run) this.schedule(slot, (connector.startDelayMs ?? 0) + this.clock.random() * this.jitterMs);
+      if (connector.run) runnable.push(slot);
     }
+    // everything the cache holds is in the hub before the first request goes out (and before any run could replace it with newer data)
+    if (this.deps.hydrate) await this.hydrate(runnable);
+    for (const slot of runnable) this.schedule(slot, (slot.connector.startDelayMs ?? 0) + this.clock.random() * this.jitterMs);
     this.healthTimer = this.clock.setInterval(() => void this.emitHealth(), 30_000);
+  }
+
+  /**
+   * One cache-only run of every connector that reads the network: the same `run` the timer will call, with a context whose http
+   * never sends and whose store cannot be written, and a throwaway health record. A connector with no cached data fails here quietly.
+   * Live feeds (a `topic`) and offline ones (`network: false`, which run normally anyway) are skipped.
+   */
+  private async hydrate(slots: Slot[]): Promise<void> {
+    const { hub, config } = this.deps;
+    const { http, store } = this.deps.hydrate!;
+    await Promise.all(slots.filter((s) => s.connector.network !== false && !s.connector.topic).map(async (slot) => {
+      const ctx: ConnectorContext = {
+        hub, config, store, http, clock: this.clock, health: { id: slot.connector.id, status: 'idle', runs: 0 },
+        log: () => undefined, softFail: () => undefined,
+        cachedFetch: (key, url, ttl, parse, headers, ro) => http.cachedFetch(key, url, ttl, parse, headers, { ...ro, cacheOnly: true }),
+      };
+      let timer: TimerHandle | undefined;
+      try {
+        await Promise.race([
+          slot.connector.run!(ctx),
+          new Promise<never>((_, reject) => { timer = this.clock.setTimeout(() => reject(new Error('hydration timed out')), HYDRATE_TIMEOUT_MS); }),
+        ]);
+      } catch {
+        /* nothing cached for this connector, or it needs the network: the first real run decides */
+      } finally {
+        this.clock.clearTimeout(timer);
+      }
+    }));
   }
 
   stop(): void {
