@@ -1,5 +1,7 @@
 # Performance at scale (phase 0: measurements)
 
+> Historical note: phases 0 to 4 below were measured while a Fastify server (`apps/server`, since deleted) served the catalogue over REST, with an FTS5 trigram index in SQLite for search. The data now lives in the browser engine (`apps/web/src/engine`): `entities` pages come from its in-memory hub, and `match` ranks the catalogue by scanning it with the shared `matchScore` (65 to 80 ms at 100,000 entities, no index). The server routes, `/api/...` names and the SQLite index mentioned below describe what was measured then; the browser-side numbers (store, propagation, scene) still apply.
+
 Plan item: "restructure to more efficiently stream objects and data instead of indexing everything at any given moment". This document is phase 0 only: it measures where the time goes with a synthetic catalog of 2 k, 100 k and 1 M Earth orbiters. Nothing was restructured.
 
 ## How to measure
@@ -136,7 +138,7 @@ Limits: a query that matches most of the catalogue is no faster (the cost is ran
 
 The second half of ranked item 2: let the server send only the objects in the camera's scope, so the client holds and indexes less. It needs the client to hold a partial catalogue (the lists, counts, search results and related objects all read the whole one today), so before building it the question is how much a server could actually prune. It does not propagate orbits, so the only thing it can test is the orbit shell: an object can be in a ball of radius R around the camera focus (at geocentric radius rf) only if its shell, perigee to apogee radius (from mean motion and eccentricity), meets [rf - R, rf + R], with R the scope radius of `lib/scope.ts` (80 camera distances, at least 100 km).
 
-`scripts/shell-prune-analysis.mjs` applies that to the CelesTrak group rows of the SQLite cache `data/cache.sqlite` (19,498 distinct objects; offline):
+The analysis script (`scripts/shell-prune-analysis.mjs`, removed with the server because it read the server's SQLite cache) applied that to the CelesTrak group rows (19,498 distinct objects; offline):
 
 | View | Scope radius | Kept by the shell test |
 |---|---|---|

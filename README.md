@@ -1,6 +1,6 @@
 # EyesInOrbit
 
-A local mission control for spaceflight. It pulls public feeds (satellite orbits, upcoming launches, the Deep Space Network, the ISS, planet and probe ephemerides, Mars rover positions from NASA, space news), keeps them in a small database on your machine, and shows everything in an interactive 3D scene of the solar system, drawn to true scale.
+A mission control for spaceflight that runs in the browser. It pulls public feeds (satellite orbits, upcoming launches, the Deep Space Network, the ISS, planet and probe ephemerides, Mars rover positions from NASA, space news), keeps them in your browser, and shows everything in an interactive 3D scene of the solar system, drawn to true scale.
 
 <img width="2255" height="1275" alt="image" src="https://github.com/user-attachments/assets/1d3312c5-b37e-4569-99ee-27c462c0ca5e" />
 
@@ -15,7 +15,7 @@ A local mission control for spaceflight. It pulls public feeds (satellite orbits
 - **Control time**: live, pause, rewind, speed up to x600, or jump to any offset from now.
 - **Track the ISS**: live position and solar array angles on a 3D model.
 - **Pick a look**: three skins (Classic, Terminal and a 1960s mission-control console) in Settings.
-- **Work offline**: cached data keeps working without a network, and `?mock=1` runs the app on synthetic data.
+- **Work offline**: data cached in the browser keeps working without a network, and `?mock=1` runs the app on synthetic data.
 
 ## Quick start
 
@@ -24,10 +24,19 @@ You need **Node 24**.
 ```
 npm install
 npm run assets     # optional: surface maps for the Earth, Moon, Mars and 18 more planets, moons and dwarf planets
-npm run dev        # server on :8787, web on :5173
+npm run dev        # Vite dev server on :5173 (the relay for the few upstreams without CORS is mounted at /relay)
 ```
 
 Open <http://localhost:5173>. Run the tests with `npm test`.
+
+## Hosting
+
+The app is static: all upstream calls and all storage (IndexedDB) run in the visitor's browser.
+
+- `npm run serve` builds it and serves `apps/web/dist` plus the relay with a small Node host (`PORT`, `HOST`, `WEB_DIST`, `RELAY_ALLOWED_ORIGINS`; see `.env.example`).
+- Or put `apps/web/dist` on any static host and mount the relay handler (`apps/relay/src/handler.ts`) at `/relay` on the same origin. Without the relay, Horizons, Space-Track, ESA DISCOS, MAST and the NASA rover waypoints do not load.
+
+API keys (Space-Track, Launch Library, ESA DISCOS) are entered in the app and stored unencrypted in the browser profile.
 
 ## Basic controls
 
@@ -52,13 +61,13 @@ Open <http://localhost:5173>. Run the tests with `npm test`.
 An npm workspaces monorepo:
 
 - `packages/core`: shared model (bodies, frames, orbit providers, the clock).
-- `apps/server`: Node aggregator that polls the feeds, caches them in SQLite and serves REST and WebSocket.
-- `apps/web`: React and three.js client.
+- `apps/web`: React and three.js client, plus the data engine (a worker that polls the feeds and caches them in IndexedDB).
+- `apps/relay`: the stateless pass-through for upstreams without CORS headers, and a Node static host for `npm run serve`.
 
 ## More documentation
 
 - [Reference](docs/reference.md): every feature, control, setting, data source and known issue in detail.
-- [API contract](docs/CONTRACT.md): REST and WebSocket routes and entity conventions.
+- [Data-worker contract](docs/CONTRACT.md): the methods, messages, topics and errors between the page and the data engine, and entity conventions.
 - [Frames of reference](docs/frames.md): how the frame, lock and orbit-line rules work, and the sky pointing maths.
 - [Models](docs/models.md): how an object gets its shape (sphere, ellipsoid, procedural model, glb mesh), the body surface maps, and how assets are loaded and freed.
 - [Performance](docs/perf.md): where the time goes with large catalogs (2 k to 1 M objects).
