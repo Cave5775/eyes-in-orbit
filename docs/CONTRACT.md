@@ -50,7 +50,7 @@ Worker to page (`FromWorker`):
 | `minorPlanetsStatus` | none | `MinorPlanetStatus`: `{ state: 'none' \| 'downloading' \| 'ready' \| 'failed', phase?: 'checking' \| 'downloading' \| 'storing', count?, fetchedAt?, error? }`. Changes are also pushed as `minorPlanets` events. |
 | `minorPlanetsDownload` | `{ force? }` | Starts (or joins) the opt-in download of MPCORB (about 70 MB); fresh stored data is left alone unless `force`. Resolves with the final status. |
 | `minorPlanetsCancel` | none | Aborts a download in progress; stored data is kept. |
-| `credentials` | none | `CredentialInfo[]` (`feeds.ts`): `{key, label, connector, secret, set, source, value?}`. `value` is present only for non-secret fields; secrets are reported as set or not set only. |
+| `credentials` | none | `CredentialInfo[]` (`feeds.ts`): `{key, label, connector, secret, set, source: 'ui' | null, value?}`. `value` is present only for non-secret fields; secrets are reported as set or not set only. |
 | `saveCredentials` | `{ spacetrackUser?, spacetrackPassword?, ll2Token?, discosToken? }` | A string sets a value, `null` removes it. Stored unencrypted in this browser profile (IndexedDB). Applies at once: connectors that wait for credentials run again. Resolves with the new `CredentialInfo[]`. |
 | `clearCredentials` | none | Removes every saved credential. Resolves with the new `CredentialInfo[]`. |
 

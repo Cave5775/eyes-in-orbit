@@ -128,7 +128,7 @@ export function launchEntity(launch: Launch, trajectory?: Trajectory, live?: Liv
       hold: launch.hold,
       trajectory: trajectory?.id ?? null,
       trajectorySource: plan.source,
-      trajectoryNote: plan.source === 'modeled' ? 'MODELED nominal ascent, not measured' : plan.source === 'live' ? 'measured rows posted to /api/telemetry' : null,
+      trajectoryNote: plan.source === 'modeled' ? 'MODELED nominal ascent, not measured' : plan.source === 'live' ? 'measured rows' : null,
       ascentInclinationDeg: plan.source === 'modeled' ? plan.modeled?.inclinationDeg ?? null : null,
       ascentAzimuthDeg: plan.azimuthDeg ?? null,
       liveRows: live?.rows.length ?? null,

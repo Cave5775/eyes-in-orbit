@@ -103,8 +103,8 @@ export interface CredentialInfo {
   connector: string;
   secret: boolean;
   set: boolean;
-  /** where the active value comes from: typed into the UI, or a build or host setting */
-  source: 'ui' | 'env' | null;
+  /** where the active value comes from: typed into the UI (credentials live only in the browser) */
+  source: 'ui' | null;
   /** the value itself, for non-secret fields (e.g. the Space-Track username) */
   value?: string;
 }

@@ -29,7 +29,7 @@ describe('feed level to colour and label', () => {
     const red = feedView(h({ status: 'error', lastOkAt: undefined, lastError: 'HTTP 403 for https://x.test/', nextRunAt: Date.UTC(2026, 0, 1, 9, 5) }));
     expect(red).toMatchObject({ tone: 'bad', badge: 'FAIL', reason: 'blocked', retry: '09:05Z' });
     expect(red.title).toContain('next try 09:05Z');
-    expect(feedView(h({ status: 'disabled', note: 'DISABLED_CONNECTORS' }))).toMatchObject({ tone: 'dim', badge: 'OFF', words: 'disabled (DISABLED_CONNECTORS)' });
+    expect(feedView(h({ status: 'disabled', note: 'disabled by configuration' }))).toMatchObject({ tone: 'dim', badge: 'OFF', words: 'disabled' });
     expect(feedView(h({})).title).toBe('OK: receiving data');
   });
 

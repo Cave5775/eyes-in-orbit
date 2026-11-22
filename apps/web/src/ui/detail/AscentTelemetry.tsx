@@ -60,8 +60,7 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
       <div className="at">
         <div className="section-title">Ascent telemetry</div>
         <p className="at-note dim">
-          No ascent profile for this vehicle: modeled ascents cover Falcon 9. Measured rows can be posted to
-          <span className="mono"> POST /api/telemetry/{launch.id}</span>.
+          No ascent profile for this vehicle: modeled ascents cover Falcon 9. Measured telemetry is not available in this app.
         </p>
       </div>
     );
@@ -105,12 +104,11 @@ export function AscentTelemetry({ launch }: { launch: Launch }) {
 
       <p className="at-note dim">
         {series.source === 'live'
-          ? `Measured rows from ${series.live?.source ?? 'a POST to /api/telemetry'}; after T+${Math.round(series.live?.extrapolatedFromSec ?? series.live?.lastTSec ?? 0)} s the path follows the modeled shape.`
+          ? `Measured rows from ${series.live?.source ?? 'an ingest'}; after T+${Math.round(series.live?.extrapolatedFromSec ?? series.live?.lastTSec ?? 0)} s the path follows the modeled shape.`
           : series.source === 'file'
             ? 'Path from a trajectory file in data/trajectories (not measured by this app).'
             : 'Modeled from typical Falcon 9 figures. Nothing here is measured; real flights differ by tens of seconds and a few percent.'}
         {m && ` Inclination ${fmtDeg(m.inclinationDeg)} (${m.inclinationSource.replace(/-/g, ' ')}), azimuth ${fmtDeg(m.azimuthDeg)}.`}
-        {' '}Post measured rows to <span className="mono">POST /api/telemetry/{launch.id}</span>.
       </p>
 
       <DataTable series={series} tMax={tMax} />
