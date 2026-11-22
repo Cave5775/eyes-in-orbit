@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import {
-  ATLAS, TILE_PX, detailLevel, nextWindow, windowBox, windowTiles, type DetailView, type DetailWindow,
+  ATLAS, TILE_PX, detailLevel, gibsTileUrl, nextWindow, windowBox, windowTiles, type DetailView, type DetailWindow,
 } from '../lib/earth-detail';
 
 /**
  * Streamed close-up Earth imagery. The base map is one 8192 px texture; when the camera is low enough that it would be
- * magnified, a window of 4 x 4 finer tiles (NASA GIBS Blue Marble through the local server's /api/imagery cache) is painted
+ * magnified, a window of 4 x 4 finer tiles (NASA GIBS Blue Marble, loaded straight from GIBS and kept by the browser's HTTP cache) is painted
  * into a 2048 px atlas that the Earth shader blends over the base map. Tiles that have not arrived are transparent, so the
  * base map shows through until they do; a server without the route (or offline with nothing cached) just leaves the base map.
  */
@@ -101,7 +101,8 @@ export class EarthDetail {
         tile.state = 'failed';
         tile.at = performance.now();
       };
-      img.src = `/api/imagery/${t.z}/${t.x}/${t.y}.jpg`;
+      img.crossOrigin = 'anonymous'; // GIBS sends Access-Control-Allow-Origin: *; the atlas canvas must stay usable by WebGL
+      img.src = gibsTileUrl(t);
     }
     this.evict(w);
   }

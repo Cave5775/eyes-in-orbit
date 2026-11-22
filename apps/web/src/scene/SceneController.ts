@@ -3,7 +3,7 @@ import {
   DEG, EARTH, bodyOf, fixedToGeodetic, geodeticToFixed, gmstRad, isBodyEntity, sunDirectionEci, sunPositionEci,
   type EntityRecord, type IssArrays, type IssFix, type Launch, type Omm, type RoverTraverse,
 } from '@eio/core';
-import { localTilePath, type MmgisLayer } from '@eio/core';
+import { mmgisTileUrlFor, type MmgisLayer } from '@eio/core';
 import { listedParent } from '../lib/listed-parent';
 import type { Api } from '../api/types';
 import type { PickedOrbit } from '../lib/minor-planets';
@@ -469,7 +469,7 @@ export class SceneController {
       maxAnisotropy: () => this.renderer.capabilities.getMaxAnisotropy(),
       pointMaterial: this.pointMat,
     });
-    this.patch = new SurfacePatch(this.scene, (l, z, x, y) => (this.cb.tileUrl ? this.cb.tileUrl(l, z, x, y) : localTilePath(l, z, x, y)), Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
+    this.patch = new SurfacePatch(this.scene, (l, z, x, y) => (this.cb.tileUrl ? this.cb.tileUrl(l, z, x, y) : mmgisTileUrlFor(l, z, x, y)), Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
 
     this.sats = makePointSet(0, this.pointMat);
     this.dyn = makePointSet(0, this.pointMat);

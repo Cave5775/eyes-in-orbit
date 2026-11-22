@@ -9,7 +9,7 @@ import { refPositionEci } from '../lib/ref-body';
 import { SHADING } from './materials';
 
 /**
- * The Mars surface patch: NASA's rover-map mosaics (MMGIS, core `MMGIS_LAYERS`, through the server's /api/tiles/mmgis route)
+ * The Mars surface patch: NASA's rover-map mosaics (MMGIS, core `MMGIS_LAYERS`, loaded straight from NASA's MMGIS server)
  * laid on the planet near Jezero and Gale while the camera is lower than 600 km over them (fading in down to 250 km). Which
  * tiles, their grids and the texture budget are lib/map-tiles.ts; this class only keeps the meshes and textures in step.
  *
@@ -254,6 +254,7 @@ export class SurfacePatch {
     this.textures.set(key, entry);
     if (!url) return;
     const img = new Image();
+    img.crossOrigin = 'anonymous'; // NASA answers with Access-Control-Allow-Origin: *; WebGL needs a CORS-clean image
     entry.img = img;
     img.onload = () => {
       if (this.disposed || this.textures.get(key) !== entry) return;

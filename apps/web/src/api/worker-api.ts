@@ -1,4 +1,4 @@
-import { localTilePath } from '@eio/core';
+import { mmgisTileUrlFor } from '@eio/core';
 import type { Api } from './types';
 import type { DataLink } from './data-link';
 
@@ -17,7 +17,7 @@ export function createWorkerApi(link: DataLink): Api {
     health: () => link.call('health'),
     ascent: (launchId) => link.call('ascent', launchId).catch(() => null),
     traverse: (entityId) => link.call('traverse', entityId).catch(() => null),
-    mapTile: (layer, z, x, y) => localTilePath(layer, z, x, y),
+    mapTile: (layer, z, x, y) => mmgisTileUrlFor(layer, z, x, y),
     minorPlanetIndex: () => link.call('minorPlanetIndex').catch(() => null),
     minorPlanetChunk: (k) => link.call('minorPlanetChunk', k),
     minorPlanetsStatus: () => link.call('minorPlanetsStatus'),

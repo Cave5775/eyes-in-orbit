@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ATLAS, DETAIL_MAX_Z, TILE_PX, detailLevel, kmPerScreenPx, nextWindow, tileDeg, uOfLon, vOfLat, windowBox, windowFor, windowTiles,
+  ATLAS, DETAIL_MAX_Z, gibsBbox, gibsTileUrl, isGibsTile, TILE_PX, detailLevel, kmPerScreenPx, nextWindow, tileDeg, uOfLon, vOfLat, windowBox, windowFor, windowTiles,
   type DetailView,
 } from '../src/lib/earth-detail';
 
@@ -96,5 +96,26 @@ describe('tile window', () => {
     expect(uOfLon(-80.6)).toBeLessThan(c);
     expect(vOfLat(28.5)).toBeGreaterThan(b);
     expect(vOfLat(28.5)).toBeLessThan(d);
+  });
+});
+
+describe('GIBS tile address', () => {
+  it('builds the WMS request of the equirectangular grid', () => {
+    expect(gibsBbox({ z: 3, x: 0, y: 0 })).toEqual([-180, 67.5, -157.5, 90]);
+    expect(gibsBbox({ z: 6, x: 127, y: 63 })).toEqual([177.1875, -90, 180, -87.1875]);
+    const u = new URL(gibsTileUrl({ z: 4, x: 5, y: 3 }));
+    expect(u.origin + u.pathname).toBe('https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi');
+    expect(Object.fromEntries(u.searchParams)).toEqual({
+      SERVICE: 'WMS', REQUEST: 'GetMap', VERSION: '1.1.1', LAYERS: 'BlueMarble_ShadedRelief_Bathymetry', STYLES: '', FORMAT: 'image/jpeg',
+      SRS: 'EPSG:4326', WIDTH: '512', HEIGHT: '512', BBOX: '-123.75,45,-112.5,56.25',
+    });
+  });
+  it('knows which tiles exist', () => {
+    expect(isGibsTile(3, 15, 7)).toBe(true);
+    expect(isGibsTile(3, 16, 7)).toBe(false);
+    expect(isGibsTile(3, 0, 8)).toBe(false);
+    expect(isGibsTile(2, 0, 0)).toBe(false);
+    expect(isGibsTile(7, 0, 0)).toBe(false);
+    expect(isGibsTile(4, 1.5, 0)).toBe(false);
   });
 });
